@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mchammer-pt"
+version = "0.1.0"
+description = "Parallel tempering orchestrator for mchammer canonical Monte Carlo"
+readme = "README.md"
+authors = [
+    {name = "Benjamin J. Morgan", email = "b.j.morgan@bath.ac.uk"},
+]
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "ase",
+    "icet",
+    "h5py",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "mypy", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["mchammer_pt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["mchammer_pt"]
+strict = true
+warn_return_any = false
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.h5
+docs/superpowers/
+
+# Top-level .md files are local by default 
+# Whitelist the ones that should ship.
+/*.md
+!/README.md
+!/CHANGELOG.md
