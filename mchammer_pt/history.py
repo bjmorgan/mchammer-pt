@@ -52,9 +52,17 @@ from mchammer.data_containers.base_data_container import (  # type: ignore[impor
 MetaValue = int | float | str | bool | np.ndarray
 
 
-@dataclass
+@dataclass(eq=False)
 class ExchangeHistory:
     """Per-cycle PT observations.
+
+    ``eq=False`` is set because the four dataclass fields are numpy
+    arrays, for which ``==`` returns an element-wise array rather than
+    a bool. The auto-generated ``__eq__`` would be broken: ``h1 == h2``
+    would raise ``ValueError: The truth value of an array with more
+    than one element is ambiguous``. Callers that want structural
+    equality should compare the arrays field-by-field (or
+    ``numpy.array_equal``).
 
     Attributes:
         energies_per_cycle: total CE energy (eV) of each replica at the
