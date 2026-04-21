@@ -102,11 +102,17 @@ def test_meta_round_trips_all_supported_scalar_types(tmp_path: Path):
     }
     write_hdf5(tmp_path / "pt.h5", history=h, replica_containers=[], meta=meta)
     _, _, meta_back = read_hdf5(tmp_path / "pt.h5")
+    # Values come back as the declared MetaValue union (native Python
+    # scalars, not numpy scalar subclasses) — isinstance tests catch
+    # regressions where h5py's np.int64 / np.bool_ leaks through.
     assert meta_back["a_str"] == "hello"
+    assert type(meta_back["a_str"]) is str
     assert meta_back["an_int"] == 42
+    assert type(meta_back["an_int"]) is int
     assert meta_back["a_float"] == 3.14
-    assert bool(meta_back["a_bool_true"]) is True
-    assert bool(meta_back["a_bool_false"]) is False
+    assert type(meta_back["a_float"]) is float
+    assert meta_back["a_bool_true"] is True
+    assert meta_back["a_bool_false"] is False
     np.testing.assert_array_equal(meta_back["an_array"], meta["an_array"])
 
 

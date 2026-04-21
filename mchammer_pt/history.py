@@ -52,6 +52,24 @@ from mchammer.data_containers.base_data_container import (  # type: ignore[impor
 MetaValue = int | float | str | bool | np.ndarray
 
 
+def _normalise_meta_value(value: object) -> MetaValue:
+    """Cast h5py-returned attrs to the declared ``MetaValue`` union.
+
+    h5py returns numpy scalar types (``np.int64``, ``np.float64``,
+    ``np.bool_``) and ``bytes`` for attrs, not the Python ``int`` /
+    ``float`` / ``bool`` / ``str`` declared in ``MetaValue``. Normalise
+    on the read path so callers see the contract types without having
+    to cast.
+    """
+    if isinstance(value, np.ndarray):
+        return np.array(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return value  # type: ignore[return-value]
+
+
 @dataclass(eq=False)
 class ExchangeHistory:
     """Per-cycle PT observations.
@@ -198,7 +216,7 @@ def read_hdf5(
         )
         meta: dict[str, MetaValue] = {}
         for key, value in f["meta"].attrs.items():
-            meta[key] = np.array(value) if isinstance(value, np.ndarray) else value
+            meta[key] = _normalise_meta_value(value)
         containers: list[BaseDataContainer] = []
         replica_keys = sorted(f["replicas"].keys(), key=int)
         for key in replica_keys:
