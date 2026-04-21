@@ -255,3 +255,34 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms, tmp_pa
             pt.attach_observer(_DummyObs())
     finally:
         pool.shutdown()
+
+
+def test_orchestrator_context_manager_shuts_down_pool(toy_ce, toy_atoms, tmp_path):
+    """`with pt: ...` calls pool.shutdown() on exit, including on exception."""
+    from mchammer_pt.parallel.processes import ProcessPool
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        seeds=[0, 1],
+    )
+    pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
+    with pt:
+        pt.run(n_cycles=1)
+    assert not pool._workers, "pool workers not cleared on context exit"
+
+    # And again with an exception inside the with block.
+    pool2 = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        seeds=[0, 1],
+    )
+    pt2 = _AlwaysAcceptPT(pool=pool2, block_size=10, random_seed=0)
+    with pytest.raises(RuntimeError, match="deliberate"):
+        with pt2:
+            raise RuntimeError("deliberate")
+    assert not pool2._workers

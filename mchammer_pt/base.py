@@ -55,6 +55,25 @@ class BaseParallelTempering(ABC):
 
     # --- public API ----
 
+    def __enter__(self) -> BaseParallelTempering:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        """Shutdown the underlying pool on context exit.
+
+        Context-manager use is the recommended pattern — `with
+        CanonicalParallelTempering.process_pool(...) as pt: pt.run(...)`
+        ensures worker processes are joined and any tempdirs owned by
+        the factory are cleaned up on exit, including the exceptional
+        path.
+        """
+        self._pool.shutdown()
+
     @property
     def pool(self) -> ReplicaPool:
         """The underlying replica pool."""

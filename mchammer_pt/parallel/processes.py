@@ -238,3 +238,14 @@ class ProcessPool:
             if process.is_alive():
                 process.terminate()
         self._workers = []
+
+    def __enter__(self) -> ProcessPool:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        self.shutdown()

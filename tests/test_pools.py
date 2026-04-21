@@ -182,3 +182,40 @@ def test_shutdown_is_idempotent_on_both_pools(toy_ce, toy_atoms, tmp_path: Path)
     p = _make_process(toy_ce, toy_atoms, tmp_path)
     p.shutdown()
     p.shutdown()
+
+
+def test_process_pool_context_manager_shuts_down_on_exit(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """with ProcessPool(...) as pool: ... joins all worker processes on exit."""
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(10)
+        # Copy of the worker list while still inside the with block.
+        workers_during = list(pool._workers)
+    assert workers_during, "workers were not live inside the context"
+    assert not pool._workers, "workers not cleared on context exit"
+
+
+def test_process_pool_context_manager_shuts_down_on_exception(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Shutdown still happens if the `with` block raises."""
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        seeds=[0, 1],
+    )
+    with pytest.raises(RuntimeError, match="deliberate"):
+        with pool:
+            raise RuntimeError("deliberate")
+    assert not pool._workers
