@@ -21,7 +21,7 @@ paths to the colder chains.
   constructor argument.
 - Per-replica `mchammer.BaseObserver` attachment, pass-through — use
   your existing mchammer observers unchanged.
-- HDF5 output bundling one `mchammer.DataContainer` per replica plus
+- HDF5 output bundling one `mchammer.BaseDataContainer` per replica plus
   a compact `ExchangeHistory` of per-pair swap statistics and
   replica-label trajectories.
 - Round-trip count and integrated-autocorrelation-time diagnostics
@@ -66,20 +66,22 @@ from mchammer_pt import (
 )
 print("acceptance:", swap_acceptance_rates(pt.history))
 print("round-trips:", round_trip_counts(pt.history.replica_labels_per_cycle))
-for r in range(len(pt.replicas)):
+for r in range(len(pt.pool)):
     tau = energy_autocorrelation_time(pt.history.energies_per_cycle[:, r])
     print(f"replica {r}: tau = {tau:.1f} cycles")
 ```
 
-For the multiprocessing backend, construct a `ProcessBackend` and
-pass it via the `backend=` argument — see
-`examples/03_parallel_workers.py`.
+For multiprocess parallelism, construct a `ProcessPool` and pass it
+via the `pool=` argument — see `examples/03_parallel_workers.py`.
+Observer attachment is only supported on `SerialPool`; use
+`CanonicalParallelTempering.attach_observer(...)` on a pool that
+satisfies `ObservablePool` (currently only `SerialPool` does).
 
 ## Examples
 
 - `examples/01_basic_canonical.py` — self-contained run on a toy Cu/Au CE.
 - `examples/02_custom_callback.py` — writing your own `ExchangeCallback`.
-- `examples/03_parallel_workers.py` — PT with the `ProcessBackend`.
+- `examples/03_parallel_workers.py` — PT with the `ProcessPool`.
 
 ## Status
 

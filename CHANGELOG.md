@@ -47,6 +47,6 @@ versions; they shape v0.1.0 before first publication.
 - `ExchangeCallback` protocol plus `ExchangeLogger` and
   `SwapRateTracker` built-ins.
 - `ExchangeHistory` with HDF5 read/write, bundled alongside
-  per-replica `mchammer.DataContainer` outputs.
+  per-replica `mchammer.BaseDataContainer` outputs.
 - Round-trip-rate and energy-autocorrelation-time diagnostics.
 - Worked examples and CI on Python 3.11 through 3.14.
