@@ -124,3 +124,65 @@ def test_write_hdf5_overwrites_existing_file(tmp_path: Path):
     history_back, _, meta_back = read_hdf5(path)
     np.testing.assert_array_equal(history_back.swap_attempted, [99])
     assert meta_back["tag"] == "second"
+
+
+def test_write_hdf5_failure_leaves_target_path_untouched(tmp_path: Path):
+    """A mid-write failure must not corrupt an existing target file."""
+    import h5py
+
+    path = tmp_path / "pt.h5"
+    good = _make_history(n_cycles=1, n_replicas=2)
+    good.swap_attempted[:] = 7
+    write_hdf5(path, history=good, replica_containers=[], meta={"tag": "good"})
+
+    class _BadContainer:
+        def write(self, path_str: str) -> None:
+            raise RuntimeError("simulated container-write failure")
+
+    with pytest.raises(RuntimeError, match="simulated container-write failure"):
+        write_hdf5(
+            path,
+            history=_make_history(n_cycles=1, n_replicas=2),
+            replica_containers=[_BadContainer()],  # type: ignore[list-item]
+            meta={"tag": "bad"},
+        )
+
+    # Good file still intact; no leftover .tmp.
+    history_back, _, meta_back = read_hdf5(path)
+    np.testing.assert_array_equal(history_back.swap_attempted, [7])
+    assert meta_back["tag"] == "good"
+    tmp_sibling = path.with_suffix(path.suffix + ".tmp")
+    assert not tmp_sibling.exists()
+
+    # And we can open it normally via h5py.
+    with h5py.File(path, "r") as f:
+        assert "exchanges" in f
+
+
+def test_read_hdf5_rejects_file_missing_required_groups(tmp_path: Path):
+    """read_hdf5 names the missing piece rather than raising bare KeyError."""
+    import h5py
+
+    path = tmp_path / "not_mchammer_pt.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("random_top_level_stuff", data=np.zeros(3))
+
+    with pytest.raises(KeyError, match="missing required top-level group 'exchanges'"):
+        read_hdf5(path)
+
+
+def test_read_hdf5_rejects_file_missing_required_exchange_datasets(tmp_path: Path):
+    import h5py
+
+    path = tmp_path / "truncated.h5"
+    with h5py.File(path, "w") as f:
+        f.create_group("exchanges")
+        f.create_group("meta")
+        f.create_group("replicas")
+        # Only one of four required datasets under exchanges/
+        f["exchanges"].create_dataset("energies_per_cycle", data=np.zeros((2, 2)))
+
+    with pytest.raises(
+        KeyError, match="missing required dataset 'exchanges/replica_labels_per_cycle'"
+    ):
+        read_hdf5(path)

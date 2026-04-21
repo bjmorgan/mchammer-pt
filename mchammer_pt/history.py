@@ -34,6 +34,7 @@ embedding via a temp file.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,31 +98,56 @@ def write_hdf5(
     Each container is serialised via its `write` method (which produces
     an mchammer tarball) and the resulting bytes are embedded as a
     single opaque ``uint8`` dataset at ``/replicas/<i>``.
+
+    Writes are atomic: the file is first written to a sibling ``.tmp``
+    path and renamed on success via ``os.replace``. A partial or failed
+    write leaves the target path untouched.
     """
     path = Path(path)
-    with h5py.File(path, "w") as f:
-        exchanges = f.create_group("exchanges")
-        exchanges.create_dataset("energies_per_cycle", data=history.energies_per_cycle)
-        exchanges.create_dataset(
-            "replica_labels_per_cycle", data=history.replica_labels_per_cycle
-        )
-        exchanges.create_dataset("swap_attempted", data=history.swap_attempted)
-        exchanges.create_dataset("swap_accepted", data=history.swap_accepted)
+    tmp_target = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with h5py.File(tmp_target, "w") as f:
+            exchanges = f.create_group("exchanges")
+            exchanges.create_dataset(
+                "energies_per_cycle", data=history.energies_per_cycle
+            )
+            exchanges.create_dataset(
+                "replica_labels_per_cycle", data=history.replica_labels_per_cycle
+            )
+            exchanges.create_dataset("swap_attempted", data=history.swap_attempted)
+            exchanges.create_dataset("swap_accepted", data=history.swap_accepted)
 
-        meta_group = f.create_group("meta")
-        for key, value in meta.items():
-            meta_group.attrs[key] = value
+            meta_group = f.create_group("meta")
+            for key, value in meta.items():
+                meta_group.attrs[key] = value
 
-        replicas = f.create_group("replicas")
-        for i, container in enumerate(replica_containers):
-            with tempfile.NamedTemporaryFile(suffix=".dc", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                container.write(str(tmp_path))
-                payload = tmp_path.read_bytes()
-            finally:
-                tmp_path.unlink(missing_ok=True)
-            replicas.create_dataset(str(i), data=np.frombuffer(payload, dtype=np.uint8))
+            replicas = f.create_group("replicas")
+            for i, container in enumerate(replica_containers):
+                with tempfile.NamedTemporaryFile(suffix=".dc", delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                try:
+                    container.write(str(tmp_path))
+                    payload = tmp_path.read_bytes()
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                replicas.create_dataset(
+                    str(i), data=np.frombuffer(payload, dtype=np.uint8)
+                )
+        os.replace(tmp_target, path)
+    except BaseException:
+        # Clean the partial .tmp on any failure; leave the target path
+        # untouched so read_hdf5 never sees a half-written file.
+        Path(tmp_target).unlink(missing_ok=True)
+        raise
+
+
+_REQUIRED_GROUPS = ("exchanges", "meta", "replicas")
+_REQUIRED_EXCHANGE_DATASETS = (
+    "energies_per_cycle",
+    "replica_labels_per_cycle",
+    "swap_attempted",
+    "swap_accepted",
+)
 
 
 def read_hdf5(
@@ -131,12 +157,31 @@ def read_hdf5(
 
     Returns the `ExchangeHistory`, a list of `BaseDataContainer`s (one
     per replica group, in integer-ID order), and the metadata dict.
+
+    Raises:
+        FileNotFoundError: if ``path`` does not exist.
+        KeyError: if the file is missing one of the required
+            top-level groups (``exchanges``, ``meta``, ``replicas``)
+            or one of the required ``exchanges/`` datasets.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"no such file: {path}")
     with h5py.File(path, "r") as f:
+        for group_name in _REQUIRED_GROUPS:
+            if group_name not in f:
+                raise KeyError(
+                    f"{path}: missing required top-level group '{group_name}'. "
+                    f"File does not look like mchammer-pt HDF5 output."
+                )
         exchanges = f["exchanges"]
+        for dataset_name in _REQUIRED_EXCHANGE_DATASETS:
+            if dataset_name not in exchanges:
+                raise KeyError(
+                    f"{path}: missing required dataset "
+                    f"'exchanges/{dataset_name}'. "
+                    f"File may be from an incompatible mchammer-pt version."
+                )
         history = ExchangeHistory(
             energies_per_cycle=np.array(exchanges["energies_per_cycle"]),
             replica_labels_per_cycle=np.array(exchanges["replica_labels_per_cycle"]),
@@ -147,15 +192,14 @@ def read_hdf5(
         for key, value in f["meta"].attrs.items():
             meta[key] = np.array(value) if isinstance(value, np.ndarray) else value
         containers: list[BaseDataContainer] = []
-        if "replicas" in f:
-            replica_keys = sorted(f["replicas"].keys(), key=int)
-            for key in replica_keys:
-                payload = f[f"replicas/{key}"][()].tobytes()
-                with tempfile.NamedTemporaryFile(suffix=".dc", delete=False) as tmp:
-                    tmp_path = Path(tmp.name)
-                try:
-                    tmp_path.write_bytes(payload)
-                    containers.append(BaseDataContainer.read(str(tmp_path)))
-                finally:
-                    tmp_path.unlink(missing_ok=True)
+        replica_keys = sorted(f["replicas"].keys(), key=int)
+        for key in replica_keys:
+            payload = f[f"replicas/{key}"][()].tobytes()
+            with tempfile.NamedTemporaryFile(suffix=".dc", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                tmp_path.write_bytes(payload)
+                containers.append(BaseDataContainer.read(str(tmp_path)))
+            finally:
+                tmp_path.unlink(missing_ok=True)
     return history, containers, meta
