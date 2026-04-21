@@ -214,9 +214,7 @@ def test_run_assigns_history_on_mid_run_exception(toy_ce, toy_atoms):
             if cycle >= 1:
                 raise ValueError("intentional mid-run failure")
 
-    pt = _AlwaysAcceptPT(
-        pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0
-    )
+    pt = _AlwaysAcceptPT(pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0)
     pt.attach_callback(_BlowUp())
     with pytest.raises(ValueError, match="intentional mid-run failure"):
         pt.run(n_cycles=5)

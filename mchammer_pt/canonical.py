@@ -63,9 +63,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             raise ValueError("parallel tempering requires at least 2 temperatures")
         pairs = zip(temperatures[:-1], temperatures[1:], strict=True)
         if any(b < a for a, b in pairs):
-            raise ValueError(
-                f"temperatures must be non-decreasing; got {temperatures}"
-            )
+            raise ValueError(f"temperatures must be non-decreasing; got {temperatures}")
         if int(block_size) < 1:
             raise ValueError(f"block_size must be >= 1; got {block_size}")
         seed_sequence = np.random.SeedSequence(int(random_seed))
