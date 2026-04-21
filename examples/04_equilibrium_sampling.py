@@ -40,8 +40,10 @@ def build_toy_ce() -> ClusterExpansion:
 
 
 def build_atoms():
-    """Ordered slab start (all Au in half the supercell) to exaggerate
-    the initial cold-start offset for the trajectory print-out below."""
+    """Ordered half-Au / half-Cu start: Au occupies the first half of
+    the bulk supercell's sites and Cu the second half. Far from the
+    disordered equilibrium at any of the temperatures used here, so
+    the cold-start drop in energy is visible in the first cycle."""
     atoms = bulk("Cu", "fcc", a=4.0, cubic=True).repeat((3, 3, 3))
     symbols = ["Au"] * (len(atoms) // 2) + ["Cu"] * (len(atoms) - len(atoms) // 2)
     atoms.set_chemical_symbols(symbols)
@@ -73,7 +75,10 @@ def main() -> None:
     # accepted exchanges, but the column is temperature-indexed.
 
     # 1. Show the cold-start descent at the coldest temperature.
-    print("First 10 cycle-end energies at T = 200 K (row 0 is pre-run):")
+    print(
+        f"First 10 cycle-end energies at T = {temperatures[0]:.0f} K "
+        "(row 0 is pre-run):"
+    )
     for i, E in enumerate(history.energies_per_cycle[:10, 0]):
         marker = "  <- pre-run" if i == 0 else ""
         print(f"  cycle {i:>2}  E = {E:.4f} eV{marker}")

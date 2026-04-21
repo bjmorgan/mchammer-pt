@@ -90,9 +90,10 @@ class ExchangeHistory:
     Attributes:
         energies_per_cycle: total CE energy (eV) at the end of each
             cycle, shape ``(n_cycles+1, n_replicas)``. Column ``k`` is
-            the sample stream at temperature ``temperatures[k]``; the
-            configuration at that temperature may change on accepted
-            exchanges. Row 0 is the pre-run snapshot.
+            the sample stream at temperature position ``k`` on the
+            ladder; the configuration at that temperature position may
+            change on accepted exchanges. Row 0 is the pre-run
+            snapshot.
         replica_labels_per_cycle: which original replica *label* is
             currently at each temperature index, shape
             ``(n_cycles+1, n_replicas)``. Labels permute on accepted
