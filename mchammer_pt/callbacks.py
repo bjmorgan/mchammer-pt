@@ -1,15 +1,11 @@
 """PT-level exchange callbacks.
 
-The `ExchangeCallback` protocol is a narrow alternative to
-`mchammer.BaseObserver` for events that do not fit the
-single-ensemble observer model: an exchange proposal is a two-replica
-event, fires at cycle granularity (not MC-step granularity), and
-carries metadata (log-probability ratio, acceptance) that mchammer
-observers do not expect.
-
-Two built-ins are provided: `ExchangeLogger` (prints swap events to
-stdout on a cadence) and `SwapRateTracker` (accumulates per-pair
-attempt and acceptance counts).
+An exchange proposal is a two-replica, cycle-granularity event
+carrying a log-probability ratio and an acceptance flag. This module
+defines the `ExchangeCallback` protocol for handlers of that event,
+plus two built-ins: `SwapRateTracker` (per-pair attempt and accept
+counts) and `ExchangePrinter` (stdout trace on a configurable
+cadence).
 """
 from __future__ import annotations
 
@@ -64,17 +60,21 @@ class SwapRateTracker:
     @property
     def acceptance_rates(self) -> np.ndarray:
         """Per-pair acceptance fractions (NaN where no attempts made)."""
-        with np.errstate(invalid="ignore"):
-            rates = np.where(
-                self.attempted > 0,
-                self.accepted / np.maximum(self.attempted, 1),
-                np.nan,
-            )
-        return rates
+        # Clamping the denominator to >= 1 means the division never
+        # encounters 0/0; np.where then NaN-substitutes the clamped entries.
+        return np.where(
+            self.attempted > 0,
+            self.accepted / np.maximum(self.attempted, 1),
+            np.nan,
+        )
 
 
-class ExchangeLogger:
+class ExchangePrinter:
     """Prints exchange events to stdout on a configurable cadence.
+
+    A minimal built-in handler for quick interactive inspection. For
+    log routing, formatting, or level control, implement your own
+    `ExchangeCallback` using the standard `logging` module.
 
     Args:
         interval: print every `interval`-th cycle. ``1`` prints every

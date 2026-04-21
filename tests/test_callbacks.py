@@ -5,7 +5,7 @@ import numpy as np
 
 from mchammer_pt.callbacks import (
     ExchangeCallback,
-    ExchangeLogger,
+    ExchangePrinter,
     SwapRateTracker,
 )
 
@@ -41,10 +41,33 @@ def test_swap_rate_tracker_counts_per_pair():
     assert np.isnan(rates[2])
 
 
-def test_exchange_logger_respects_interval(capsys):
-    logger = ExchangeLogger(interval=3)
+def test_swap_rate_tracker_all_nan_before_any_exchange():
+    tracker = SwapRateTracker(n_pairs=4)
+    rates = tracker.acceptance_rates
+    assert np.all(np.isnan(rates))
+    assert rates.shape == (4,)
+
+
+def test_exchange_printer_respects_interval(capsys):
+    printer = ExchangePrinter(interval=3)
     for cycle in range(7):
-        logger.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
     out = capsys.readouterr().out.strip().splitlines()
     # With interval=3, we expect prints at cycles 0, 3, 6 (3 lines).
     assert len(out) == 3
+
+
+def test_exchange_printer_interval_one_prints_every_cycle(capsys):
+    printer = ExchangePrinter(interval=1)
+    for cycle in range(5):
+        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 5
+
+
+def test_exchange_printer_interval_zero_disables_output(capsys):
+    printer = ExchangePrinter(interval=0)
+    for cycle in range(5):
+        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+    out = capsys.readouterr().out
+    assert out == ""
