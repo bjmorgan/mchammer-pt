@@ -138,3 +138,23 @@ def test_rng_isolation_survives_interleaved_advance(toy_ce, toy_atoms):
 
     np.testing.assert_array_equal(r1.current_occupations(), ref1_occ)
     np.testing.assert_array_equal(r2.current_occupations(), ref2_occ)
+
+
+def test_replica_construction_leaves_caller_random_state_untouched(toy_ce, toy_atoms):
+    """Building a Replica must not observably mutate Python's global random.
+
+    `mchammer.CanonicalEnsemble.__init__` calls `random.seed(random_seed)`
+    internally. Replica catches and isolates that side effect so external
+    code using `random` is unaffected.
+    """
+    import random
+
+    random.seed(12345)
+    reference = [random.random() for _ in range(5)]
+
+    random.seed(12345)
+    # Construct a Replica mid-stream — this must not perturb the sequence.
+    Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=99)
+    observed = [random.random() for _ in range(5)]
+
+    assert observed == reference
