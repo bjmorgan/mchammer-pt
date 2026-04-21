@@ -61,8 +61,6 @@ class SwapRateTracker:
     @property
     def acceptance_rates(self) -> np.ndarray:
         """Per-pair acceptance fractions (NaN where no attempts made)."""
-        # Clamping the denominator to >= 1 means the division never
-        # encounters 0/0; np.where then NaN-substitutes the clamped entries.
         return np.where(
             self.attempted > 0,
             self.accepted / np.maximum(self.attempted, 1),

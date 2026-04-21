@@ -20,8 +20,7 @@ def pair_set_for_cycle(n_replicas: int, cycle: int) -> np.ndarray:
     Pair ``i`` refers to replicas ``i`` and ``i + 1``. Even-indexed
     pairs are attempted on even cycles; odd-indexed pairs on odd
     cycles. This alternation is standard in parallel-tempering
-    practice and ensures each pair is proposed every other cycle on
-    average.
+    practice; each pair is proposed on exactly every other cycle.
 
     Args:
         n_replicas: total number of replicas.

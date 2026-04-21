@@ -7,6 +7,8 @@ testable, and form the basis for any user-built quality checks.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from .history import ExchangeHistory
@@ -63,8 +65,6 @@ def swap_acceptance_rates(history: ExchangeHistory) -> np.ndarray:
     """Per-pair acceptance fractions, NaN where no attempts were made."""
     attempts = history.swap_attempted.astype(np.float64)
     accepts = history.swap_accepted.astype(np.float64)
-    # Clamping the denominator to >= 1 means the division never
-    # encounters 0/0; np.where then NaN-substitutes the clamped entries.
     return np.where(attempts > 0, accepts / np.maximum(attempts, 1), np.nan)
 
 
@@ -74,6 +74,13 @@ def energy_autocorrelation_time(energies: np.ndarray) -> float:
     Uses the standard windowed estimator with Sokal's automatic window
     selection (``M = min_M { M >= c * tau(M) }``, c = 5). Returns a
     float; for IID data the estimate is ~1.
+
+    If the Sokal window never closes within the trace length (trace is
+    too short relative to the autocorrelation time), returns ``nan``
+    and emits a ``UserWarning`` with the trace length. A hard failure
+    for nonsense inputs (length < 4, zero-variance trace) also returns
+    ``nan`` — without a warning, since those cases are obvious from
+    the input.
     """
     x = np.asarray(energies, dtype=np.float64).ravel()
     n = x.size
@@ -92,5 +99,11 @@ def energy_autocorrelation_time(energies: np.ndarray) -> float:
     for m in range(1, n):
         tau = 1.0 + 2.0 * float(np.sum(acf[1 : m + 1]))
         if m >= c * tau:
-            break
-    return tau
+            return tau
+    warnings.warn(
+        f"Sokal window did not close in {n} samples; autocorrelation "
+        "time is longer than the trace. Returning nan.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return float("nan")
