@@ -9,7 +9,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import numpy as np
-from mchammer.observers.base_observer import BaseObserver
+from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+    BaseObserver,
+)
 
 from .callbacks import ExchangeCallback
 from .exchange import metropolis_accept, pair_set_for_cycle

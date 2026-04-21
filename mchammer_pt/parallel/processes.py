@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion
+from icet import ClusterExpansion  # type: ignore[import-untyped]
 
 from ..replica import Replica
 
@@ -102,7 +102,9 @@ class ProcessBackend:
     ) -> None:
         if len(temperatures) != len(seeds):
             raise ValueError("temperatures and seeds must be the same length")
-        self._workers: list[tuple[mp.Process, mp.connection.Connection]] = []
+        self._workers: list[
+            tuple[mp.process.BaseProcess, mp.connection.Connection]
+        ] = []
         atoms_dict = _atoms_to_dict(initial_atoms)
         ctx = mp.get_context("spawn")
         for T, seed in zip(temperatures, seeds, strict=True):

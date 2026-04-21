@@ -37,9 +37,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import h5py
+import h5py  # type: ignore[import-untyped]
 import numpy as np
-from mchammer.data_containers.base_data_container import BaseDataContainer
+from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+    BaseDataContainer,
+)
 
 # Types allowed in the `meta` dict. h5py group attrs accept scalars
 # (int, float, str, bool) and numpy arrays; nested dicts, None, and

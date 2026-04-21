@@ -51,7 +51,9 @@ def test_swap_rate_tracker_all_nan_before_any_exchange():
 def test_exchange_printer_respects_interval(capsys):
     printer = ExchangePrinter(interval=3)
     for cycle in range(7):
-        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+        printer.on_exchange(
+            cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0
+        )
     out = capsys.readouterr().out.strip().splitlines()
     # With interval=3, we expect prints at cycles 0, 3, 6 (3 lines).
     assert len(out) == 3
@@ -60,7 +62,9 @@ def test_exchange_printer_respects_interval(capsys):
 def test_exchange_printer_interval_one_prints_every_cycle(capsys):
     printer = ExchangePrinter(interval=1)
     for cycle in range(5):
-        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+        printer.on_exchange(
+            cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0
+        )
     out = capsys.readouterr().out.strip().splitlines()
     assert len(out) == 5
 
@@ -68,6 +72,8 @@ def test_exchange_printer_interval_one_prints_every_cycle(capsys):
 def test_exchange_printer_interval_zero_disables_output(capsys):
     printer = ExchangePrinter(interval=0)
     for cycle in range(5):
-        printer.on_exchange(cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0)
+        printer.on_exchange(
+            cycle=cycle, pair_index=0, accepted=True, log_prob_ratio=0.0
+        )
     out = capsys.readouterr().out
     assert out == ""

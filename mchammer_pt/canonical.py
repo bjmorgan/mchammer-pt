@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion
+from icet import ClusterExpansion  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
@@ -107,7 +107,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 replica_containers=[r.data_container() for r in self._replicas],
                 meta={
                     "temperatures": self._temperatures,
-                    "block_size": np.int64(self._block_size),
+                    "block_size": int(self._block_size),
                 },
             )
         return history

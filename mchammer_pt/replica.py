@@ -18,11 +18,17 @@ import random
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion
-from mchammer.calculators import ClusterExpansionCalculator
-from mchammer.data_containers.base_data_container import BaseDataContainer
-from mchammer.ensembles import CanonicalEnsemble
-from mchammer.observers.base_observer import BaseObserver
+from icet import ClusterExpansion  # type: ignore[import-untyped]
+from mchammer.calculators import (  # type: ignore[import-untyped]
+    ClusterExpansionCalculator,
+)
+from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+    BaseDataContainer,
+)
+from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+    BaseObserver,
+)
 
 
 class Replica:
@@ -48,7 +54,8 @@ class Replica:
     ) -> None:
         self._temperature = float(temperature)
         # Copy atoms so the caller's object is not mutated by mchammer.
-        atoms_copy = atoms.copy()
+        # `ase.Atoms.copy` is untyped upstream, so annotate the target here.
+        atoms_copy: Atoms = atoms.copy()  # type: ignore[no-untyped-call]
         calculator = ClusterExpansionCalculator(atoms_copy, cluster_expansion)
         # `CanonicalEnsemble.__init__` calls `random.seed(random_seed)` on
         # Python's global RNG. Snapshot that state immediately so each
