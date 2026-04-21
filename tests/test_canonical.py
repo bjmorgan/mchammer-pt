@@ -153,6 +153,38 @@ def test_mismatched_pool_temperatures_rejected(toy_ce, toy_atoms):
         )
 
 
+def test_small_temperature_mismatch_rejected(toy_ce, toy_atoms):
+    """np.allclose would pass 300.0 vs 300.001; exact check rejects it.
+
+    The two differ by 1 mK, ~3.3e-6 relative, well within np.allclose's
+    default tolerance (rtol=1e-5) — but they produce distinct β values
+    and would silently bias exchange acceptance. Exact comparison
+    catches it.
+    """
+    from mchammer_pt.parallel.serial import SerialPool
+
+    pool = SerialPool(
+        [
+            Replica(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperature=T,
+                random_seed=i,
+            )
+            for i, T in enumerate([300.0, 600.0])
+        ]
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=toy_atoms,
+            temperatures=[300.001, 600.0],
+            block_size=10,
+            random_seed=0,
+            pool=pool,
+        )
+
+
 def test_zero_block_size_rejected(toy_ce, toy_atoms):
     with pytest.raises(ValueError, match="block_size must be >= 1"):
         CanonicalParallelTempering(
