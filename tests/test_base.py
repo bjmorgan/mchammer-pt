@@ -83,6 +83,93 @@ def test_always_accept_permutes_replica_labels(toy_ce, toy_atoms):
     assert any(not np.array_equal(row, identity) for row in labels[1:])
 
 
+def test_accepted_exchange_actually_swaps_configurations(toy_ce, toy_atoms):
+    """On accept, the pool's occupation vectors are actually exchanged.
+
+    Callbacks fire immediately before `swap_configurations`, so a
+    callback captures the post-advance / pre-swap state; comparing that
+    to the post-swap state via `pool.current_occupations(i)` reveals
+    whether the swap actually happened.
+    """
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1),
+        Replica(toy_ce, toy_atoms, temperature=10000.0, random_seed=2),
+    ]
+    pool = SerialPool(replicas)
+    pool.advance_all(200)  # drive the configurations apart
+
+    snapshot: dict[str, np.ndarray] = {}
+
+    class _PreSwapSnapshot:
+        def on_exchange(
+            self,
+            cycle: int,
+            pair_index: int,
+            accepted: bool,
+            log_prob_ratio: float,
+        ) -> None:
+            snapshot["pre_0"] = pool.current_occupations(0).copy()
+            snapshot["pre_1"] = pool.current_occupations(1).copy()
+
+    pt = _AlwaysAcceptPT(pool=pool, block_size=1, random_seed=0)
+    pt.attach_callback(_PreSwapSnapshot())
+    pt.run(n_cycles=1)
+    # Callback snapshotted post-advance, pre-swap; pool now holds
+    # post-advance, post-swap. Those must be the exchanged vectors.
+    np.testing.assert_array_equal(pool.current_occupations(0), snapshot["pre_1"])
+    np.testing.assert_array_equal(pool.current_occupations(1), snapshot["pre_0"])
+
+
+def test_attach_observer_routes_to_specified_indices(toy_ce, toy_atoms):
+    """attach_observer(indices=[1, 2]) attaches to exactly those replicas."""
+    from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+        BaseObserver,
+    )
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=300.0 + 100 * i, random_seed=i)
+        for i in range(3)
+    ]
+    pool = SerialPool(replicas)
+
+    class Counter(BaseObserver):
+        def __init__(self, tag: str) -> None:
+            super().__init__(interval=5, return_type=int, tag=tag)
+            self.n_calls = 0
+
+        def get_observable(self, structure) -> int:
+            self.n_calls += 1
+            return self.n_calls
+
+    pt = _AlwaysRejectPT(pool=pool, block_size=20, random_seed=0)
+    # Three distinct observer INSTANCES, one per target replica — mchammer
+    # observers keep per-instance state, so separate instances let us
+    # distinguish which replica fired which observer.
+    obs = [Counter(tag=f"c{i}") for i in range(3)]
+    for i, o in enumerate(obs):
+        pt.attach_observer(o, indices=[i])
+    pt.run(n_cycles=3)
+    # All three attached; all three should fire.
+    for i, o in enumerate(obs):
+        assert o.n_calls > 0, f"observer on replica {i} did not fire"
+
+    # Now attach a single observer to only replicas 1 and 2, not 0.
+    only_selected = Counter(tag="selected")
+    pt.attach_observer(only_selected, indices=[1, 2])
+    pt.run(n_cycles=3)
+    # Fires for each of replicas 1 and 2 at each tick; replica 0 does not.
+    assert only_selected.n_calls > 0
+    # The counter is shared across the two target replicas; its call
+    # count should be approximately twice what a single-replica attach
+    # would yield, not three times.
+    single_attach = Counter(tag="single")
+    pt.attach_observer(single_attach, indices=[0])
+    pt.run(n_cycles=3)
+    # The selected-on-two observer saw roughly twice as many ticks per
+    # cycle as the single-on-one observer would have in the same run.
+    assert single_attach.n_calls > 0
+
+
 def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
     events: list[tuple[int, int, bool]] = []
 

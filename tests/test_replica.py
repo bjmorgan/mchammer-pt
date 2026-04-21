@@ -104,3 +104,37 @@ def test_co_tenant_replicas_have_independent_rng_streams(toy_ce, toy_atoms):
     co_first.advance(n_steps=200)
 
     np.testing.assert_array_equal(solo_occ, co_first.current_occupations())
+
+
+def test_rng_isolation_survives_interleaved_advance(toy_ce, toy_atoms):
+    """Advancing two co-tenant Replicas in interleaved chunks is equivalent
+    to advancing each in one go.
+
+    This is the real contract the save/restore dance has to honour:
+    not just "construct-time isolation" but "interleaved-advance
+    isolation across the same shared global RNG". If the save/restore
+    were missing or applied only at construction, this test would
+    diverge because replica A's RNG state would advance in-place while
+    replica B draws, and then replica A's next advance would pick up
+    B's increments.
+    """
+    # Reference trajectory: replica 1 advanced alone for 400 steps.
+    ref1 = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    ref1.advance(n_steps=400)
+    ref1_occ = ref1.current_occupations()
+
+    # Reference trajectory: replica 2 advanced alone for 400 steps.
+    ref2 = Replica(toy_ce, toy_atoms, temperature=500.0, random_seed=2)
+    ref2.advance(n_steps=400)
+    ref2_occ = ref2.current_occupations()
+
+    # Interleaved schedule: replica 1 and 2 share the process; advance
+    # each in four 100-step chunks, alternating between them.
+    r1 = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    r2 = Replica(toy_ce, toy_atoms, temperature=500.0, random_seed=2)
+    for _ in range(4):
+        r1.advance(n_steps=100)
+        r2.advance(n_steps=100)
+
+    np.testing.assert_array_equal(r1.current_occupations(), ref1_occ)
+    np.testing.assert_array_equal(r2.current_occupations(), ref2_occ)
