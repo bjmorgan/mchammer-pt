@@ -1,7 +1,5 @@
-"""Helpers for parallel-tempering exchange proposals.
-
-Two responsibilities, kept separate from the orchestrator so they can
-be unit-tested in isolation:
+"""Pair-set rotation and Metropolis acceptance helpers for
+parallel-tempering exchange proposals.
 
 - `pair_set_for_cycle` returns the indices of adjacent replica pairs
   whose exchanges should be attempted in a given cycle. Even and odd
@@ -38,9 +36,7 @@ def pair_set_for_cycle(n_replicas: int, cycle: int) -> np.ndarray:
 def metropolis_accept(log_prob_ratio: float, rng: np.random.Generator) -> bool:
     """Apply the Metropolis criterion to an exchange proposal.
 
-    Accept with probability ``min(1, exp(log_prob_ratio))``. A
-    non-negative ratio accepts unconditionally (avoiding an `np.exp`
-    overflow on large positive inputs).
+    Accept with probability ``min(1, exp(log_prob_ratio))``.
 
     Args:
         log_prob_ratio: log of the acceptance ratio for the proposed
@@ -52,5 +48,7 @@ def metropolis_accept(log_prob_ratio: float, rng: np.random.Generator) -> bool:
         True if the exchange is accepted.
     """
     if log_prob_ratio >= 0.0:
+        # Non-negative ratio accepts unconditionally; short-circuit here
+        # so `np.exp` never sees a large positive input that would overflow.
         return True
     return bool(rng.random() < float(np.exp(log_prob_ratio)))
