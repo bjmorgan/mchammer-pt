@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion
 
 from .base import BaseParallelTempering
+from .history import ExchangeHistory
 from .parallel.backend import Backend
 from .replica import Replica
 
@@ -33,6 +35,10 @@ class CanonicalParallelTempering(BaseParallelTempering):
             orchestrator's exchange-proposal RNG are deterministically
             spawned from it.
         backend: parallel backend; default is `SerialBackend`.
+        data_container_file: optional path; if given, `run` writes an
+            HDF5 bundle of the `ExchangeHistory`, each replica's
+            `mchammer.BaseDataContainer`, and run metadata to this path
+            on completion.
     """
 
     def __init__(
@@ -43,6 +49,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         block_size: int,
         random_seed: int,
         backend: Backend | None = None,
+        data_container_file: Path | str | None = None,
     ) -> None:
         temperatures = list(temperatures)
         if len(temperatures) < 2:
@@ -70,6 +77,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         )
         self._temperatures = np.asarray(temperatures, dtype=np.float64)
         self._beta = 1.0 / (_KB * self._temperatures)
+        self._data_container_file = data_container_file
 
     @property
     def temperatures(self) -> np.ndarray:
@@ -80,3 +88,26 @@ class CanonicalParallelTempering(BaseParallelTempering):
         E_i = self._replicas[i].current_energy()
         E_j = self._replicas[j].current_energy()
         return float((self._beta[i] - self._beta[j]) * (E_i - E_j))
+
+    def run(self, n_cycles: int) -> ExchangeHistory:
+        """Run `n_cycles` PT cycles, optionally writing an HDF5 bundle.
+
+        When `data_container_file` was provided at construction, the
+        `ExchangeHistory`, each replica's `mchammer.BaseDataContainer`,
+        and a metadata dict (temperatures and block size) are written
+        to that path as a single HDF5 file on completion.
+        """
+        history = super().run(n_cycles=n_cycles)
+        if self._data_container_file is not None:
+            from .history import write_hdf5
+
+            write_hdf5(
+                Path(self._data_container_file),
+                history=history,
+                replica_containers=[r.data_container() for r in self._replicas],
+                meta={
+                    "temperatures": self._temperatures,
+                    "block_size": np.int64(self._block_size),
+                },
+            )
+        return history

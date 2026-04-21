@@ -73,3 +73,24 @@ def test_deterministic_for_fixed_seed(toy_ce, toy_atoms):
     h2 = pt2.run(n_cycles=4)
     np.testing.assert_array_equal(h1.energies_per_cycle, h2.energies_per_cycle)
     np.testing.assert_array_equal(h1.swap_accepted, h2.swap_accepted)
+
+
+def test_run_writes_hdf5_when_file_provided(tmp_path, toy_ce, toy_atoms):
+    path = tmp_path / "pt.h5"
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=50,
+        random_seed=0,
+        data_container_file=path,
+    )
+    pt.run(n_cycles=3)
+    assert path.exists()
+
+    from mchammer_pt import read_hdf5
+
+    history, containers, meta = read_hdf5(path)
+    assert history.energies_per_cycle.shape == (4, 2)
+    assert len(containers) == 2
+    assert meta["block_size"] == 50
