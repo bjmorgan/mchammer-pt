@@ -44,7 +44,7 @@ versions; they shape v0.1.0 before first publication.
   `CanonicalParallelTempering` subclass.
 - Serial and multiprocessing-backed replica advance.
 - Per-replica `mchammer.BaseObserver` attachment (pass-through).
-- `ExchangeCallback` protocol plus `ExchangeLogger` and
+- `ExchangeCallback` protocol plus `ExchangePrinter` and
   `SwapRateTracker` built-ins.
 - `ExchangeHistory` with HDF5 read/write, bundled alongside
   per-replica `mchammer.BaseDataContainer` outputs.
