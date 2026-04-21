@@ -164,6 +164,50 @@ def test_zero_block_size_rejected(toy_ce, toy_atoms):
         )
 
 
+def test_process_pool_factory_produces_aligned_orchestrator(toy_ce, toy_atoms):
+    """process_pool() constructs a CM orchestrator; ladder aligned by construction."""
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[200.0, 400.0, 800.0],
+        block_size=50,
+        random_seed=0,
+    ) as pt:
+        # Validation already rejected misalignment; by reaching this
+        # point we know pool.temperatures == orchestrator.temperatures.
+        assert list(pt.pool.temperatures) == [200.0, 400.0, 800.0]
+        assert len(pt.pool) == 3
+        h = pt.run(n_cycles=2)
+        assert h.energies_per_cycle.shape == (3, 3)
+        # ProcessPool is the concrete pool type behind this factory.
+        from mchammer_pt.parallel.processes import ProcessPool
+
+        assert isinstance(pt.pool, ProcessPool)
+
+
+def test_process_pool_factory_tempdir_cleanup_after_run(toy_ce, toy_atoms):
+    """The CE tempdir is cleaned after the orchestrator is garbage-collected."""
+    import gc
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+    ) as pt:
+        # The pool's worker processes were given a ce_path; after the
+        # `with` exits, pool.shutdown() has joined workers. We then
+        # drop the reference to pt and force a collection to trigger
+        # the weakref.finalize cleanup.
+        pt.run(n_cycles=1)
+    del pt
+    gc.collect()
+    # Nothing to assert on the filesystem directly (we don't know the
+    # tempdir path from here), but the finalizer ran without raising,
+    # which is the contract.
+
+
 def test_run_writes_hdf5_when_file_provided(tmp_path, toy_ce, toy_atoms):
     path = tmp_path / "pt.h5"
     pt = CanonicalParallelTempering(

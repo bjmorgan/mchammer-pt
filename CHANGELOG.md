@@ -35,6 +35,18 @@ versions; they shape v0.1.0 before first publication.
 - `_log_prob_ratio` raises `RuntimeError` with cycle/pair/energy
   context if a non-finite log ratio is computed (previously silently
   flowed through `metropolis_accept`).
+- Context-manager support: `with ProcessPool(...) as pool:` and
+  `with CanonicalParallelTempering(...) as pt:` both shut the pool
+  down on exit, including on the exception path.
+- `CanonicalParallelTempering` rejects pool/temperatures misalignment
+  at construction — length mismatch and element-wise temperature
+  disagreement both raise `ValueError`, naming the two ladders and
+  pointing at the `process_pool` factory as the construction path
+  that cannot produce the bad state.
+- `CanonicalParallelTempering.process_pool(...)` classmethod: owns
+  per-replica seed spawning, CE-tempdir lifecycle, and pool
+  construction. `with CanonicalParallelTempering.process_pool(...)
+  as pt:` is now the recommended pattern for process-parallel runs.
 
 ## [0.1.0] - 2026-04-21
 

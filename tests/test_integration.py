@@ -54,7 +54,7 @@ def test_mean_energy_same_as_single_ensemble_at_same_T(toy_ce, toy_atoms):
     assert abs(mean_pt - mean_single) < 5 * sem_pt
 
 
-def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
+def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms):
     """`SerialPool` and `ProcessPool` agree on per-pair swap_attempted.
 
     Pair-set scheduling is backend-agnostic — it depends only on cycle
@@ -64,9 +64,6 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
     seed their per-replica RNG streams independently and therefore
     produce different trajectories.
     """
-    ce_path = tmp_path / "toy.ce"
-    toy_ce.write(str(ce_path))
-
     kwargs = dict(
         cluster_expansion=toy_ce,
         atoms=toy_atoms,
@@ -77,21 +74,7 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
     pt_serial = CanonicalParallelTempering(**kwargs)
     h_serial = pt_serial.run(n_cycles=3)
 
-    from mchammer_pt.parallel.processes import ProcessPool
-
-    pool = ProcessPool(
-        ce_path=ce_path,
-        initial_atoms=toy_atoms,
-        temperatures=[300.0, 600.0, 1200.0],
-        seeds=[
-            int(np.random.SeedSequence(0).spawn(4)[i].generate_state(1)[0])
-            for i in range(3)
-        ],
-    )
-    try:
-        pt_processes = CanonicalParallelTempering(**kwargs, pool=pool)
+    with CanonicalParallelTempering.process_pool(**kwargs) as pt_processes:
         h_processes = pt_processes.run(n_cycles=3)
-    finally:
-        pool.shutdown()
 
     np.testing.assert_array_equal(h_serial.swap_attempted, h_processes.swap_attempted)

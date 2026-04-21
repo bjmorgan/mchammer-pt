@@ -71,8 +71,23 @@ for r in range(len(pt.pool)):
     print(f"replica {r}: tau = {tau:.1f} cycles")
 ```
 
-For multiprocess parallelism, construct a `ProcessPool` and pass it
-via the `pool=` argument — see `examples/03_parallel_workers.py`.
+For multiprocess parallelism, use the `process_pool` classmethod:
+
+```python
+with CanonicalParallelTempering.process_pool(
+    cluster_expansion=ce,
+    atoms=atoms,
+    temperatures=[200, 400, 800, 1600],
+    block_size=1000,
+    random_seed=0,
+) as pt:
+    pt.run(n_cycles=200)
+```
+
+The factory handles seed spawning, writing the CE to a managed temp
+directory, and constructing a `ProcessPool` at the same ladder as
+the orchestrator. See `examples/03_parallel_workers.py`.
+
 Observer attachment is only supported on `SerialPool`; use
 `CanonicalParallelTempering.attach_observer(...)` on a pool that
 satisfies `ObservablePool` (currently only `SerialPool` does).

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tempfile
+import weakref
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
 from .parallel.backend import ReplicaPool
+from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
 from .replica import Replica
 
@@ -150,3 +153,76 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 },
             )
         return history
+
+    @classmethod
+    def process_pool(
+        cls,
+        cluster_expansion: ClusterExpansion,
+        atoms: Atoms,
+        temperatures: Sequence[float],
+        block_size: int,
+        random_seed: int,
+        data_container_file: Path | str | None = None,
+    ) -> CanonicalParallelTempering:
+        """Construct a process-parallel PT run in one call.
+
+        The factory owns:
+
+        - per-replica seed spawning from ``random_seed`` (same scheme
+          as the serial default path);
+        - writing ``cluster_expansion`` to a managed temporary
+          directory, so each worker process can read it at startup;
+        - constructing a `ProcessPool` at the same temperature ladder
+          as the orchestrator, closing the alignment trap that
+          separate pool + orchestrator construction opens up.
+
+        The tempdir is released when the returned orchestrator is
+        garbage-collected; call sites that want deterministic cleanup
+        should use the orchestrator as a context manager::
+
+            with CanonicalParallelTempering.process_pool(
+                cluster_expansion=ce,
+                atoms=atoms,
+                temperatures=[200, 400, 800, 1600],
+                block_size=1000,
+                random_seed=0,
+            ) as pt:
+                pt.run(n_cycles=200)
+
+        On exit the pool's workers are joined; the CE tempdir is
+        cleaned shortly after by Python's garbage collector.
+        """
+        temperatures_list = [float(T) for T in temperatures]
+        seed_sequence = np.random.SeedSequence(int(random_seed))
+        child_seeds = seed_sequence.spawn(len(temperatures_list) + 1)
+        replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
+
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            ce_path = Path(tmpdir.name) / "cluster_expansion.ce"
+            cluster_expansion.write(str(ce_path))
+            pool = ProcessPool(
+                ce_path=ce_path,
+                initial_atoms=atoms,
+                temperatures=temperatures_list,
+                seeds=replica_seeds,
+            )
+        except BaseException:
+            tmpdir.cleanup()
+            raise
+
+        pt = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            temperatures=temperatures_list,
+            block_size=block_size,
+            random_seed=random_seed,
+            pool=pool,
+            data_container_file=data_container_file,
+        )
+        # Tie tempdir lifetime to the orchestrator: cleaned when `pt`
+        # is garbage-collected (or when its finalizer runs explicitly).
+        # The CE file is only read by workers during their own
+        # startup, so a modest GC delay does not affect correctness.
+        weakref.finalize(pt, tmpdir.cleanup)
+        return pt

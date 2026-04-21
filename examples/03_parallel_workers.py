@@ -1,9 +1,11 @@
-"""Parallel (multiprocess) PT run.
+"""Parallel (multiprocess) PT run via the ProcessPool factory.
 
-Demonstrates spawning one worker process per replica. The CE is
-written to a temp file, the ProcessPool reads it back inside each
-worker, and only occupation vectors cross the process boundary during
-the run.
+Demonstrates the `CanonicalParallelTempering.process_pool` classmethod:
+one call constructs a process-parallel orchestrator, spawning per-
+replica seeds, writing the cluster expansion to a managed temp
+directory, and constructing a ProcessPool at the same temperature
+ladder as the orchestrator. Used as a context manager, worker
+processes are joined on exit.
 
 Run from the repo root:
 
@@ -12,14 +14,11 @@ Run from the repo root:
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import numpy as np
 from ase.build import bulk
 from icet import ClusterExpansion, ClusterSpace
 
-from mchammer_pt import CanonicalParallelTempering, ProcessPool
+from mchammer_pt import CanonicalParallelTempering
 
 
 def build_toy_ce() -> ClusterExpansion:
@@ -40,33 +39,14 @@ def main() -> None:
     symbols[au_indices] = "Au"
     atoms.set_chemical_symbols(symbols.tolist())
 
-    temperatures = [200.0, 400.0, 800.0, 1600.0]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ce_path = Path(tmpdir) / "toy.ce"
-        ce.write(str(ce_path))
-        seeds = [
-            int(np.random.SeedSequence(0).spawn(5)[i].generate_state(1)[0])
-            for i in range(len(temperatures))
-        ]
-        pool = ProcessPool(
-            ce_path=ce_path,
-            initial_atoms=atoms,
-            temperatures=temperatures,
-            seeds=seeds,
-        )
-        try:
-            pt = CanonicalParallelTempering(
-                cluster_expansion=ce,
-                atoms=atoms,
-                temperatures=temperatures,
-                block_size=200,
-                random_seed=0,
-                pool=pool,
-            )
-            history = pt.run(n_cycles=30)
-        finally:
-            pool.shutdown()
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=ce,
+        atoms=atoms,
+        temperatures=[200.0, 400.0, 800.0, 1600.0],
+        block_size=200,
+        random_seed=0,
+    ) as pt:
+        history = pt.run(n_cycles=30)
 
     print(
         f"Ran {history.energies_per_cycle.shape[0] - 1} cycles across "
