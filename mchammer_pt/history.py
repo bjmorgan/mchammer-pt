@@ -56,17 +56,22 @@ def _normalise_meta_value(value: object) -> MetaValue:
     """Cast h5py-returned attrs to the declared ``MetaValue`` union.
 
     h5py returns numpy scalar types (``np.int64``, ``np.float64``,
-    ``np.bool_``) and ``bytes`` for attrs, not the Python ``int`` /
-    ``float`` / ``bool`` / ``str`` declared in ``MetaValue``. Normalise
-    on the read path so callers see the contract types without having
-    to cast.
+    ``np.bool_``, ``np.bytes_``) and plain ``bytes`` for attrs, not
+    the Python ``int`` / ``float`` / ``bool`` / ``str`` declared in
+    ``MetaValue``. Normalise on the read path so callers see the
+    contract types without having to cast.
+
+    The ``bytes`` check runs before ``np.generic`` because ``np.bytes_``
+    is a subclass of both, and ``np.bytes_.item()`` returns plain
+    ``bytes`` rather than ``str`` — so the ``np.generic`` branch
+    would leak ``bytes`` past the decode step if ordered first.
     """
     if isinstance(value, np.ndarray):
         return np.array(value)
-    if isinstance(value, np.generic):
-        return value.item()
     if isinstance(value, bytes):
         return value.decode("utf-8")
+    if isinstance(value, np.generic):
+        return value.item()
     return value  # type: ignore[return-value]
 
 

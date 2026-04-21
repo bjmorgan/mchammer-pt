@@ -116,6 +116,23 @@ def test_meta_round_trips_all_supported_scalar_types(tmp_path: Path):
     np.testing.assert_array_equal(meta_back["an_array"], meta["an_array"])
 
 
+def test_normalise_meta_value_decodes_np_bytes():
+    """np.bytes_ must decode to str, not leak through np.generic.item().
+
+    np.bytes_ is a subclass of both np.generic and bytes; if the
+    np.generic branch is checked first, .item() returns plain bytes
+    and the caller sees bytes where MetaValue declares str. The
+    bytes branch must run first so both plain bytes and np.bytes_
+    decode to str.
+    """
+    from mchammer_pt.history import _normalise_meta_value
+
+    assert _normalise_meta_value(np.bytes_(b"hello")) == "hello"
+    assert type(_normalise_meta_value(np.bytes_(b"hello"))) is str
+    assert _normalise_meta_value(b"plain") == "plain"
+    assert type(_normalise_meta_value(b"plain")) is str
+
+
 def test_write_hdf5_overwrites_existing_file(tmp_path: Path):
     """A second write to the same path truncates and replaces."""
     path = tmp_path / "pt.h5"
