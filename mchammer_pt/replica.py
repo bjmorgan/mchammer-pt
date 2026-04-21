@@ -4,9 +4,6 @@
 only place in `mchammer-pt` that directly calls `mchammer`'s MC
 machinery. The orchestrator and the parallel backends interact with
 ensembles exclusively through `Replica`.
-
-This confinement keeps the rest of the library free of `mchammer`
-internals, so changes to `mchammer`'s API affect only this file.
 """
 from __future__ import annotations
 

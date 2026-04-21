@@ -56,3 +56,26 @@ def test_data_container_is_mchammer_native(toy_ce, toy_atoms):
     rep = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
     rep.advance(50)
     assert isinstance(rep.data_container(), BaseDataContainer)
+
+
+def test_attach_mchammer_observer_fires_during_advance(toy_ce, toy_atoms):
+    """Attached observers must fire inside advance; not just be accepted.
+
+    Confirms the observer pipeline is wired, not merely the type check.
+    """
+    from mchammer.observers.base_observer import BaseObserver
+
+    class CountingObserver(BaseObserver):
+        def __init__(self, interval: int) -> None:
+            super().__init__(interval=interval, return_type=int, tag="counter")
+            self.n_calls = 0
+
+        def get_observable(self, structure) -> int:
+            self.n_calls += 1
+            return self.n_calls
+
+    rep = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    observer = CountingObserver(interval=10)
+    rep.attach_mchammer_observer(observer)
+    rep.advance(n_steps=50)
+    assert observer.n_calls > 0
