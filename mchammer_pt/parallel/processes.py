@@ -16,6 +16,7 @@ Commands:
 Only integer occupation arrays cross the process boundary during a
 run; the CE itself is passed once as a file path at worker startup.
 """
+
 from __future__ import annotations
 
 import multiprocessing as mp

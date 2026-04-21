@@ -9,6 +9,7 @@ four replicas on a short temperature ladder, runs 100 cycles, and
 prints per-pair swap acceptance rates. It completes in a few seconds
 on a laptop and is self-contained — no external CE file needed.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -20,9 +21,7 @@ from mchammer_pt import CanonicalParallelTempering
 
 def build_toy_ce() -> ClusterExpansion:
     primitive = bulk("Cu", "fcc", a=4.0, cubic=True)
-    cs = ClusterSpace(
-        structure=primitive, cutoffs=[3.5], chemical_symbols=["Cu", "Au"]
-    )
+    cs = ClusterSpace(structure=primitive, cutoffs=[3.5], chemical_symbols=["Cu", "Au"])
     rng = np.random.default_rng(0)
     parameters = rng.normal(loc=0.0, scale=0.05, size=len(cs))
     parameters[0] = -1.0

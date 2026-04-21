@@ -8,6 +8,7 @@ parallel-tempering exchange proposals.
 - `metropolis_accept` applies the standard Metropolis acceptance
   rule to a log-probability ratio.
 """
+
 from __future__ import annotations
 
 import numpy as np

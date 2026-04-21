@@ -4,6 +4,7 @@ Pure functions operating on `ExchangeHistory` (or its constituent
 arrays). They do not touch the orchestrator, are trivially unit-
 testable, and form the basis for any user-built quality checks.
 """
+
 from __future__ import annotations
 
 import numpy as np

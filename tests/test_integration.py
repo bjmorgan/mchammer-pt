@@ -1,4 +1,5 @@
 """Integration tests exercising the full orchestrator."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -96,6 +97,4 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
     finally:
         backend.shutdown()
 
-    np.testing.assert_array_equal(
-        h_serial.swap_attempted, h_processes.swap_attempted
-    )
+    np.testing.assert_array_equal(h_serial.swap_attempted, h_processes.swap_attempted)

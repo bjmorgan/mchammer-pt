@@ -1,4 +1,5 @@
 """Tests for PT diagnostics: round-trip counting and autocorrelation."""
+
 from __future__ import annotations
 
 import numpy as np

@@ -7,6 +7,7 @@ plus two built-ins: `SwapRateTracker` (per-pair attempt and accept
 counts) and `ExchangePrinter` (stdout trace on a configurable
 cadence).
 """
+
 from __future__ import annotations
 
 from typing import Protocol

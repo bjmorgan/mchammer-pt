@@ -1,4 +1,5 @@
 """Shared pytest fixtures for the mchammer-pt test suite."""
+
 from __future__ import annotations
 
 import numpy as np

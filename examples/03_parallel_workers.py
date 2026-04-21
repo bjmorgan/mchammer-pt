@@ -9,6 +9,7 @@ Run from the repo root:
 
     python examples/03_parallel_workers.py
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -24,9 +25,7 @@ from mchammer_pt.parallel.processes import ProcessBackend
 
 def build_toy_ce() -> ClusterExpansion:
     primitive = bulk("Cu", "fcc", a=4.0, cubic=True)
-    cs = ClusterSpace(
-        structure=primitive, cutoffs=[3.5], chemical_symbols=["Cu", "Au"]
-    )
+    cs = ClusterSpace(structure=primitive, cutoffs=[3.5], chemical_symbols=["Cu", "Au"])
     rng = np.random.default_rng(0)
     params = rng.normal(scale=0.05, size=len(cs))
     params[0] = -1.0

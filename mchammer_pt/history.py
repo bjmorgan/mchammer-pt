@@ -31,6 +31,7 @@ Each replica's container is stored as an opaque byte dataset — the
 mchammer and treated as a black box here. `read_hdf5` reverses the
 embedding via a temp file.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -76,9 +77,7 @@ class ExchangeHistory:
     def empty(cls, n_cycles: int, n_replicas: int) -> ExchangeHistory:
         """Allocate a zero-filled history of the given shape."""
         return cls(
-            energies_per_cycle=np.zeros(
-                (n_cycles + 1, n_replicas), dtype=np.float64
-            ),
+            energies_per_cycle=np.zeros((n_cycles + 1, n_replicas), dtype=np.float64),
             replica_labels_per_cycle=np.zeros(
                 (n_cycles + 1, n_replicas), dtype=np.int64
             ),
@@ -102,9 +101,7 @@ def write_hdf5(
     path = Path(path)
     with h5py.File(path, "w") as f:
         exchanges = f.create_group("exchanges")
-        exchanges.create_dataset(
-            "energies_per_cycle", data=history.energies_per_cycle
-        )
+        exchanges.create_dataset("energies_per_cycle", data=history.energies_per_cycle)
         exchanges.create_dataset(
             "replica_labels_per_cycle", data=history.replica_labels_per_cycle
         )
@@ -124,9 +121,7 @@ def write_hdf5(
                 payload = tmp_path.read_bytes()
             finally:
                 tmp_path.unlink(missing_ok=True)
-            replicas.create_dataset(
-                str(i), data=np.frombuffer(payload, dtype=np.uint8)
-            )
+            replicas.create_dataset(str(i), data=np.frombuffer(payload, dtype=np.uint8))
 
 
 def read_hdf5(
@@ -150,9 +145,7 @@ def read_hdf5(
         )
         meta: dict[str, MetaValue] = {}
         for key, value in f["meta"].attrs.items():
-            meta[key] = (
-                np.array(value) if isinstance(value, np.ndarray) else value
-            )
+            meta[key] = np.array(value) if isinstance(value, np.ndarray) else value
         containers: list[BaseDataContainer] = []
         if "replicas" in f:
             replica_keys = sorted(f["replicas"].keys(), key=int)

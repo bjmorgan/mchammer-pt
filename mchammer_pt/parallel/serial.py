@@ -1,4 +1,5 @@
 """In-process serial replica advance."""
+
 from __future__ import annotations
 
 from ..replica import Replica

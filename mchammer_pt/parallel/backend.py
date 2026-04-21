@@ -5,6 +5,7 @@ phase of each cycle to a Backend. The serial and multiprocessing
 backends implement this protocol; future backends (threads, MPI) can
 be added without changes to the orchestrator.
 """
+
 from __future__ import annotations
 
 from typing import Protocol

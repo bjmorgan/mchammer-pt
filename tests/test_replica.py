@@ -1,4 +1,5 @@
 """Tests for the Replica per-temperature ensemble handle."""
+
 from __future__ import annotations
 
 import numpy as np

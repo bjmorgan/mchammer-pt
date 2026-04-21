@@ -1,4 +1,5 @@
 """Tests for ExchangeHistory dataclass and HDF5 round-trip."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,9 +19,7 @@ def _make_history(n_cycles: int = 4, n_replicas: int = 3) -> ExchangeHistory:
     h.energies_per_cycle[:] = np.arange(h.energies_per_cycle.size).reshape(
         h.energies_per_cycle.shape
     )
-    h.replica_labels_per_cycle[:] = np.tile(
-        np.arange(n_replicas), (n_cycles + 1, 1)
-    )
+    h.replica_labels_per_cycle[:] = np.tile(np.arange(n_replicas), (n_cycles + 1, 1))
     h.swap_attempted[:] = 10
     h.swap_accepted[:] = 5
     return h

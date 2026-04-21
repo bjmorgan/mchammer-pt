@@ -1,4 +1,5 @@
 """Tests for ExchangeCallback protocol and built-in callbacks."""
+
 from __future__ import annotations
 
 import numpy as np

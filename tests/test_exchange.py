@@ -1,4 +1,5 @@
 """Tests for PT pair-set rotation and Metropolis acceptance arithmetic."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -19,8 +20,8 @@ def test_pair_set_odd_cycle_returns_odd_indices():
 
 
 def test_pair_set_alternates_even_odd_over_cycles():
-    even = pair_set_for_cycle(n_replicas=5, cycle=2)   # still even
-    odd = pair_set_for_cycle(n_replicas=5, cycle=3)    # odd
+    even = pair_set_for_cycle(n_replicas=5, cycle=2)  # still even
+    odd = pair_set_for_cycle(n_replicas=5, cycle=3)  # odd
     assert even.tolist() == [0, 2]
     assert odd.tolist() == [1, 3]
 

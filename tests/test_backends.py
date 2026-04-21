@@ -1,4 +1,5 @@
 """Tests for parallel backends (serial + processes)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -60,9 +61,7 @@ def test_process_backend_parity_with_serial(tmp_path: Path, toy_ce, toy_atoms):
             replicas_processes, backend.current_occupations(), strict=True
         ):
             replica.set_occupations(occ)
-        energies_processes = np.array(
-            [r.current_energy() for r in replicas_processes]
-        )
+        energies_processes = np.array([r.current_energy() for r in replicas_processes])
         occ_processes = [r.current_occupations() for r in replicas_processes]
     finally:
         backend.shutdown()

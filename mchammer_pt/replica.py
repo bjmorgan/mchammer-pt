@@ -12,6 +12,7 @@ other's seeds. `advance` therefore save/restores the global state
 around every call so each Replica evolves as if it had the process
 to itself.
 """
+
 from __future__ import annotations
 
 import random

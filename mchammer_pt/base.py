@@ -4,6 +4,7 @@
 callbacks, and the history, and drives the cycle loop. Ensemble-specific
 subclasses override exactly one method: `_log_prob_ratio(i, j)`.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

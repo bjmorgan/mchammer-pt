@@ -1,4 +1,5 @@
 """Tests for the abstract BaseParallelTempering orchestrator."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -31,9 +32,9 @@ def _replicas(toy_ce, toy_atoms) -> list[Replica]:
 
 def test_base_is_abstract(toy_ce, toy_atoms):
     with pytest.raises(TypeError):
-        BaseParallelTempering(replicas=_replicas(toy_ce, toy_atoms),
-                              block_size=10,
-                              random_seed=0)
+        BaseParallelTempering(
+            replicas=_replicas(toy_ce, toy_atoms), block_size=10, random_seed=0
+        )
 
 
 def test_run_records_energies(toy_ce, toy_atoms):
