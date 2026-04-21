@@ -7,58 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed — prior to first public release
-
-This release supersedes the unreleased v0.1.1 patch. The following are
-not backwards-compatible changes but also not releases against prior
-versions; they shape v0.1.0 before first publication.
-
-- Replaced `Backend` / `SerialBackend` / `ProcessBackend` with a pair of
-  protocols, `ReplicaPool` (core operations) and `ObservablePool`
-  (extends with `attach_observer`). Pool implementations are
-  `SerialPool` (satisfies `ObservablePool`) and `ProcessPool`
-  (satisfies only `ReplicaPool`). Single source of truth for replica
-  state: the pool owns it, the orchestrator routes through the pool.
-- `CanonicalParallelTempering`: `backend=` kwarg renamed to `pool=`.
-- Removed `pt.replicas` attribute; use `pt.pool` (and methods on it
-  like `pt.pool.current_energy(i)`, `pt.pool.current_occupations(i)`,
-  `pt.pool.data_containers()`) for per-replica access.
-- `ProcessPool.attach_observer` is not supported in v0.1 (workers can't
-  safely receive pickled `BaseObserver` instances). Expressed in the
-  type system via the `ObservablePool` split; calling
-  `pt.attach_observer(...)` on a process-based pool raises `TypeError`
-  with a clear message pointing at `SerialPool`.
-- `CanonicalParallelTempering` now validates temperatures are
-  non-decreasing and `block_size >= 1` at construction.
-- `BaseParallelTempering.run()` wraps its cycle loop in try/finally so
-  `self.history` is assigned even on mid-run exception.
-- `_log_prob_ratio` raises `RuntimeError` with cycle/pair/energy
-  context if a non-finite log ratio is computed (previously silently
-  flowed through `metropolis_accept`).
-- Context-manager support: `with ProcessPool(...) as pool:` and
-  `with CanonicalParallelTempering(...) as pt:` both shut the pool
-  down on exit, including on the exception path.
-- `CanonicalParallelTempering` rejects pool/temperatures misalignment
-  at construction — length mismatch and element-wise temperature
-  disagreement both raise `ValueError`, naming the two ladders and
-  pointing at the `process_pool` factory as the construction path
-  that cannot produce the bad state.
-- `CanonicalParallelTempering.process_pool(...)` classmethod: owns
-  per-replica seed spawning, CE-tempdir lifecycle, and pool
-  construction. `with CanonicalParallelTempering.process_pool(...)
-  as pt:` is now the recommended pattern for process-parallel runs.
-
 ## [0.1.0] - 2026-04-21
 
 ### Added
 
-- `BaseParallelTempering` abstract orchestrator and concrete
-  `CanonicalParallelTempering` subclass.
-- Serial and multiprocessing-backed replica advance.
-- Per-replica `mchammer.BaseObserver` attachment (pass-through).
-- `ExchangeCallback` protocol plus `ExchangePrinter` and
-  `SwapRateTracker` built-ins.
-- `ExchangeHistory` with HDF5 read/write, bundled alongside
-  per-replica `mchammer.BaseDataContainer` outputs.
-- Round-trip-rate and energy-autocorrelation-time diagnostics.
-- Worked examples and CI on Python 3.11 through 3.14.
+- `CanonicalParallelTempering` — canonical-ensemble PT orchestrator
+  over an arbitrary temperature ladder. Constructor takes a
+  cluster expansion, starting atoms, temperatures, block size, and
+  random seed; `run(n_cycles)` returns an `ExchangeHistory`.
+- `CanonicalParallelTempering.process_pool(...)` classmethod for
+  process-parallel runs; owns seed spawning, CE tempdir lifecycle,
+  and pool construction so the pool and orchestrator cannot disagree
+  on the temperature ladder. Usable as a context manager.
+- `BaseParallelTempering` abstract orchestrator for future ensemble
+  types; subclasses override `_log_prob_ratio(i, j)`.
+- `ReplicaPool` protocol with `SerialPool` and `ProcessPool`
+  implementations. `ObservablePool` sub-protocol adds
+  `attach_observer`; satisfied by `SerialPool` only.
+  `ProcessPool` uses persistent worker processes with a narrow
+  command protocol and structured error forwarding.
+- `ExchangeCallback` protocol for per-exchange hooks, plus
+  `SwapRateTracker` and `ExchangePrinter` built-ins.
+- `ExchangeHistory` dataclass capturing per-cycle energies,
+  replica-label trajectories, and per-pair swap counts. Written as
+  an atomic HDF5 bundle alongside one native
+  `mchammer.BaseDataContainer` per replica; `read_hdf5` validates
+  the schema on load.
+- Diagnostics: `round_trip_counts`, `swap_acceptance_rates`,
+  `energy_autocorrelation_time` (Sokal-window estimator with a
+  warning when the window does not close).
+- Context-manager support on `ProcessPool` and
+  `BaseParallelTempering` for exception-safe worker shutdown.
+- Per-replica RNG isolation around `mchammer`'s global-`random`
+  Monte Carlo driver so co-tenant replicas evolve independently.
+- Non-finite log-probability ratios surface as `RuntimeError` with
+  cycle, pair, and energy context instead of flowing through
+  `metropolis_accept` silently.
+- Three worked examples (basic canonical run, custom callback,
+  process-parallel run) against a synthetic Cu/Au cluster
+  expansion; no external files required.
+- Test suite covering protocol conformance, RNG isolation,
+  exchange correctness, HDF5 atomicity and schema validation, and
+  end-to-end serial/parallel agreement. CI runs pytest + mypy
+  (strict) + ruff on Python 3.11, 3.12, 3.13, 3.14.
