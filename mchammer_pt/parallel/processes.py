@@ -165,9 +165,7 @@ class ProcessPool:
             for _, conn in self._workers:
                 status, payload = conn.recv()
                 if status != "OK":
-                    raise RuntimeError(
-                        f"worker startup failed:\n{payload}"
-                    )
+                    raise RuntimeError(f"worker startup failed:\n{payload}")
         except BaseException:
             self.shutdown()
             raise
