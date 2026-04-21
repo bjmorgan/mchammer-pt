@@ -79,3 +79,27 @@ def test_attach_mchammer_observer_fires_during_advance(toy_ce, toy_atoms):
     rep.attach_mchammer_observer(observer)
     rep.advance(n_steps=50)
     assert observer.n_calls > 0
+
+
+def test_co_tenant_replicas_have_independent_rng_streams(toy_ce, toy_atoms):
+    """Two Replicas built in the same process must evolve independently.
+
+    mchammer drives its MC from Python's global `random` module. Without
+    per-Replica RNG isolation, constructing a second Replica would reseed
+    the shared stream and the first Replica's `advance()` would pick up
+    the wrong trajectory. Pin the contract: seed=1 alone produces the
+    same trajectory as seed=1 in the presence of a co-tenant seed=2.
+    """
+    # Reference trajectory: one Replica, alone.
+    solo = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    solo.advance(n_steps=200)
+    solo_occ = solo.current_occupations()
+
+    # Two Replicas in the same process. Construct the second with a
+    # different seed before advancing the first — this tests that the
+    # second construction does not clobber the first's RNG state.
+    co_first = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    _co_other = Replica(toy_ce, toy_atoms, temperature=500.0, random_seed=2)
+    co_first.advance(n_steps=200)
+
+    np.testing.assert_array_equal(solo_occ, co_first.current_occupations())
