@@ -38,6 +38,41 @@ def test_round_trip_counts_single_traversal_counts_one():
     assert counts[0] == 1
 
 
+def test_round_trip_counts_two_traversals():
+    """Two complete bottom-top-bottom cycles for label 0 count as two trips."""
+    # Label 0's temperature index (first column reads: the label AT T=0).
+    # Schedule is: 0 at bottom -> 0 at top -> 0 at bottom -> 0 at top -> 0 at bottom.
+    labels = np.array(
+        [
+            [0, 1, 2],  # label 0 at bottom
+            [1, 2, 0],  # label 0 at top
+            [0, 2, 1],  # label 0 at bottom (one round trip complete)
+            [1, 2, 0],  # label 0 at top
+            [0, 1, 2],  # label 0 at bottom (second round trip complete)
+        ],
+        dtype=np.int64,
+    )
+    counts = round_trip_counts(labels)
+    assert counts[0] == 2
+
+
+def test_round_trip_counts_partial_traversal_does_not_count():
+    """A bottom-to-top move with no return does not count as a round trip."""
+    labels = np.array(
+        [
+            [0, 1, 2],  # label 0 at bottom
+            [1, 0, 2],  # label 0 in middle
+            [1, 2, 0],  # label 0 at top (half a trip)
+            [1, 2, 0],  # stays at top
+            [2, 1, 0],  # still at top
+        ],
+        dtype=np.int64,
+    )
+    counts = round_trip_counts(labels)
+    # No label returns to bottom after reaching top, so no round trips.
+    assert counts[0] == 0
+
+
 def test_swap_acceptance_rates_from_history():
     h = ExchangeHistory.empty(n_cycles=5, n_replicas=4)
     h.swap_attempted[:] = [10, 0, 20]

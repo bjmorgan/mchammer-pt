@@ -13,12 +13,14 @@ from .history import ExchangeHistory
 
 
 def round_trip_counts(replica_labels_per_cycle: np.ndarray) -> np.ndarray:
-    """Per-label count of full ladder traversals.
+    """Per-label count of completed ladder round trips.
 
-    A round trip is a visit to the top rung followed by a subsequent
-    visit to the bottom rung (or vice versa). Only the number of
-    lowest-to-highest-and-back-again trips is counted — partial
-    traversals do not count.
+    A round trip is one complete bottom → top → bottom traversal (or
+    top → bottom → top). Each such traversal consists of two endpoint
+    visits on opposite rungs with no intervening same-rung visit.
+    Partial traversals (bottom → top but not yet back) do not count;
+    the count increments only when the second opposite-rung visit
+    lands.
 
     Args:
         replica_labels_per_cycle: shape ``(n_cycles+1, n_replicas)``,
