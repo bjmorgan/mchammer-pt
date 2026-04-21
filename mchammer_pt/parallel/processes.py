@@ -48,9 +48,12 @@ def _worker(
 ) -> None:
     """Worker entry point: build a Replica, then serve commands.
 
-    Any exception - including during Replica construction - is caught
-    and sent back as ("ERR", traceback). The worker continues serving
-    if the caller can recover; otherwise the caller sends SHUTDOWN.
+    After successful Replica construction the worker sends a single
+    ("OK", None) ready-handshake back to the parent, so the parent can
+    verify startup success synchronously rather than discovering it on
+    the first ADVANCE. Any exception during startup — including
+    Replica construction — is caught and sent back as ("ERR", tb)
+    instead, and the worker exits.
     """
     try:
         atoms = Atoms(
@@ -70,6 +73,8 @@ def _worker(
         conn.send(("ERR", traceback.format_exc()))
         conn.close()
         return
+
+    conn.send(("OK", None))
 
     while True:
         try:
@@ -150,6 +155,22 @@ class ProcessPool:
             process.start()
             child_conn.close()
             self._workers.append((process, parent_conn))
+
+        # Synchronous ready-handshake. Each worker sends a single OK
+        # after successful Replica construction, or ERR + traceback if
+        # startup fails. Surfacing failures here means the caller gets
+        # the actual traceback, rather than a BrokenPipeError on the
+        # first ADVANCE with the original cause lost.
+        try:
+            for _, conn in self._workers:
+                status, payload = conn.recv()
+                if status != "OK":
+                    raise RuntimeError(
+                        f"worker startup failed:\n{payload}"
+                    )
+        except BaseException:
+            self.shutdown()
+            raise
 
     def __len__(self) -> int:
         return len(self._workers)
