@@ -88,9 +88,9 @@ def write_hdf5(
 ) -> None:
     """Write an `ExchangeHistory`, replica containers, and metadata.
 
-    Each container is serialised via its `write` method to a temporary
-    file, whose contents are then embedded as a group under
-    ``/replicas/<i>``.
+    Each container is serialised via its `write` method (which produces
+    an mchammer tarball) and the resulting bytes are embedded as a
+    single opaque ``uint8`` dataset at ``/replicas/<i>``.
     """
     path = Path(path)
     with h5py.File(path, "w") as f:
