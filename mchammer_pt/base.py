@@ -1,13 +1,19 @@
 """Abstract parallel-tempering orchestrator.
 
-`BaseParallelTempering` holds the replicas, the parallel backend, the
-callbacks, and the history, and drives the cycle loop. Ensemble-specific
-subclasses override exactly one method: `_log_prob_ratio(i, j)`.
+`BaseParallelTempering` drives the cycle loop, records per-cycle
+observations, and coordinates exchange proposals. All replica state
+lives in the pool (`ReplicaPool` or `ObservablePool`); the orchestrator
+routes queries through it and never holds replica state directly.
+
+Ensemble-specific subclasses override exactly one method:
+`_log_prob_ratio(i, j)`.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
@@ -17,47 +23,42 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 from .callbacks import ExchangeCallback
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
-from .parallel.backend import ReplicaPool
-from .parallel.serial import SerialPool
-from .replica import Replica
+from .parallel.backend import ObservablePool, ReplicaPool
 
 
 class BaseParallelTempering(ABC):
     """Abstract PT orchestrator.
 
     Args:
-        replicas: one replica per temperature, in ascending-T order.
+        pool: a `ReplicaPool` owning one replica per temperature, in
+            ascending-T order. If the pool is an `ObservablePool`,
+            `attach_observer` will forward to it; otherwise calling
+            `attach_observer` raises `TypeError`.
         block_size: MC trial steps per replica per cycle.
-        random_seed: master seed; the exchange-proposal RNG is seeded
-            deterministically from this.
-        backend: parallel backend for the replica-advance phase.
-            Defaults to serial execution.
+        random_seed: master seed for the exchange-proposal RNG.
     """
 
     def __init__(
         self,
-        replicas: list[Replica],
+        pool: ReplicaPool,
         block_size: int,
         random_seed: int,
-        backend: ReplicaPool | None = None,
     ) -> None:
-        if len(replicas) < 2:
+        if len(pool) < 2:
             raise ValueError("parallel tempering requires at least 2 replicas")
-        self._replicas = list(replicas)
+        self._pool = pool
         self._block_size = int(block_size)
         self._rng = np.random.default_rng(int(random_seed))
-        self._pool: ReplicaPool = (
-            backend if backend is not None else SerialPool(replicas=self._replicas)
-        )
         self._callbacks: list[ExchangeCallback] = []
-        self._replica_labels = np.arange(len(replicas), dtype=np.int64)
+        self._replica_labels = np.arange(len(pool), dtype=np.int64)
         self._history: ExchangeHistory | None = None
 
     # --- public API ----
 
     @property
-    def replicas(self) -> list[Replica]:
-        return list(self._replicas)
+    def pool(self) -> ReplicaPool:
+        """The underlying replica pool."""
+        return self._pool
 
     @property
     def history(self) -> ExchangeHistory | None:
@@ -71,35 +72,42 @@ class BaseParallelTempering(ABC):
         self._callbacks.append(callback)
 
     def attach_observer(
-        self, observer: BaseObserver, replicas: list[int] | str = "all"
+        self,
+        observer: BaseObserver,
+        indices: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         """Attach an mchammer observer to one or more replicas.
 
+        Requires the pool to satisfy `ObservablePool`. Pools that cannot
+        marshal observer instances across their execution boundary (e.g.
+        `ProcessPool`) do not satisfy it; calling this method with such
+        a pool raises `TypeError`.
+
         Args:
-            observer: an mchammer BaseObserver instance.
-            replicas: either the string ``"all"``, or an explicit list
+            observer: an mchammer `BaseObserver` instance.
+            indices: either the string ``"all"``, or an explicit sequence
                 of replica indices to attach to.
         """
-        indices = (
-            range(len(self._replicas))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
-        for i in indices:
-            self._replicas[i].attach_mchammer_observer(observer)
+        if not isinstance(self._pool, ObservablePool):
+            raise TypeError(
+                f"attach_observer requires an ObservablePool; "
+                f"{type(self._pool).__name__} does not support observers. "
+                f"Use SerialPool to attach observers."
+            )
+        self._pool.attach_observer(observer, indices)
 
     def run(self, n_cycles: int) -> ExchangeHistory:
         """Advance all replicas for ``n_cycles`` MC+exchange cycles."""
-        n_replicas = len(self._replicas)
+        n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
-        history.energies_per_cycle[0] = self._current_energies()
+        history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
 
         for c in range(n_cycles):
             self._pool.advance_all(self._block_size)
             for pair in pair_set_for_cycle(n_replicas, c):
                 self._try_exchange(int(pair), int(pair) + 1, c, history)
-            history.energies_per_cycle[c + 1] = self._current_energies()
+            history.energies_per_cycle[c + 1] = self._pool.current_energies()
             history.replica_labels_per_cycle[c + 1] = self._replica_labels
 
         self._history = history
@@ -113,9 +121,6 @@ class BaseParallelTempering(ABC):
         ...
 
     # --- internals ----
-
-    def _current_energies(self) -> np.ndarray:
-        return np.array([r.current_energy() for r in self._replicas])
 
     def _try_exchange(
         self,
@@ -136,12 +141,6 @@ class BaseParallelTempering(ABC):
                 log_prob_ratio=log_r,
             )
         if accepted:
-            self._exchange_configurations(i, j)
+            self._pool.swap_configurations(i, j)
             self._replica_labels[[i, j]] = self._replica_labels[[j, i]]
             history.swap_accepted[pair_index] += 1
-
-    def _exchange_configurations(self, i: int, j: int) -> None:
-        occ_i = self._replicas[i].current_occupations()
-        occ_j = self._replicas[j].current_occupations()
-        self._replicas[i].set_occupations(occ_j)
-        self._replicas[j].set_occupations(occ_i)

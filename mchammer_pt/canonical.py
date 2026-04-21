@@ -12,6 +12,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
 from .parallel.backend import ReplicaPool
+from .parallel.serial import SerialPool
 from .replica import Replica
 
 # Boltzmann constant in eV / K. Energies returned by `Replica.current_energy`
@@ -61,20 +62,23 @@ class CanonicalParallelTempering(BaseParallelTempering):
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
-        replicas = [
-            Replica(
-                cluster_expansion=cluster_expansion,
-                atoms=atoms,
-                temperature=float(T),
-                random_seed=seed,
-            )
-            for T, seed in zip(temperatures, replica_seeds, strict=True)
-        ]
+        if backend is None:
+            replicas = [
+                Replica(
+                    cluster_expansion=cluster_expansion,
+                    atoms=atoms,
+                    temperature=float(T),
+                    random_seed=seed,
+                )
+                for T, seed in zip(temperatures, replica_seeds, strict=True)
+            ]
+            pool: ReplicaPool = SerialPool(replicas)
+        else:
+            pool = backend
         super().__init__(
-            replicas=replicas,
+            pool=pool,
             block_size=block_size,
             random_seed=master_seed,
-            backend=backend,
         )
         self._temperatures = np.asarray(temperatures, dtype=np.float64)
         self._beta = 1.0 / (_KB * self._temperatures)
@@ -86,8 +90,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
         return self._temperatures.copy()
 
     def _log_prob_ratio(self, i: int, j: int) -> float:
-        E_i = self._replicas[i].current_energy()
-        E_j = self._replicas[j].current_energy()
+        E_i = self._pool.current_energy(i)
+        E_j = self._pool.current_energy(j)
         return float((self._beta[i] - self._beta[j]) * (E_i - E_j))
 
     def run(self, n_cycles: int) -> ExchangeHistory:
@@ -105,7 +109,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             write_hdf5(
                 Path(self._data_container_file),
                 history=history,
-                replica_containers=[r.data_container() for r in self._replicas],
+                replica_containers=self._pool.data_containers(),
                 meta={
                     "temperatures": self._temperatures,
                     "block_size": int(self._block_size),

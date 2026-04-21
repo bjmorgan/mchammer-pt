@@ -16,9 +16,8 @@ def test_init_constructs_one_replica_per_temperature(toy_ce, toy_atoms):
         block_size=10,
         random_seed=0,
     )
-    assert len(pt.replicas) == 3
-    actual_ts = sorted(r.temperature for r in pt.replicas)
-    assert actual_ts == [100.0, 300.0, 700.0]
+    assert len(pt.pool) == 3
+    assert sorted(pt.pool.temperatures) == [100.0, 300.0, 700.0]
 
 
 def test_log_prob_ratio_matches_hand_formula(toy_ce, toy_atoms):
@@ -29,8 +28,8 @@ def test_log_prob_ratio_matches_hand_formula(toy_ce, toy_atoms):
         block_size=10,
         random_seed=0,
     )
-    E_i = pt.replicas[0].current_energy()
-    E_j = pt.replicas[1].current_energy()
+    E_i = pt.pool.current_energy(0)
+    E_j = pt.pool.current_energy(1)
     kB = 8.617333262145e-5
     expected = (1.0 / (kB * 100.0) - 1.0 / (kB * 1000.0)) * (E_i - E_j)
     # Both should be zero (same starting config), but the formula form is checked.

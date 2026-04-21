@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from mchammer_pt.base import BaseParallelTempering
+from mchammer_pt.parallel.serial import SerialPool
 from mchammer_pt.replica import Replica
 
 
@@ -23,23 +24,24 @@ class _AlwaysRejectPT(BaseParallelTempering):
         return -1e9
 
 
-def _replicas(toy_ce, toy_atoms) -> list[Replica]:
-    return [
+def _pool(toy_ce, toy_atoms) -> SerialPool:
+    replicas = [
         Replica(toy_ce, toy_atoms, temperature=300.0 + 100 * i, random_seed=i)
         for i in range(3)
     ]
+    return SerialPool(replicas)
 
 
 def test_base_is_abstract(toy_ce, toy_atoms):
     with pytest.raises(TypeError):
         BaseParallelTempering(
-            replicas=_replicas(toy_ce, toy_atoms), block_size=10, random_seed=0
+            pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0
         )
 
 
 def test_run_records_energies(toy_ce, toy_atoms):
     pt = _AlwaysAcceptPT(
-        replicas=_replicas(toy_ce, toy_atoms),
+        pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
     )
@@ -51,7 +53,7 @@ def test_run_records_energies(toy_ce, toy_atoms):
 
 def test_always_reject_preserves_replica_label_order(toy_ce, toy_atoms):
     pt = _AlwaysRejectPT(
-        replicas=_replicas(toy_ce, toy_atoms),
+        pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
     )
@@ -66,7 +68,7 @@ def test_always_reject_preserves_replica_label_order(toy_ce, toy_atoms):
 
 def test_always_accept_permutes_replica_labels(toy_ce, toy_atoms):
     pt = _AlwaysAcceptPT(
-        replicas=_replicas(toy_ce, toy_atoms),
+        pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
     )
@@ -91,7 +93,7 @@ def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
             events.append((cycle, pair_index, accepted))
 
     pt = _AlwaysRejectPT(
-        replicas=_replicas(toy_ce, toy_atoms),
+        pool=_pool(toy_ce, toy_atoms),
         block_size=10,
         random_seed=0,
     )
@@ -101,3 +103,35 @@ def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
     # Over 4 cycles: 2 + 2 = 4 exchange attempts.
     assert len(events) == 4
     assert all(not accepted for _, _, accepted in events)
+
+
+def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms, tmp_path):
+    """Pools that don't satisfy ObservablePool must reject attach_observer."""
+    from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+        BaseObserver,
+    )
+
+    from mchammer_pt.parallel.processes import ProcessPool
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        seeds=[0, 1],
+    )
+
+    class _DummyObs(BaseObserver):
+        def __init__(self) -> None:
+            super().__init__(interval=10, return_type=int, tag="dummy")
+
+        def get_observable(self, structure) -> int:
+            return 0
+
+    try:
+        pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
+        with pytest.raises(TypeError, match="ObservablePool"):
+            pt.attach_observer(_DummyObs())
+    finally:
+        pool.shutdown()
