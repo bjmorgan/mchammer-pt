@@ -238,7 +238,3 @@ class ProcessPool:
             if process.is_alive():
                 process.terminate()
         self._workers = []
-
-
-# Temporary submodule-level alias (removed in commit 4 of this refactor).
-ProcessBackend = ProcessPool

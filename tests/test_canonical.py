@@ -75,6 +75,41 @@ def test_deterministic_for_fixed_seed(toy_ce, toy_atoms):
     np.testing.assert_array_equal(h1.swap_accepted, h2.swap_accepted)
 
 
+def test_descending_temperatures_rejected(toy_ce, toy_atoms):
+    """Non-decreasing order is enforced; decreasing temperatures raise."""
+    with pytest.raises(ValueError, match="non-decreasing"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=toy_atoms,
+            temperatures=[600.0, 300.0],
+            block_size=10,
+            random_seed=0,
+        )
+
+
+def test_equal_adjacent_temperatures_allowed(toy_ce, toy_atoms):
+    """Equal adjacent temperatures are a legitimate null case, not rejected."""
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[500.0, 500.0, 500.0],
+        block_size=10,
+        random_seed=0,
+    )
+    assert len(pt.pool) == 3
+
+
+def test_zero_block_size_rejected(toy_ce, toy_atoms):
+    with pytest.raises(ValueError, match="block_size must be >= 1"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=toy_atoms,
+            temperatures=[300.0, 600.0],
+            block_size=0,
+            random_seed=0,
+        )
+
+
 def test_run_writes_hdf5_when_file_provided(tmp_path, toy_ce, toy_atoms):
     path = tmp_path / "pt.h5"
     pt = CanonicalParallelTempering(

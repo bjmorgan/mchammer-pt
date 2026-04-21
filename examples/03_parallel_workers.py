@@ -1,7 +1,7 @@
 """Parallel (multiprocess) PT run.
 
 Demonstrates spawning one worker process per replica. The CE is
-written to a temp file, the ProcessBackend reads it back inside each
+written to a temp file, the ProcessPool reads it back inside each
 worker, and only occupation vectors cross the process boundary during
 the run.
 
@@ -19,8 +19,7 @@ import numpy as np
 from ase.build import bulk
 from icet import ClusterExpansion, ClusterSpace
 
-from mchammer_pt import CanonicalParallelTempering
-from mchammer_pt.parallel.processes import ProcessBackend
+from mchammer_pt import CanonicalParallelTempering, ProcessPool
 
 
 def build_toy_ce() -> ClusterExpansion:
@@ -50,7 +49,7 @@ def main() -> None:
             int(np.random.SeedSequence(0).spawn(5)[i].generate_state(1)[0])
             for i in range(len(temperatures))
         ]
-        backend = ProcessBackend(
+        pool = ProcessPool(
             ce_path=ce_path,
             initial_atoms=atoms,
             temperatures=temperatures,
@@ -63,11 +62,11 @@ def main() -> None:
                 temperatures=temperatures,
                 block_size=200,
                 random_seed=0,
-                backend=backend,
+                pool=pool,
             )
             history = pt.run(n_cycles=30)
         finally:
-            backend.shutdown()
+            pool.shutdown()
 
     print(
         f"Ran {history.energies_per_cycle.shape[0] - 1} cycles across "

@@ -30,13 +30,18 @@ class CanonicalParallelTempering(BaseParallelTempering):
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
         atoms: starting structure; every replica begins from a copy.
-        temperatures: list of temperatures in kelvin (ascending order
-            by convention but not required).
-        block_size: MC trial steps per replica per cycle.
+        temperatures: non-decreasing temperatures in kelvin. At least
+            two values required. Equal adjacent temperatures are
+            allowed (produces a same-T null case where exchange is a
+            pure relabelling); strictly decreasing values are rejected.
+        block_size: MC trial steps per replica per cycle. Must be >= 1.
         random_seed: master seed; each replica's MC RNG and the
             orchestrator's exchange-proposal RNG are deterministically
             spawned from it.
-        backend: parallel backend; default is `SerialBackend`.
+        pool: optional `ReplicaPool` to use as the execution backend.
+            If None (the default), a `SerialPool` is constructed from
+            ``cluster_expansion``, ``atoms``, ``temperatures``, and the
+            spawned per-replica seeds.
         data_container_file: optional path; if given, `run` writes an
             HDF5 bundle of the `ExchangeHistory`, each replica's
             `mchammer.BaseDataContainer`, and run metadata to this path
@@ -50,31 +55,36 @@ class CanonicalParallelTempering(BaseParallelTempering):
         temperatures: Sequence[float],
         block_size: int,
         random_seed: int,
-        backend: ReplicaPool | None = None,
+        pool: ReplicaPool | None = None,
         data_container_file: Path | str | None = None,
     ) -> None:
-        temperatures = list(temperatures)
+        temperatures = [float(T) for T in temperatures]
         if len(temperatures) < 2:
             raise ValueError("parallel tempering requires at least 2 temperatures")
+        pairs = zip(temperatures[:-1], temperatures[1:], strict=True)
+        if any(b < a for a, b in pairs):
+            raise ValueError(
+                f"temperatures must be non-decreasing; got {temperatures}"
+            )
+        if int(block_size) < 1:
+            raise ValueError(f"block_size must be >= 1; got {block_size}")
         seed_sequence = np.random.SeedSequence(int(random_seed))
         # One child seed per replica plus one for the master exchange RNG.
         child_seeds = seed_sequence.spawn(len(temperatures) + 1)
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
-        if backend is None:
+        if pool is None:
             replicas = [
                 Replica(
                     cluster_expansion=cluster_expansion,
                     atoms=atoms,
-                    temperature=float(T),
+                    temperature=T,
                     random_seed=seed,
                 )
                 for T, seed in zip(temperatures, replica_seeds, strict=True)
             ]
-            pool: ReplicaPool = SerialPool(replicas)
-        else:
-            pool = backend
+            pool = SerialPool(replicas)
         super().__init__(
             pool=pool,
             block_size=block_size,

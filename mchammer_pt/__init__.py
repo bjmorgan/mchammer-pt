@@ -14,26 +14,18 @@ from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
 from .replica import Replica
 
-# Temporary aliases (removed in commit 4 of this refactor):
-Backend = ReplicaPool
-SerialBackend = SerialPool
-ProcessBackend = ProcessPool
-
 __version__ = "0.1.0"
 
 __all__ = [
-    "Backend",
     "BaseParallelTempering",
     "CanonicalParallelTempering",
     "ExchangeCallback",
     "ExchangeHistory",
     "ExchangePrinter",
     "ObservablePool",
-    "ProcessBackend",
     "ProcessPool",
     "Replica",
     "ReplicaPool",
-    "SerialBackend",
     "SerialPool",
     "SwapRateTracker",
     "__version__",

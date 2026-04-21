@@ -55,17 +55,14 @@ def test_mean_energy_same_as_single_ensemble_at_same_T(toy_ce, toy_atoms):
 
 
 def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
-    """`serial` and `processes` backends produce the same swap_attempted
-    counts for the same seed.
+    """`SerialPool` and `ProcessPool` agree on per-pair swap_attempted.
 
-    This is a narrow parity check. `swap_accepted` and
-    `energies_per_cycle` are NOT compared because, in the current
-    design, the process backend's workers hold authoritative replica
-    state that is not re-synced into the orchestrator's in-process
-    replicas between cycles. The acceptance decisions therefore use
-    different energies in the two backends. This is a known v0.1
-    limitation — the underlying loop scheduling (which determines
-    `swap_attempted`) is still deterministic and must match.
+    Pair-set scheduling is backend-agnostic — it depends only on cycle
+    index and n_replicas — so swap attempt counts must match between
+    backends for the same (n_cycles, n_replicas). `swap_accepted` and
+    `energies_per_cycle` are not compared because the two backends
+    seed their per-replica RNG streams independently and therefore
+    produce different trajectories.
     """
     ce_path = tmp_path / "toy.ce"
     toy_ce.write(str(ce_path))
@@ -80,9 +77,9 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
     pt_serial = CanonicalParallelTempering(**kwargs)
     h_serial = pt_serial.run(n_cycles=3)
 
-    from mchammer_pt.parallel.processes import ProcessBackend
+    from mchammer_pt.parallel.processes import ProcessPool
 
-    backend = ProcessBackend(
+    pool = ProcessPool(
         ce_path=ce_path,
         initial_atoms=toy_atoms,
         temperatures=[300.0, 600.0, 1200.0],
@@ -92,9 +89,9 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms, tmp_path):
         ],
     )
     try:
-        pt_processes = CanonicalParallelTempering(**kwargs, backend=backend)
+        pt_processes = CanonicalParallelTempering(**kwargs, pool=pool)
         h_processes = pt_processes.run(n_cycles=3)
     finally:
-        backend.shutdown()
+        pool.shutdown()
 
     np.testing.assert_array_equal(h_serial.swap_attempted, h_processes.swap_attempted)

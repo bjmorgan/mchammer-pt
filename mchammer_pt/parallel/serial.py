@@ -73,7 +73,3 @@ class SerialPool:
     def shutdown(self) -> None:
         # Nothing to release: the serial pool holds no external resources.
         return None
-
-
-# Temporary submodule-level alias (removed in commit 4 of this refactor).
-SerialBackend = SerialPool
