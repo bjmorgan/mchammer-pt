@@ -204,6 +204,31 @@ def test_non_finite_log_ratio_raises_with_diagnostic_context(toy_ce, toy_atoms):
         pt.run(n_cycles=2)
 
 
+def test_run_assigns_history_when_initial_snapshot_raises(toy_ce, toy_atoms):
+    """Exception during the pre-loop snapshot leaves self.history assigned.
+
+    The try/finally wraps the initial current_energies() + label
+    snapshot as well as the cycle loop, so a failure in the pool's
+    first energy query still produces a (zeros-filled) history rather
+    than leaving self._history None.
+    """
+
+    class _BoomPool(SerialPool):
+        def current_energies(self) -> np.ndarray:
+            raise RuntimeError("pre-loop pool failure")
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=300.0 + 100 * i, random_seed=i)
+        for i in range(3)
+    ]
+    pool = _BoomPool(replicas)
+    pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
+    with pytest.raises(RuntimeError, match="pre-loop pool failure"):
+        pt.run(n_cycles=3)
+    assert pt.history is not None
+    assert pt.history.energies_per_cycle.shape == (4, 3)
+
+
 def test_run_assigns_history_on_mid_run_exception(toy_ce, toy_atoms):
     """A callback exception mid-run still leaves pt.history assigned."""
 

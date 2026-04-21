@@ -102,15 +102,16 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     f"CanonicalParallelTempering.process_pool(...) which "
                     f"owns pool construction."
                 )
-            pool_temps = list(pool.temperatures)
-            if not np.allclose(pool_temps, temperatures):
+            pool_temps = [float(T) for T in pool.temperatures]
+            if pool_temps != temperatures:
                 raise ValueError(
                     f"pool.temperatures ({pool_temps}) does not match "
                     f"temperatures ({temperatures}); the orchestrator's "
                     f"beta values and the pool's per-replica temperatures "
-                    f"must agree, or exchange acceptance is silently "
-                    f"biased. Use CanonicalParallelTempering.process_pool(...) "
-                    f"to avoid constructing the ladder twice."
+                    f"must agree exactly, or exchange acceptance is "
+                    f"silently biased. Use "
+                    f"CanonicalParallelTempering.process_pool(...) to "
+                    f"avoid constructing the ladder twice."
                 )
         super().__init__(
             pool=pool,

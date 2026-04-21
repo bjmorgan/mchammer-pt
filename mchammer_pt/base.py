@@ -119,14 +119,14 @@ class BaseParallelTempering(ABC):
         """Advance all replicas for ``n_cycles`` MC+exchange cycles.
 
         Overwrites any history from a previous call. If an exception is
-        raised mid-run, `self.history` reflects the partial history
-        (rows past the failure point are zeros).
+        raised at any point during the call, `self.history` reflects the
+        partial history (rows past the failure point are zeros).
         """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
-        history.energies_per_cycle[0] = self._pool.current_energies()
-        history.replica_labels_per_cycle[0] = self._replica_labels
         try:
+            history.energies_per_cycle[0] = self._pool.current_energies()
+            history.replica_labels_per_cycle[0] = self._replica_labels
             for c in range(n_cycles):
                 self._pool.advance_all(self._block_size)
                 for pair in pair_set_for_cycle(n_replicas, c):

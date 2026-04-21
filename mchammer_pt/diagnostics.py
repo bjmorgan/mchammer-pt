@@ -94,10 +94,12 @@ def energy_autocorrelation_time(energies: np.ndarray) -> float:
         return float("nan")
     acf = acf / acf[0]
 
-    tau = 1.0
+    # Prefix sum of acf[1:] so tau(m) = 1 + 2 * cumsum[m] is O(1) per
+    # m and the worst-case loop is O(n) rather than O(n^2).
+    cumulative = np.cumsum(acf[1:])
     c = 5.0
     for m in range(1, n):
-        tau = 1.0 + 2.0 * float(np.sum(acf[1 : m + 1]))
+        tau = 1.0 + 2.0 * float(cumulative[m - 1])
         if m >= c * tau:
             return tau
     warnings.warn(

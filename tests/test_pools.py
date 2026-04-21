@@ -203,6 +203,26 @@ def test_process_pool_context_manager_shuts_down_on_exit(
     assert not pool._workers, "workers not cleared on context exit"
 
 
+def test_process_pool_worker_startup_failure_surfaces_at_init(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A broken CE path makes workers fail; that surfaces at __init__.
+
+    Without the ready-handshake the parent would only notice at the
+    first ADVANCE via a BrokenPipeError with the original traceback
+    lost. The handshake forwards the worker's traceback so the caller
+    sees the actual cause synchronously.
+    """
+    nonexistent_ce = tmp_path / "does_not_exist.ce"
+    with pytest.raises(RuntimeError, match="worker startup failed"):
+        ProcessPool(
+            ce_path=nonexistent_ce,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+        )
+
+
 def test_process_pool_context_manager_shuts_down_on_exception(
     toy_ce, toy_atoms, tmp_path: Path
 ):

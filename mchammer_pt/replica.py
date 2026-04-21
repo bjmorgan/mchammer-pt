@@ -59,16 +59,22 @@ class Replica:
         atoms_copy: Atoms = atoms.copy()  # type: ignore[no-untyped-call]
         calculator = ClusterExpansionCalculator(atoms_copy, cluster_expansion)
         # `CanonicalEnsemble.__init__` calls `random.seed(random_seed)` on
-        # Python's global RNG. Snapshot that state immediately so each
-        # replica owns an independent stream regardless of how many other
-        # replicas are constructed or advanced in the same process.
-        self._ensemble = CanonicalEnsemble(
-            structure=atoms_copy,
-            calculator=calculator,
-            temperature=self._temperature,
-            random_seed=int(random_seed),
-        )
-        self._rng_state = random.getstate()
+        # Python's global RNG. Save the caller's state first, snapshot the
+        # seeded state for this replica, then restore the caller's state —
+        # so constructing a Replica has no observable side effect on
+        # external `random.*` consumers, and every replica still owns an
+        # independent stream.
+        caller_state = random.getstate()
+        try:
+            self._ensemble = CanonicalEnsemble(
+                structure=atoms_copy,
+                calculator=calculator,
+                temperature=self._temperature,
+                random_seed=int(random_seed),
+            )
+            self._rng_state = random.getstate()
+        finally:
+            random.setstate(caller_state)
 
     @property
     def temperature(self) -> float:
