@@ -83,6 +83,32 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 for T, seed in zip(temperatures, replica_seeds, strict=True)
             ]
             pool = SerialPool(replicas)
+        else:
+            # When the caller supplies a pool directly, its replica
+            # count and per-replica temperatures must match the
+            # orchestrator's temperatures kwarg. If they disagree, the
+            # orchestrator would compute Boltzmann factors from one
+            # ladder while the pool's replicas run on another, silently
+            # biasing every exchange acceptance. Catch it here rather
+            # than letting it through.
+            if len(pool) != len(temperatures):
+                raise ValueError(
+                    f"pool has {len(pool)} replicas but temperatures "
+                    f"has {len(temperatures)} entries; construct the pool "
+                    f"with the same ladder, or use "
+                    f"CanonicalParallelTempering.process_pool(...) which "
+                    f"owns pool construction."
+                )
+            pool_temps = list(pool.temperatures)
+            if not np.allclose(pool_temps, temperatures):
+                raise ValueError(
+                    f"pool.temperatures ({pool_temps}) does not match "
+                    f"temperatures ({temperatures}); the orchestrator's "
+                    f"beta values and the pool's per-replica temperatures "
+                    f"must agree, or exchange acceptance is silently "
+                    f"biased. Use CanonicalParallelTempering.process_pool(...) "
+                    f"to avoid constructing the ladder twice."
+                )
         super().__init__(
             pool=pool,
             block_size=block_size,

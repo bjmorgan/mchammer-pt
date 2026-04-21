@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from mchammer_pt.canonical import CanonicalParallelTempering
+from mchammer_pt.replica import Replica
 
 
 def test_init_constructs_one_replica_per_temperature(toy_ce, toy_atoms):
@@ -97,6 +98,59 @@ def test_equal_adjacent_temperatures_allowed(toy_ce, toy_atoms):
         random_seed=0,
     )
     assert len(pt.pool) == 3
+
+
+def test_mismatched_pool_length_rejected(toy_ce, toy_atoms):
+    """A pool with n replicas but temperatures of length m != n must raise."""
+    from mchammer_pt.parallel.serial import SerialPool
+
+    pool = SerialPool(
+        [
+            Replica(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperature=T,
+                random_seed=i,
+            )
+            for i, T in enumerate([300.0, 600.0])
+        ]
+    )
+    with pytest.raises(ValueError, match="2 replicas but temperatures has 3"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=toy_atoms,
+            temperatures=[300.0, 600.0, 1200.0],
+            block_size=10,
+            random_seed=0,
+            pool=pool,
+        )
+
+
+def test_mismatched_pool_temperatures_rejected(toy_ce, toy_atoms):
+    """A pool at one ladder with temperatures arg at another must raise."""
+    from mchammer_pt.parallel.serial import SerialPool
+
+    # Pool was built at 300 / 600; orchestrator asked for 300 / 1200.
+    pool = SerialPool(
+        [
+            Replica(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperature=T,
+                random_seed=i,
+            )
+            for i, T in enumerate([300.0, 600.0])
+        ]
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=toy_atoms,
+            temperatures=[300.0, 1200.0],
+            block_size=10,
+            random_seed=0,
+            pool=pool,
+        )
 
 
 def test_zero_block_size_rejected(toy_ce, toy_atoms):
