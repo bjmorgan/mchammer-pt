@@ -39,6 +39,7 @@ def toy_atoms() -> Atoms:
     rng = np.random.default_rng(1)
     n_au = len(atoms) // 2
     au_indices = rng.choice(len(atoms), size=n_au, replace=False)
-    for i in au_indices:
-        atoms[int(i)].symbol = "Au"
+    symbols = np.array(atoms.get_chemical_symbols())
+    symbols[au_indices] = "Au"
+    atoms.set_chemical_symbols(symbols.tolist())
     return atoms
