@@ -98,18 +98,6 @@ satisfies `ObservablePool` (currently only `SerialPool` does).
 - `examples/02_custom_callback.py` — writing your own `ExchangeCallback`.
 - `examples/03_parallel_workers.py` — PT with the `ProcessPool`.
 
-## Status
-
-`mchammer-pt` is `0.x` pre-release. The public API may shift before
-`1.0`. Currently ships canonical-ensemble PT only; semi-grand-canonical
-and variance-constrained SGC are planned for a future minor version.
-
-## Upstream
-
-If this idea turns out to be useful, the preferred home for the
-functionality is inside [`mchammer`](https://icet.materialsmodeling.org/)
-itself. Questions about that direction should go to Paul Erhart.
-
 ## License
 
 MIT.
