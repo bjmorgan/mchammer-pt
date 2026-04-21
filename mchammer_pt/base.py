@@ -97,20 +97,25 @@ class BaseParallelTempering(ABC):
         self._pool.attach_observer(observer, indices)
 
     def run(self, n_cycles: int) -> ExchangeHistory:
-        """Advance all replicas for ``n_cycles`` MC+exchange cycles."""
+        """Advance all replicas for ``n_cycles`` MC+exchange cycles.
+
+        Overwrites any history from a previous call. If an exception is
+        raised mid-run, `self.history` reflects the partial history
+        (rows past the failure point are zeros).
+        """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
-
-        for c in range(n_cycles):
-            self._pool.advance_all(self._block_size)
-            for pair in pair_set_for_cycle(n_replicas, c):
-                self._try_exchange(int(pair), int(pair) + 1, c, history)
-            history.energies_per_cycle[c + 1] = self._pool.current_energies()
-            history.replica_labels_per_cycle[c + 1] = self._replica_labels
-
-        self._history = history
+        try:
+            for c in range(n_cycles):
+                self._pool.advance_all(self._block_size)
+                for pair in pair_set_for_cycle(n_replicas, c):
+                    self._try_exchange(int(pair), int(pair) + 1, c, history)
+                history.energies_per_cycle[c + 1] = self._pool.current_energies()
+                history.replica_labels_per_cycle[c + 1] = self._replica_labels
+        finally:
+            self._history = history
         return history
 
     # --- abstract hook ----
@@ -130,6 +135,16 @@ class BaseParallelTempering(ABC):
         history: ExchangeHistory,
     ) -> None:
         log_r = self._log_prob_ratio(i, j)
+        if not np.isfinite(log_r):
+            E_i = self._pool.current_energy(i)
+            E_j = self._pool.current_energy(j)
+            raise RuntimeError(
+                f"Non-finite log-probability ratio on cycle {cycle}, "
+                f"pair ({i}, {j}): log_r = {log_r}, "
+                f"E_i = {E_i}, E_j = {E_j}. "
+                f"Check for NaN/inf replica energies (diverged MC, "
+                f"bad cluster expansion, etc.)."
+            )
         accepted = metropolis_accept(log_r, self._rng)
         pair_index = min(i, j)
         history.swap_attempted[pair_index] += 1

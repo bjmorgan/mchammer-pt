@@ -105,6 +105,41 @@ def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
     assert all(not accepted for _, _, accepted in events)
 
 
+def test_non_finite_log_ratio_raises_with_diagnostic_context(toy_ce, toy_atoms):
+    """A NaN/inf log ratio raises RuntimeError naming cycle/pair/energies."""
+
+    class _NaNPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i: int, j: int) -> float:
+            return float("nan")
+
+    pt = _NaNPT(pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0)
+    with pytest.raises(RuntimeError, match="Non-finite log-probability ratio"):
+        pt.run(n_cycles=2)
+
+
+def test_run_assigns_history_on_mid_run_exception(toy_ce, toy_atoms):
+    """A callback exception mid-run still leaves pt.history assigned."""
+
+    class _BlowUp:
+        def on_exchange(
+            self, cycle: int, pair_index: int, accepted: bool, log_prob_ratio: float
+        ) -> None:
+            if cycle >= 1:
+                raise ValueError("intentional mid-run failure")
+
+    pt = _AlwaysAcceptPT(
+        pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0
+    )
+    pt.attach_callback(_BlowUp())
+    with pytest.raises(ValueError, match="intentional mid-run failure"):
+        pt.run(n_cycles=5)
+    # History is assigned; energies_per_cycle row 0 is pre-run, row 1 is
+    # post-cycle-0 (before the exception on cycle 1).
+    assert pt.history is not None
+    assert pt.history.energies_per_cycle.shape == (6, 3)
+    assert np.all(np.isfinite(pt.history.energies_per_cycle[:2]))
+
+
 def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms, tmp_path):
     """Pools that don't satisfy ObservablePool must reject attach_observer."""
     from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
