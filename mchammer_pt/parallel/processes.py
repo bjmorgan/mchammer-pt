@@ -185,6 +185,14 @@ class ProcessPool:
             raise RuntimeError(f"worker ENERGY failed: {payload}")
         return float(payload)
 
+    def current_occupations(self, i: int) -> np.ndarray:
+        _, conn = self._workers[i]
+        conn.send(("GET_OCC",))
+        status, payload = conn.recv()
+        if status != "OK":
+            raise RuntimeError(f"worker GET_OCC failed: {payload}")
+        return np.asarray(payload)
+
     def swap_configurations(self, i: int, j: int) -> None:
         # Interleaved send/recv to halve round-trip latency.
         _, conn_i = self._workers[i]

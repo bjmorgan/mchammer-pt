@@ -54,6 +54,15 @@ class ReplicaPool(Protocol):
         """
         ...
 
+    def current_occupations(self, i: int) -> np.ndarray:
+        """Copy of replica ``i``'s current occupation vector (atomic numbers).
+
+        Useful for end-of-run analysis where the caller wants the final
+        configuration of a specific replica. Not used by the orchestrator
+        itself. Integer dtype; shape ``(n_sites,)``.
+        """
+        ...
+
     def swap_configurations(self, i: int, j: int) -> None:
         """Atomically exchange the configurations of replicas i and j.
 

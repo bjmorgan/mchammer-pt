@@ -45,6 +45,9 @@ class SerialPool:
     def current_energy(self, i: int) -> float:
         return self._replicas[i].current_energy()
 
+    def current_occupations(self, i: int) -> np.ndarray:
+        return self._replicas[i].current_occupations()
+
     def swap_configurations(self, i: int, j: int) -> None:
         occ_i = self._replicas[i].current_occupations()
         occ_j = self._replicas[j].current_occupations()
