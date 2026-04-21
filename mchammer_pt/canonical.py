@@ -11,7 +11,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
-from .parallel.backend import Backend
+from .parallel.backend import ReplicaPool
 from .replica import Replica
 
 # Boltzmann constant in eV / K. Energies returned by `Replica.current_energy`
@@ -49,7 +49,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         temperatures: Sequence[float],
         block_size: int,
         random_seed: int,
-        backend: Backend | None = None,
+        backend: ReplicaPool | None = None,
         data_container_file: Path | str | None = None,
     ) -> None:
         temperatures = list(temperatures)

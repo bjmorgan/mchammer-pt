@@ -1,75 +1,103 @@
-"""Multiprocessing-based replica advance.
+"""Multiprocessing-based replica pool.
 
-One persistent OS process per replica. The worker builds its own
+One persistent OS process per replica. Each worker builds its own
 `Replica` on startup (since `mchammer` calculators hold C++ bindings
-that do not pickle) and enters a command loop. The orchestrator
-communicates with workers via per-worker duplex `Pipe`s.
+that do not pickle) and enters a command loop. The parent communicates
+with workers via per-worker duplex `Pipe`s; only integer occupation
+arrays and scalar energies cross the process boundary during the run.
 
-Commands:
+Worker commands:
 
-- ``("ADVANCE", n_steps)``: run N trial steps; reply ``("OK", None)``.
-- ``("GET_OCC",)``: reply ``("OK", occupations)``.
-- ``("SET_OCC", occupations)``: overwrite state; reply ``("OK", None)``.
-- ``("GET_ENERGY",)``: reply ``("OK", total_energy)``.
-- ``("SHUTDOWN",)``: break the loop; worker exits cleanly.
+- ``("ADVANCE", n_steps)``
+- ``("ENERGY",)`` -> replies ``("OK", float)`` with total CE energy
+- ``("GET_OCC",)`` -> replies ``("OK", np.ndarray)`` with occupations
+- ``("SET_OCC", occupations)`` -> overwrites state
+- ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
+- ``("SHUTDOWN",)`` -> worker exits cleanly
 
-Only integer occupation arrays cross the process boundary during a
-run; the CE itself is passed once as a file path at worker startup.
+Every reply is of the form ``(status, payload)`` with status either
+``"OK"`` or ``"ERR"``; ``"ERR"`` payloads are the formatted traceback
+from the worker's exception.
 """
 
 from __future__ import annotations
 
 import multiprocessing as mp
+import traceback
+from collections.abc import Sequence
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+    BaseDataContainer,
+)
 
 from ..replica import Replica
 
 
 def _worker(
-    conn: mp.connection.Connection,
+    conn: Connection,
     ce_path: str,
     atoms_dict: dict[str, Any],
     temperature: float,
     seed: int,
 ) -> None:
-    """Worker entry point: build a Replica, then serve commands."""
-    atoms = Atoms(
-        numbers=atoms_dict["numbers"],
-        positions=atoms_dict["positions"],
-        cell=atoms_dict["cell"],
-        pbc=atoms_dict["pbc"],
-    )
-    ce = ClusterExpansion.read(ce_path)
-    replica = Replica(
-        cluster_expansion=ce,
-        atoms=atoms,
-        temperature=temperature,
-        random_seed=seed,
-    )
+    """Worker entry point: build a Replica, then serve commands.
+
+    Any exception - including during Replica construction - is caught
+    and sent back as ("ERR", traceback). The worker continues serving
+    if the caller can recover; otherwise the caller sends SHUTDOWN.
+    """
+    try:
+        atoms = Atoms(
+            numbers=atoms_dict["numbers"],
+            positions=atoms_dict["positions"],
+            cell=atoms_dict["cell"],
+            pbc=atoms_dict["pbc"],
+        )
+        ce = ClusterExpansion.read(ce_path)
+        replica = Replica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            temperature=temperature,
+            random_seed=seed,
+        )
+    except BaseException:
+        conn.send(("ERR", traceback.format_exc()))
+        conn.close()
+        return
+
     while True:
-        cmd = conn.recv()
-        op = cmd[0]
-        if op == "ADVANCE":
-            replica.advance(cmd[1])
-            conn.send(("OK", None))
-        elif op == "GET_OCC":
-            conn.send(("OK", replica.current_occupations()))
-        elif op == "SET_OCC":
-            replica.set_occupations(cmd[1])
-            conn.send(("OK", None))
-        elif op == "GET_ENERGY":
-            conn.send(("OK", replica.current_energy()))
-        elif op == "SHUTDOWN":
-            conn.send(("OK", None))
-            conn.close()
+        try:
+            cmd = conn.recv()
+        except EOFError:
             return
-        else:
-            conn.send(("ERR", f"unknown command: {op!r}"))
+        op = cmd[0]
+        try:
+            if op == "ADVANCE":
+                replica.advance(cmd[1])
+                conn.send(("OK", None))
+            elif op == "ENERGY":
+                conn.send(("OK", replica.current_energy()))
+            elif op == "GET_OCC":
+                conn.send(("OK", replica.current_occupations()))
+            elif op == "SET_OCC":
+                replica.set_occupations(cmd[1])
+                conn.send(("OK", None))
+            elif op == "GET_DC":
+                conn.send(("OK", replica.data_container()))
+            elif op == "SHUTDOWN":
+                conn.send(("OK", None))
+                conn.close()
+                return
+            else:
+                conn.send(("ERR", f"unknown command: {op!r}"))
+        except BaseException:
+            conn.send(("ERR", traceback.format_exc()))
 
 
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
@@ -81,13 +109,16 @@ def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
     }
 
 
-class ProcessBackend:
-    """Persistent-worker parallel backend.
+class ProcessPool:
+    """Persistent-worker multiprocessing pool.
+
+    One OS process per replica. Satisfies `ReplicaPool`. Does NOT
+    implement `ObservablePool` - workers cannot receive pickled
+    `BaseObserver` instances reliably. For observer support, use
+    `SerialPool` or wait for v0.2's class-plus-factory-args API.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
-            The caller is responsible for writing one if starting from
-            an in-memory CE.
         initial_atoms: starting structure; each worker receives an
             independent copy.
         temperatures: one temperature per replica.
@@ -98,78 +129,95 @@ class ProcessBackend:
         self,
         ce_path: Path | str,
         initial_atoms: Atoms,
-        temperatures: list[float],
-        seeds: list[int],
+        temperatures: Sequence[float],
+        seeds: Sequence[int],
     ) -> None:
-        if len(temperatures) != len(seeds):
+        temperatures_list = list(temperatures)
+        seeds_list = list(seeds)
+        if len(temperatures_list) != len(seeds_list):
             raise ValueError("temperatures and seeds must be the same length")
-        self._workers: list[
-            tuple[mp.process.BaseProcess, mp.connection.Connection]
-        ] = []
+        self._temperatures: list[float] = [float(T) for T in temperatures_list]
+        self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         atoms_dict = _atoms_to_dict(initial_atoms)
         ctx = mp.get_context("spawn")
-        for T, seed in zip(temperatures, seeds, strict=True):
+        for T, seed in zip(self._temperatures, seeds_list, strict=True):
             parent_conn, child_conn = ctx.Pipe(duplex=True)
             process = ctx.Process(
                 target=_worker,
-                args=(child_conn, str(ce_path), atoms_dict, float(T), int(seed)),
+                args=(child_conn, str(ce_path), atoms_dict, T, int(seed)),
                 daemon=True,
             )
             process.start()
-            child_conn.close()  # the parent does not need the child end
+            child_conn.close()
             self._workers.append((process, parent_conn))
 
-    def advance_all(self, replicas: list[Replica], n_steps: int) -> None:
-        """Tell every worker to advance `n_steps`, then wait for all.
+    def __len__(self) -> int:
+        return len(self._workers)
 
-        The `replicas` argument is accepted for interface symmetry
-        with `SerialBackend` but is not used: the worker processes
-        own their own Replica state. Callers that need the in-process
-        Replicas to reflect the worker state should call
-        ``current_occupations()`` and then ``replica.set_occupations``
-        on each.
-        """
+    @property
+    def temperatures(self) -> list[float]:
+        return list(self._temperatures)
+
+    def advance_all(self, n_steps: int) -> None:
         for _, conn in self._workers:
             conn.send(("ADVANCE", int(n_steps)))
         for _, conn in self._workers:
-            status, _ = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker ADVANCE failed: {status}")
-
-    def current_occupations(self) -> list[np.ndarray]:
-        """Fetch the current occupation vectors from every worker."""
-        result: list[np.ndarray] = []
-        for _, conn in self._workers:
-            conn.send(("GET_OCC",))
-        for _, conn in self._workers:
             status, payload = conn.recv()
             if status != "OK":
-                raise RuntimeError(f"worker GET_OCC failed: {status}")
-            result.append(payload)
-        return result
+                raise RuntimeError(f"worker ADVANCE failed: {payload}")
 
-    def current_energies(self) -> list[float]:
-        """Fetch the current total energies from every worker."""
-        result: list[float] = []
+    def current_energies(self) -> np.ndarray:
         for _, conn in self._workers:
-            conn.send(("GET_ENERGY",))
-        for _, conn in self._workers:
+            conn.send(("ENERGY",))
+        result = np.empty(len(self._workers), dtype=np.float64)
+        for i, (_, conn) in enumerate(self._workers):
             status, payload = conn.recv()
             if status != "OK":
-                raise RuntimeError(f"worker GET_ENERGY failed: {status}")
-            result.append(float(payload))
+                raise RuntimeError(f"worker ENERGY failed: {payload}")
+            result[i] = float(payload)
         return result
 
-    def set_occupations(self, i: int, occupations: np.ndarray) -> None:
-        """Overwrite the state of the worker at replica index ``i``."""
+    def current_energy(self, i: int) -> float:
         _, conn = self._workers[i]
-        conn.send(("SET_OCC", np.asarray(occupations, dtype=np.int64)))
-        status, _ = conn.recv()
+        conn.send(("ENERGY",))
+        status, payload = conn.recv()
         if status != "OK":
-            raise RuntimeError(f"worker SET_OCC failed: {status}")
+            raise RuntimeError(f"worker ENERGY failed: {payload}")
+        return float(payload)
+
+    def swap_configurations(self, i: int, j: int) -> None:
+        # Interleaved send/recv to halve round-trip latency.
+        _, conn_i = self._workers[i]
+        _, conn_j = self._workers[j]
+        conn_i.send(("GET_OCC",))
+        conn_j.send(("GET_OCC",))
+        status_i, occ_i = conn_i.recv()
+        status_j, occ_j = conn_j.recv()
+        if status_i != "OK":
+            raise RuntimeError(f"worker GET_OCC failed: {occ_i}")
+        if status_j != "OK":
+            raise RuntimeError(f"worker GET_OCC failed: {occ_j}")
+        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
+        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        status_i, payload_i = conn_i.recv()
+        status_j, payload_j = conn_j.recv()
+        if status_i != "OK":
+            raise RuntimeError(f"worker SET_OCC failed: {payload_i}")
+        if status_j != "OK":
+            raise RuntimeError(f"worker SET_OCC failed: {payload_j}")
+
+    def data_containers(self) -> list[BaseDataContainer]:
+        for _, conn in self._workers:
+            conn.send(("GET_DC",))
+        containers: list[BaseDataContainer] = []
+        for _, conn in self._workers:
+            status, payload = conn.recv()
+            if status != "OK":
+                raise RuntimeError(f"worker GET_DC failed: {payload}")
+            containers.append(payload)
+        return containers
 
     def shutdown(self) -> None:
-        """Ask all workers to exit and clear the worker list."""
         for _, conn in self._workers:
             try:
                 conn.send(("SHUTDOWN",))
@@ -182,3 +230,7 @@ class ProcessBackend:
             if process.is_alive():
                 process.terminate()
         self._workers = []
+
+
+# Temporary submodule-level alias (removed in commit 4 of this refactor).
+ProcessBackend = ProcessPool

@@ -1,25 +1,104 @@
-"""Backend protocol for advancing replicas concurrently.
+"""Protocols for replica pools and observable replica pools.
 
-The orchestrator delegates the "advance each replica by N MC steps"
-phase of each cycle to a Backend. The serial and multiprocessing
-backends implement this protocol; future backends (threads, MPI) can
-be added without changes to the orchestrator.
+A `ReplicaPool` owns the state of every replica in a parallel-tempering
+run and exposes the operations the orchestrator needs: advance, query
+energies, atomically swap configurations, and return native mchammer
+data containers at end-of-run.
+
+Pool implementations vary in whether they can carry user-supplied
+`mchammer.BaseObserver` instances across their execution boundary.
+Those that can implement the `ObservablePool` extension; those that
+cannot (e.g. process-parallel pools whose workers live in separate
+interpreters) satisfy only `ReplicaPool`.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Sequence
+from typing import Literal, Protocol, runtime_checkable
 
-from ..replica import Replica
+import numpy as np
+from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+    BaseDataContainer,
+)
+from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+    BaseObserver,
+)
 
 
-class Backend(Protocol):
-    """Executes replica-advance phases of a PT run."""
+@runtime_checkable
+class ReplicaPool(Protocol):
+    """Owns replica state; exposes operations the orchestrator needs."""
 
-    def advance_all(self, replicas: list[Replica], n_steps: int) -> None:
-        """Advance every replica by ``n_steps`` trial steps."""
+    def __len__(self) -> int: ...
+
+    @property
+    def temperatures(self) -> Sequence[float]: ...
+
+    def advance_all(self, n_steps: int) -> None:
+        """Advance every replica by ``n_steps`` MC trial steps."""
+        ...
+
+    def current_energies(self) -> np.ndarray:
+        """Snapshot total CE energy for every replica.
+
+        Returned array has shape ``(len(self),)`` and dtype float64.
+        """
+        ...
+
+    def current_energy(self, i: int) -> float:
+        """Single-replica energy query, used inside the exchange loop.
+
+        Kept separate from `current_energies()` so per-pair exchange
+        evaluation avoids the full-vector fetch overhead.
+        """
+        ...
+
+    def swap_configurations(self, i: int, j: int) -> None:
+        """Atomically exchange the configurations of replicas i and j.
+
+        After a successful return, ``current_energy(i)`` yields what
+        ``current_energy(j)`` returned before the call, and vice versa.
+
+        Failure semantics: if any worker-boundary operation raises
+        mid-swap, the pool is left in an undefined partial-swap state
+        and the enclosing run should abort. Resumable-from-partial-swap
+        is out of v0.1 scope; the orchestrator propagates the
+        exception unchanged.
+        """
+        ...
+
+    def data_containers(self) -> list[BaseDataContainer]:
+        """One native mchammer ``BaseDataContainer`` per replica.
+
+        Populated by mchammer's native trajectory logging regardless of
+        whether user observers have been attached. A pool that is not
+        an ``ObservablePool`` still returns containers with mchammer's
+        default trajectory data. May involve inter-process
+        communication for remote-state pools; call once at end-of-run.
+        """
         ...
 
     def shutdown(self) -> None:
-        """Release any resources held by the backend (workers, handles)."""
+        """Release any resources (worker processes, file handles, ...)."""
+        ...
+
+
+@runtime_checkable
+class ObservablePool(ReplicaPool, Protocol):
+    """A `ReplicaPool` that can have mchammer observers attached.
+
+    Separate protocol because not every pool implementation can carry
+    observer instances across its execution boundary. Pool implementations
+    that support observer forwarding implement this protocol; those that
+    don't satisfy only `ReplicaPool` and force the user to use a different
+    pool type to attach observers.
+    """
+
+    def attach_observer(
+        self,
+        observer: BaseObserver,
+        indices: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an mchammer observer to selected replicas."""
         ...

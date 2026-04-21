@@ -17,8 +17,8 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 from .callbacks import ExchangeCallback
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
-from .parallel.backend import Backend
-from .parallel.serial import SerialBackend
+from .parallel.backend import ReplicaPool
+from .parallel.serial import SerialPool
 from .replica import Replica
 
 
@@ -39,14 +39,16 @@ class BaseParallelTempering(ABC):
         replicas: list[Replica],
         block_size: int,
         random_seed: int,
-        backend: Backend | None = None,
+        backend: ReplicaPool | None = None,
     ) -> None:
         if len(replicas) < 2:
             raise ValueError("parallel tempering requires at least 2 replicas")
         self._replicas = list(replicas)
         self._block_size = int(block_size)
         self._rng = np.random.default_rng(int(random_seed))
-        self._backend: Backend = backend if backend is not None else SerialBackend()
+        self._pool: ReplicaPool = (
+            backend if backend is not None else SerialPool(replicas=self._replicas)
+        )
         self._callbacks: list[ExchangeCallback] = []
         self._replica_labels = np.arange(len(replicas), dtype=np.int64)
         self._history: ExchangeHistory | None = None
@@ -94,7 +96,7 @@ class BaseParallelTempering(ABC):
         history.replica_labels_per_cycle[0] = self._replica_labels
 
         for c in range(n_cycles):
-            self._backend.advance_all(self._replicas, self._block_size)
+            self._pool.advance_all(self._block_size)
             for pair in pair_set_for_cycle(n_replicas, c):
                 self._try_exchange(int(pair), int(pair) + 1, c, history)
             history.energies_per_cycle[c + 1] = self._current_energies()
