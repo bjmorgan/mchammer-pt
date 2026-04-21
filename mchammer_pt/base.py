@@ -119,9 +119,8 @@ class BaseParallelTempering(ABC):
         """Advance all replicas for ``n_cycles`` MC+exchange cycles.
 
         Overwrites any history from a previous call. If an exception is
-        raised mid-run, `self.history` reflects the partial history
-        (rows past the failure point are zeros). The pre-loop energy
-        and label snapshot is covered by the same guarantee.
+        raised at any point during the call, `self.history` reflects the
+        partial history (rows past the failure point are zeros).
         """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)

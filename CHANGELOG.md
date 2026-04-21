@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context-manager support on `ProcessPool` and
   `BaseParallelTempering` for exception-safe worker shutdown.
 - Per-replica RNG isolation around `mchammer`'s global-`random`
-  Monte Carlo driver so co-tenant replicas evolve independently.
+  Monte Carlo driver so co-tenant replicas evolve independently and
+  constructing or advancing a replica has no observable side effect
+  on the caller's `random` state.
 - Non-finite log-probability ratios surface as `RuntimeError` with
   cycle, pair, and energy context instead of flowing through
   `metropolis_accept` silently.
