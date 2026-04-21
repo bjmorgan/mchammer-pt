@@ -97,6 +97,7 @@ satisfies `ObservablePool` (currently only `SerialPool` does).
 - `examples/01_basic_canonical.py` — self-contained run on a toy Cu/Au CE.
 - `examples/02_custom_callback.py` — writing your own `ExchangeCallback`.
 - `examples/03_parallel_workers.py` — PT with the `ProcessPool`.
+- `examples/04_equilibrium_sampling.py` – discarding the initial burn-in period for equilibrium sampling.
 
 ## License
 
