@@ -60,9 +60,9 @@ def swap_acceptance_rates(history: ExchangeHistory) -> np.ndarray:
     """Per-pair acceptance fractions, NaN where no attempts were made."""
     attempts = history.swap_attempted.astype(np.float64)
     accepts = history.swap_accepted.astype(np.float64)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        rates = np.where(attempts > 0, accepts / np.maximum(attempts, 1), np.nan)
-    return rates
+    # Clamping the denominator to >= 1 means the division never
+    # encounters 0/0; np.where then NaN-substitutes the clamped entries.
+    return np.where(attempts > 0, accepts / np.maximum(attempts, 1), np.nan)
 
 
 def energy_autocorrelation_time(energies: np.ndarray) -> float:
