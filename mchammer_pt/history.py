@@ -26,21 +26,26 @@ Layout of the HDF5 file:
         ├── swap_attempted            # (n_replicas-1,) int64
         └── swap_accepted             # (n_replicas-1,) int64
 
-`BaseDataContainer.write` produces a tarball, not an HDF5 file, so each
-container is embedded as a single opaque byte dataset rather than a
-sub-group. `read_hdf5` reverses this by dumping the bytes to a temp
-file and handing that to `BaseDataContainer.read`.
+Each replica's container is stored as an opaque byte dataset — the
+`mchammer.BaseDataContainer` on-disk format (a tarball) is owned by
+mchammer and treated as a black box here. `read_hdf5` reverses the
+embedding via a temp file.
 """
 from __future__ import annotations
 
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import h5py
 import numpy as np
 from mchammer.data_containers.base_data_container import BaseDataContainer
+
+# Types allowed in the `meta` dict. h5py group attrs accept scalars
+# (int, float, str, bool) and numpy arrays; nested dicts, None, and
+# lists are not round-trippable. Narrow type here rather than
+# `dict[str, Any]` to document the contract at the call site.
+MetaValue = int | float | str | bool | np.ndarray
 
 
 @dataclass
@@ -66,7 +71,7 @@ class ExchangeHistory:
     swap_accepted: np.ndarray
 
     @classmethod
-    def empty(cls, n_cycles: int, n_replicas: int) -> "ExchangeHistory":
+    def empty(cls, n_cycles: int, n_replicas: int) -> ExchangeHistory:
         """Allocate a zero-filled history of the given shape."""
         return cls(
             energies_per_cycle=np.zeros(
@@ -84,7 +89,7 @@ def write_hdf5(
     path: Path | str,
     history: ExchangeHistory,
     replica_containers: list[BaseDataContainer],
-    meta: dict[str, Any],
+    meta: dict[str, MetaValue],
 ) -> None:
     """Write an `ExchangeHistory`, replica containers, and metadata.
 
@@ -124,7 +129,7 @@ def write_hdf5(
 
 def read_hdf5(
     path: Path | str,
-) -> tuple[ExchangeHistory, list[BaseDataContainer], dict[str, Any]]:
+) -> tuple[ExchangeHistory, list[BaseDataContainer], dict[str, MetaValue]]:
     """Read a file written by `write_hdf5`.
 
     Returns the `ExchangeHistory`, a list of `BaseDataContainer`s (one
@@ -141,7 +146,7 @@ def read_hdf5(
             swap_attempted=np.array(exchanges["swap_attempted"]),
             swap_accepted=np.array(exchanges["swap_accepted"]),
         )
-        meta: dict[str, Any] = {}
+        meta: dict[str, MetaValue] = {}
         for key, value in f["meta"].attrs.items():
             meta[key] = (
                 np.array(value) if isinstance(value, np.ndarray) else value
