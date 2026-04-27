@@ -33,6 +33,10 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
 
+_RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
+    {"structure", "calculator", "temperature", "random_seed"}
+)
+
 
 class Replica:
     """One canonical ensemble at one temperature, wrapped for PT use.
@@ -70,6 +74,14 @@ class Replica:
     ) -> None:
         self._temperature = float(temperature)
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
+        clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
+        if clash:
+            raise ValueError(
+                f"ensemble_kwargs must not contain {sorted(clash)}; "
+                f"these are set by Replica from its own arguments "
+                f"(structure/calculator from cluster_expansion+atoms; "
+                f"temperature and random_seed from their dedicated parameters)."
+            )
         # Copy atoms so the caller's object is not mutated by mchammer.
         # `ase.Atoms.copy` is untyped upstream, so annotate the target here.
         atoms_copy: Atoms = atoms.copy()  # type: ignore[no-untyped-call]
