@@ -47,7 +47,7 @@ def _worker(
     temperature: float,
     seed: int,
     ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: dict[str, Any] | None,
+    ensemble_kwargs: dict[str, Any],
 ) -> None:
     """Worker entry point: build a Replica, then serve commands.
 
