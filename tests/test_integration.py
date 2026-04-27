@@ -78,3 +78,34 @@ def test_parallel_serial_parity_same_as_serial(toy_ce, toy_atoms):
         h_processes = pt_processes.run(n_cycles=3)
 
     np.testing.assert_array_equal(h_serial.swap_attempted, h_processes.swap_attempted)
+
+
+def test_process_pool_factory_with_custom_trial_step(toy_ce, toy_atoms):
+    """End-to-end: a CanonicalEnsemble subclass overriding the acceptance
+    condition rides the parallel-tempering machinery via the process_pool
+    factory.
+
+    The stated use case in issue #6 is a subclass that customises Monte
+    Carlo behaviour (e.g. row translations, custom acceptance, custom
+    move sets). Pin that the integration is wired: the run completes,
+    replica labels propagate, and per-replica data containers come back
+    populated.
+    """
+    from tests._ensemble_fixtures import HighAcceptanceCanonicalEnsemble
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0, 1200.0],
+        block_size=20,
+        random_seed=0,
+        ensemble_cls=HighAcceptanceCanonicalEnsemble,
+    ) as pt:
+        history = pt.run(n_cycles=3)
+        dcs = pt.pool.data_containers()
+
+    assert history.energies_per_cycle.shape == (4, 3)
+    assert history.replica_labels_per_cycle.shape == (4, 3)
+    assert len(dcs) == 3
+    for dc in dcs:
+        assert len(dc.data) > 0
