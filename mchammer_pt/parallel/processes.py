@@ -165,32 +165,39 @@ class ProcessPool:
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
+        # Cover both spawn-time failures (e.g. ``process.start()``
+        # raising ``PicklingError`` when ``extra_kwargs`` contains an
+        # unpicklable value) and handshake-time failures with one
+        # cleanup path. ``ctx.Process(...).start()`` pickles ``args=``
+        # eagerly, so a failure on iteration N>1 leaves N-1 daemon
+        # workers in ``self._workers`` that ``shutdown()`` then joins.
         ctx = mp.get_context("spawn")
-        for T, seed in zip(self._temperatures, seeds_list, strict=True):
-            parent_conn, child_conn = ctx.Pipe(duplex=True)
-            process = ctx.Process(
-                target=_worker,
-                args=(
-                    child_conn,
-                    str(ce_path),
-                    atoms_dict,
-                    T,
-                    int(seed),
-                    ensemble_cls,
-                    extra_kwargs,
-                ),
-                daemon=True,
-            )
-            process.start()
-            child_conn.close()
-            self._workers.append((process, parent_conn))
-
-        # Synchronous ready-handshake. Each worker sends a single OK
-        # after successful Replica construction, or ERR + traceback if
-        # startup fails. Surfacing failures here means the caller gets
-        # the actual traceback, rather than a BrokenPipeError on the
-        # first ADVANCE with the original cause lost.
         try:
+            for T, seed in zip(self._temperatures, seeds_list, strict=True):
+                parent_conn, child_conn = ctx.Pipe(duplex=True)
+                process = ctx.Process(
+                    target=_worker,
+                    args=(
+                        child_conn,
+                        str(ce_path),
+                        atoms_dict,
+                        T,
+                        int(seed),
+                        ensemble_cls,
+                        extra_kwargs,
+                    ),
+                    daemon=True,
+                )
+                process.start()
+                child_conn.close()
+                self._workers.append((process, parent_conn))
+
+            # Synchronous ready-handshake. Each worker sends a single
+            # OK after successful Replica construction, or ERR +
+            # traceback if startup fails. Surfacing failures here means
+            # the caller gets the actual traceback, rather than a
+            # BrokenPipeError on the first ADVANCE with the original
+            # cause lost.
             for _, conn in self._workers:
                 status, payload = conn.recv()
                 if status != "OK":
