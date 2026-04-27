@@ -19,6 +19,10 @@ paths to the colder chains.
   arbitrary temperature ladder.
 - Serial and multiprocessing backends, swappable via a single
   constructor argument.
+- Custom Monte Carlo moves: pass any `mchammer.CanonicalEnsemble`
+  subclass via `ensemble_cls=`, with extra constructor arguments
+  forwarded via `ensemble_kwargs=`. Custom `_do_trial_step` overrides
+  ride the PT machinery without subclassing `Replica`.
 - Per-replica `mchammer.BaseObserver` attachment, pass-through — use
   your existing mchammer observers unchanged.
 - HDF5 output bundling one `mchammer.BaseDataContainer` per replica plus
@@ -92,11 +96,39 @@ Observer attachment is only supported on `SerialPool`; use
 `CanonicalParallelTempering.attach_observer(...)` on a pool that
 satisfies `ObservablePool` (currently only `SerialPool` does).
 
+For custom Monte Carlo moves, subclass `mchammer.CanonicalEnsemble`
+and pass via `ensemble_cls=`:
+
+```python
+from mchammer.ensembles import CanonicalEnsemble
+
+class MyMove(CanonicalEnsemble):
+    def _do_trial_step(self) -> int:
+        # ... your custom move ...
+        return super()._do_trial_step()
+
+with CanonicalParallelTempering.process_pool(
+    cluster_expansion=ce,
+    atoms=atoms,
+    temperatures=[200, 400, 800, 1600],
+    block_size=1000,
+    random_seed=0,
+    ensemble_cls=MyMove,
+) as pt:
+    pt.run(n_cycles=200)
+```
+
+Spawn workers re-import the class by fully qualified name, so define
+the subclass in a `.py` module file rather than a Jupyter cell. See
+`examples/05_custom_ensemble.py` for a complete worked example.
+
 ## Examples
 
 - `examples/01_basic_canonical.py` — self-contained run on a toy Cu/Au CE.
 - `examples/02_custom_callback.py` — writing your own `ExchangeCallback`.
 - `examples/03_parallel_workers.py` — PT with the `ProcessPool`.
+- `examples/05_custom_ensemble.py` — PT with a custom
+  `CanonicalEnsemble` subclass.
 
 ## License
 
