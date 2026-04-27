@@ -244,9 +244,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 `mchammer.BaseDataContainer`, and run metadata to this path
                 on completion.
             ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
-                every worker's Replica. Must be importable by fully qualified
-                name in spawn workers (i.e. defined in a module file, not in
-                ``__main__`` or a notebook).
+                every worker's Replica. Spawn workers re-import the class by
+                fully qualified name. Top-level classes in a ``python
+                script.py`` invocation work (the worker re-runs the script as
+                ``__main__``); classes defined in a Jupyter cell or REPL do
+                not — `ProcessPool` rejects the interactive-``__main__``
+                case up-front rather than letting it surface as an opaque
+                multiprocessing error.
             ensemble_kwargs: extra keyword arguments forwarded to
                 ``ensemble_cls(...)`` for every worker's Replica. Cannot
                 include ``structure``, ``calculator``, ``temperature``, or

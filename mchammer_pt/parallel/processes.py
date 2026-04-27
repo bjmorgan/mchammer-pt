@@ -23,6 +23,7 @@ from the worker's exception.
 from __future__ import annotations
 
 import multiprocessing as mp
+import sys
 import traceback
 from collections.abc import Mapping, Sequence
 from multiprocessing.connection import Connection
@@ -110,6 +111,39 @@ def _worker(
             conn.send(("ERR", traceback.format_exc()))
 
 
+def _check_ensemble_cls_importable(ensemble_cls: type) -> None:
+    """Reject ``ensemble_cls`` defined in an interactive ``__main__``.
+
+    Spawn workers re-import ``__main__`` from its file. A class defined
+    at the top of ``python script.py`` works (``__main__.__file__`` is
+    the script path, the worker re-imports it). A class defined in a
+    Jupyter cell or REPL does not (``__main__`` has no importable
+    ``__file__``). The two failure paths if we let this through are
+    both unhelpful: ``PicklingError`` from the multiprocessing
+    internals at parent ``process.start()``, or the worker exiting
+    before ``_worker`` runs and the parent's ``recv()`` raising
+    ``EOFError`` with no mention of ``ensemble_cls``.
+
+    The heuristic is: ``__module__`` is ``"__main__"`` and
+    ``sys.modules["__main__"].__file__`` is either absent or not a
+    ``.py`` path. That distinguishes script callers (which work) from
+    notebook/REPL callers (which don't).
+    """
+    if ensemble_cls.__module__ != "__main__":
+        return
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None)
+    if main_file is not None and main_file.endswith(".py"):
+        return
+    raise ValueError(
+        f"ensemble_cls={ensemble_cls.__name__!r} is defined in __main__ "
+        f"in a session whose __main__ cannot be re-imported by spawn "
+        f"workers (typically Jupyter or a REPL). Move the class into a "
+        f".py module that both your session and the workers can import, "
+        f"e.g. ``my_moves.py``, and pass it as ``my_moves.MyEnsemble``."
+    )
+
+
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
     return {
         "numbers": np.asarray(atoms.numbers, dtype=np.int64),
@@ -134,9 +168,15 @@ class ProcessPool:
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
-            every worker's Replica. Must be importable by fully
-            qualified name in the spawn worker (i.e. defined in a
-            module file, not in ``__main__`` or a notebook).
+            every worker's Replica. Spawn workers re-import the class
+            by fully qualified name, so it must live in an importable
+            module: top-level classes in a ``python script.py``
+            invocation work (the worker re-runs the script as
+            ``__main__``); classes defined in a Jupyter cell or REPL
+            do not. Move such classes to a ``.py`` module file. The
+            interactive-``__main__`` case is rejected up-front in
+            ``__init__`` rather than producing a deep multiprocessing
+            traceback.
         ensemble_kwargs: extra keyword arguments forwarded to
             ``ensemble_cls(...)``. All values must be picklable.
             Cannot include the four kwargs reserved by `Replica`
@@ -155,6 +195,7 @@ class ProcessPool:
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
+        _check_ensemble_cls_importable(ensemble_cls)
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
         if len(temperatures_list) != len(seeds_list):

@@ -295,3 +295,40 @@ def test_process_pool_bad_ensemble_kwargs_surfaces_at_init(
             ensemble_cls=TaggedCanonicalEnsemble,
             ensemble_kwargs={"nonexistent": 1},
         )
+
+
+def test_process_pool_rejects_interactive_main_class(
+    toy_ce, toy_atoms, tmp_path: Path, monkeypatch
+):
+    """`ensemble_cls` defined in an interactive __main__ is rejected up-front.
+
+    A class in a Jupyter cell has ``__module__ == "__main__"`` and
+    ``sys.modules["__main__"].__file__`` either absent or pointing
+    somewhere spawn workers cannot re-import. Without the preflight,
+    the user sees either a deep multiprocessing PicklingError or an
+    EOFError on the parent's first ``recv()`` — neither mentions
+    ``ensemble_cls``. The preflight raises a clear ``ValueError``
+    before any worker starts.
+    """
+    import sys
+
+    from mchammer.ensembles import CanonicalEnsemble
+
+    # Construct a class that mimics the notebook case: __module__ == "__main__".
+    class FakeNotebookEnsemble(CanonicalEnsemble):
+        pass
+
+    FakeNotebookEnsemble.__module__ = "__main__"
+    # Pretend __main__ has no .py file (Jupyter / REPL look like this).
+    monkeypatch.delattr(sys.modules["__main__"], "__file__", raising=False)
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(ValueError, match="__main__"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=FakeNotebookEnsemble,
+        )
