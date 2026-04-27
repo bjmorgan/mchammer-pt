@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters `ensemble_cls` (a `CanonicalEnsemble` subclass; defaults
   to `CanonicalEnsemble`) and `ensemble_kwargs` (extra keyword
   arguments forwarded to the ensemble constructor). Lets callers
-  ride parallel tempering with custom Monte Carlo moves implemented
+  run parallel tempering with custom Monte Carlo moves implemented
   as `CanonicalEnsemble` subclasses without duplicating `Replica`'s
   body. Resolves #6.
 - `ProcessPool` gained the same two parameters and forwards them to
