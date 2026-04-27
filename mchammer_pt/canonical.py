@@ -224,6 +224,20 @@ class CanonicalParallelTempering(BaseParallelTempering):
         cleaned shortly after by Python's garbage collector.
 
         Args:
+            cluster_expansion: icet ClusterExpansion defining the energy.
+            atoms: starting structure; every replica begins from a copy.
+            temperatures: non-decreasing temperatures in kelvin. At least
+                two values required. Equal adjacent temperatures are
+                allowed (produces a same-T null case where exchange is a
+                pure relabelling); strictly decreasing values are rejected.
+            block_size: MC trial steps per replica per cycle. Must be >= 1.
+            random_seed: master seed; each replica's MC RNG and the
+                orchestrator's exchange-proposal RNG are deterministically
+                spawned from it.
+            data_container_file: optional path; if given, `run` writes an
+                HDF5 bundle of the `ExchangeHistory`, each replica's
+                `mchammer.BaseDataContainer`, and run metadata to this path
+                on completion.
             ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
                 every worker's Replica. Must be importable by fully qualified
                 name in spawn workers (i.e. defined in a module file, not in
