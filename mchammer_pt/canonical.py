@@ -89,7 +89,22 @@ class CanonicalParallelTempering(BaseParallelTempering):
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
-        pool_was_supplied = pool is not None
+        # Pool/ensemble exclusion runs first: combining ``pool=`` with
+        # custom ensemble args reflects a more fundamental misuse of the
+        # API than a length/temperature mismatch, and the latter is
+        # often a downstream consequence of the former (the user built
+        # a pool with the wrong ladder *because* they thought the
+        # orchestrator would re-derive the ladder from ensemble_cls).
+        if pool is not None and (
+            ensemble_cls is not CanonicalEnsemble or ensemble_kwargs
+        ):
+            raise ValueError(
+                "ensemble_cls / ensemble_kwargs cannot be combined with an "
+                "explicit pool=; the pool already owns its replicas. Pass "
+                "these kwargs only when letting CanonicalParallelTempering "
+                "build the default SerialPool, or use process_pool(...) "
+                "which forwards them."
+            )
         if pool is None:
             replicas = [
                 Replica(
@@ -130,16 +145,6 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     f"CanonicalParallelTempering.process_pool(...) to "
                     f"avoid constructing the ladder twice."
                 )
-        if pool_was_supplied and (
-            ensemble_cls is not CanonicalEnsemble or ensemble_kwargs
-        ):
-            raise ValueError(
-                "ensemble_cls / ensemble_kwargs cannot be combined with an "
-                "explicit pool=; the pool already owns its replicas. Pass "
-                "these kwargs only when letting CanonicalParallelTempering "
-                "build the default SerialPool, or use process_pool(...) "
-                "which forwards them."
-            )
         super().__init__(
             pool=pool,
             block_size=block_size,
