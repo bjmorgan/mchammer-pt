@@ -23,32 +23,14 @@ class TaggedCanonicalEnsemble(CanonicalEnsemble):
         super().__init__(**kwargs)
 
 
-class RequiresExtraCanonicalEnsemble(CanonicalEnsemble):
-    """CanonicalEnsemble subclass that requires an ``extra`` kwarg.
-
-    Used by ProcessPool tests to verify that missing ``ensemble_kwargs``
-    surface as a worker-startup failure rather than silently slipping
-    through.
-    """
-
-    def __init__(self, *, extra: int, **kwargs: Any) -> None:
-        self.extra = int(extra)
-        super().__init__(**kwargs)
-
-
 class HighAcceptanceCanonicalEnsemble(CanonicalEnsemble):
-    """CanonicalEnsemble subclass with a custom ``_do_trial_step``.
+    """CanonicalEnsemble subclass that accepts every proposed swap.
 
-    Always proposes a swap and accepts every proposed swap (regardless
-    of energy). The point is not physical correctness — it is to pin
-    the integration test that ``_do_trial_step`` overrides reach the
-    parallel-tempering machinery and a run completes end-to-end.
+    Overrides `_acceptance_condition` to short-circuit the Metropolis
+    check. Used by the Task 10 integration test to confirm that a
+    custom `CanonicalEnsemble` subclass — issue #6's stated use case
+    — rides the parallel-tempering machinery end-to-end.
     """
 
-    def _do_trial_step(self) -> int:  # pragma: no cover - trivial wrapper
-        # Delegate to the canonical step but unconditionally accept by
-        # forcing the Metropolis criterion via a high effective T is
-        # heavy-handed; instead, just call the parent. This subclass
-        # exists primarily to demonstrate "custom subclass wired
-        # through PT" — the inherited step is sufficient evidence.
-        return super()._do_trial_step()
+    def _acceptance_condition(self, potential_diff: float) -> bool:
+        return True
