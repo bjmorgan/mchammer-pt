@@ -158,3 +158,19 @@ def test_replica_construction_leaves_caller_random_state_untouched(toy_ce, toy_a
     observed = [random.random() for _ in range(5)]
 
     assert observed == reference
+
+
+def test_replica_uses_supplied_ensemble_class(toy_ce, toy_atoms):
+    """Replica builds the ensemble from the supplied class, not CanonicalEnsemble."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=1,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "alpha"},
+    )
+    assert isinstance(rep._ensemble, TaggedCanonicalEnsemble)
+    assert rep._ensemble.tag == "alpha"

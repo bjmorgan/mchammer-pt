@@ -16,6 +16,8 @@ to itself.
 from __future__ import annotations
 
 import random
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 from ase import Atoms
@@ -33,7 +35,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 
 
 class Replica:
-    """One `CanonicalEnsemble` at one temperature, wrapped for PT use.
+    """One canonical ensemble at one temperature, wrapped for PT use.
 
     The orchestrator holds a list of these. Each Replica knows its
     temperature, its current configuration, and how to advance itself;
@@ -44,6 +46,16 @@ class Replica:
         atoms: starting structure (copied, not mutated).
         temperature: simulation temperature in kelvin.
         random_seed: seed for this replica's MC random generator.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof. Defaults
+            to `CanonicalEnsemble`. Pinned to canonical because the
+            orchestrator's exchange acceptance is canonical-only;
+            non-canonical subclasses would silently produce wrong
+            physics.
+        ensemble_kwargs: extra keyword arguments forwarded to
+            ``ensemble_cls(...)`` on top of the four standard ones
+            (``structure``, ``calculator``, ``temperature``,
+            ``random_seed``). Reserved names cannot appear here; see
+            `__init__`.
     """
 
     def __init__(
@@ -52,8 +64,12 @@ class Replica:
         atoms: Atoms,
         temperature: float,
         random_seed: int,
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         self._temperature = float(temperature)
+        extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         # Copy atoms so the caller's object is not mutated by mchammer.
         # `ase.Atoms.copy` is untyped upstream, so annotate the target here.
         atoms_copy: Atoms = atoms.copy()  # type: ignore[no-untyped-call]
@@ -66,11 +82,12 @@ class Replica:
         # independent stream.
         caller_state = random.getstate()
         try:
-            self._ensemble = CanonicalEnsemble(
+            self._ensemble = ensemble_cls(
                 structure=atoms_copy,
                 calculator=calculator,
                 temperature=self._temperature,
                 random_seed=int(random_seed),
+                **extra,
             )
             self._rng_state = random.getstate()
         finally:
