@@ -270,3 +270,28 @@ def test_process_pool_constructs_supplied_ensemble_subclass(
         assert es.shape == (3,)
     finally:
         pool.shutdown()
+
+
+def test_process_pool_bad_ensemble_kwargs_surfaces_at_init(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Unknown ensemble_kwargs make every worker fail in __init__.
+
+    Pins that the failure mode is the existing ready-handshake path:
+    the parent's __init__ raises RuntimeError carrying the worker's
+    TypeError traceback. Without this, an unrecognised kwarg would
+    only surface on the first ADVANCE.
+    """
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(RuntimeError, match="worker startup failed"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=TaggedCanonicalEnsemble,
+            ensemble_kwargs={"nonexistent": 1},
+        )
