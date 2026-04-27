@@ -259,3 +259,23 @@ def test_run_writes_hdf5_when_file_provided(tmp_path, toy_ce, toy_atoms):
     assert history.energies_per_cycle.shape == (4, 2)
     assert len(containers) == 2
     assert meta["block_size"] == 50
+
+
+def test_orchestrator_forwards_ensemble_cls_to_default_pool(toy_ce, toy_atoms):
+    """Default-pool path constructs replicas with the supplied class."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0, 1200.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "beta"},
+    )
+    pool = pt.pool
+    # Default pool is SerialPool; replicas are reachable for inspection.
+    for replica in pool._replicas:  # type: ignore[attr-defined]
+        assert isinstance(replica._ensemble, TaggedCanonicalEnsemble)
+        assert replica._ensemble.tag == "beta"

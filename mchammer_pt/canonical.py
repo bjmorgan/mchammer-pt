@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import weakref
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
+from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
@@ -49,6 +51,15 @@ class CanonicalParallelTempering(BaseParallelTempering):
             HDF5 bundle of the `ExchangeHistory`, each replica's
             `mchammer.BaseDataContainer`, and run metadata to this path
             on completion.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+            every replica when this orchestrator constructs the default
+            pool. Ignored when ``pool`` is supplied directly. Pinned to
+            canonical because the exchange acceptance is canonical-only.
+        ensemble_kwargs: extra keyword arguments forwarded to
+            ``ensemble_cls(...)`` for every replica. Cannot include
+            ``structure``, ``calculator``, ``temperature``, or
+            ``random_seed`` (these are set by `Replica`). Ignored when
+            ``pool`` is supplied directly.
     """
 
     def __init__(
@@ -60,6 +71,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
         random_seed: int,
         pool: ReplicaPool | None = None,
         data_container_file: Path | str | None = None,
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         temperatures = [float(T) for T in temperatures]
         if len(temperatures) < 2:
@@ -82,6 +96,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     atoms=atoms,
                     temperature=T,
                     random_seed=seed,
+                    ensemble_cls=ensemble_cls,
+                    ensemble_kwargs=ensemble_kwargs,
                 )
                 for T, seed in zip(temperatures, replica_seeds, strict=True)
             ]
