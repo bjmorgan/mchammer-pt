@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
     BaseDataContainer,
 )
+from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from ..replica import Replica
 
@@ -45,6 +46,8 @@ def _worker(
     atoms_dict: dict[str, Any],
     temperature: float,
     seed: int,
+    ensemble_cls: type[CanonicalEnsemble],
+    ensemble_kwargs: dict[str, Any] | None,
 ) -> None:
     """Worker entry point: build a Replica, then serve commands.
 
@@ -68,6 +71,8 @@ def _worker(
             atoms=atoms,
             temperature=temperature,
             random_seed=seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
         )
     except BaseException:
         conn.send(("ERR", traceback.format_exc()))
@@ -118,9 +123,9 @@ class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
     One OS process per replica. Satisfies `ReplicaPool`. Does NOT
-    implement `ObservablePool` - workers cannot receive pickled
-    `BaseObserver` instances reliably. For observer support, use
-    `SerialPool` or wait for v0.2's class-plus-factory-args API.
+    implement `ObservablePool` because `mchammer.BaseObserver`
+    instances do not pickle reliably across the spawn boundary; for
+    observer support use `SerialPool`.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -128,6 +133,16 @@ class ProcessPool:
             independent copy.
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+            every worker's Replica. Must be importable by fully
+            qualified name in the spawn worker (i.e. defined in a
+            module file, not in ``__main__`` or a notebook).
+        ensemble_kwargs: extra keyword arguments forwarded to
+            ``ensemble_cls(...)``. All values must be picklable.
+            Cannot include the four kwargs reserved by `Replica`
+            (`structure`, `calculator`, `temperature`, `random_seed`);
+            a clash raises in the worker and surfaces via the
+            startup handshake.
     """
 
     def __init__(
@@ -136,6 +151,9 @@ class ProcessPool:
         initial_atoms: Atoms,
         temperatures: Sequence[float],
         seeds: Sequence[int],
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
@@ -144,12 +162,23 @@ class ProcessPool:
         self._temperatures: list[float] = [float(T) for T in temperatures_list]
         self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         atoms_dict = _atoms_to_dict(initial_atoms)
+        extra_kwargs: dict[str, Any] = (
+            dict(ensemble_kwargs) if ensemble_kwargs else {}
+        )
         ctx = mp.get_context("spawn")
         for T, seed in zip(self._temperatures, seeds_list, strict=True):
             parent_conn, child_conn = ctx.Pipe(duplex=True)
             process = ctx.Process(
                 target=_worker,
-                args=(child_conn, str(ce_path), atoms_dict, T, int(seed)),
+                args=(
+                    child_conn,
+                    str(ce_path),
+                    atoms_dict,
+                    T,
+                    int(seed),
+                    ensemble_cls,
+                    extra_kwargs,
+                ),
                 daemon=True,
             )
             process.start()

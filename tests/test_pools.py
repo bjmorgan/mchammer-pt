@@ -239,3 +239,34 @@ def test_process_pool_context_manager_shuts_down_on_exception(
         with pool:
             raise RuntimeError("deliberate")
     assert not pool._workers
+
+
+def test_process_pool_constructs_supplied_ensemble_subclass(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """ProcessPool workers build the supplied subclass with extra kwargs.
+
+    The subclass `TaggedCanonicalEnsemble` requires a `tag` keyword.
+    If `ensemble_kwargs` does not reach the worker's Replica
+    construction, the worker fails to start and the parent raises
+    `RuntimeError` from the ready-handshake.
+    """
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        seeds=[0, 1, 2],
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "gamma"},
+    )
+    try:
+        # Workers came up: handshake passed and basic queries work.
+        pool.advance_all(20)
+        es = pool.current_energies()
+        assert es.shape == (3,)
+    finally:
+        pool.shutdown()
