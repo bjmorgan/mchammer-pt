@@ -191,6 +191,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
         block_size: int,
         random_seed: int,
         data_container_file: Path | str | None = None,
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> CanonicalParallelTempering:
         """Construct a process-parallel PT run in one call.
 
@@ -219,6 +222,17 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         On exit the pool's workers are joined; the CE tempdir is
         cleaned shortly after by Python's garbage collector.
+
+        Args:
+            ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+                every worker's Replica. Must be importable by fully qualified
+                name in spawn workers (i.e. defined in a module file, not in
+                ``__main__`` or a notebook).
+            ensemble_kwargs: extra keyword arguments forwarded to
+                ``ensemble_cls(...)`` for every worker's Replica. Cannot
+                include ``structure``, ``calculator``, ``temperature``, or
+                ``random_seed`` (these are set by `Replica`). All values must
+                be picklable for the spawn boundary.
         """
         temperatures_list = [float(T) for T in temperatures]
         seed_sequence = np.random.SeedSequence(int(random_seed))
@@ -234,6 +248,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 initial_atoms=atoms,
                 temperatures=temperatures_list,
                 seeds=replica_seeds,
+                ensemble_cls=ensemble_cls,
+                ensemble_kwargs=ensemble_kwargs,
             )
         except BaseException:
             tmpdir.cleanup()

@@ -326,3 +326,23 @@ def test_orchestrator_rejects_pool_plus_ensemble_kwargs(toy_ce, toy_atoms):
             )
     finally:
         pool.shutdown()
+
+
+def test_process_pool_factory_forwards_ensemble_cls(toy_ce, toy_atoms):
+    """The process_pool factory threads ensemble_cls/kwargs through to workers."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "delta"},
+    ) as pt:
+        # If the kwargs did not reach the workers, the workers would
+        # have failed at startup (TaggedCanonicalEnsemble requires
+        # `tag`) and the factory would have raised in __init__.
+        history = pt.run(n_cycles=2)
+    assert history.energies_per_cycle.shape == (3, 2)
