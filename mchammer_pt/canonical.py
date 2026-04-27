@@ -53,12 +53,12 @@ class CanonicalParallelTempering(BaseParallelTempering):
             on completion.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
             every replica when this orchestrator constructs the default
-            pool. Ignored when ``pool`` is supplied directly. Pinned to
+            pool. Rejected when ``pool`` is supplied directly. Pinned to
             canonical because the exchange acceptance is canonical-only.
         ensemble_kwargs: extra keyword arguments forwarded to
             ``ensemble_cls(...)`` for every replica. Cannot include
             ``structure``, ``calculator``, ``temperature``, or
-            ``random_seed`` (these are set by `Replica`). Ignored when
+            ``random_seed`` (these are set by `Replica`). Rejected when
             ``pool`` is supplied directly.
     """
 
@@ -89,6 +89,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
+        pool_was_supplied = pool is not None
         if pool is None:
             replicas = [
                 Replica(
@@ -129,6 +130,16 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     f"CanonicalParallelTempering.process_pool(...) to "
                     f"avoid constructing the ladder twice."
                 )
+        if pool_was_supplied and (
+            ensemble_cls is not CanonicalEnsemble or ensemble_kwargs
+        ):
+            raise ValueError(
+                "ensemble_cls / ensemble_kwargs cannot be combined with an "
+                "explicit pool=; the pool already owns its replicas. Pass "
+                "these kwargs only when letting CanonicalParallelTempering "
+                "build the default SerialPool, or use process_pool(...) "
+                "which forwards them."
+            )
         super().__init__(
             pool=pool,
             block_size=block_size,

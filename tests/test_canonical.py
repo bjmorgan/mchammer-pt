@@ -279,3 +279,50 @@ def test_orchestrator_forwards_ensemble_cls_to_default_pool(toy_ce, toy_atoms):
     for replica in pool._replicas:  # type: ignore[attr-defined]
         assert isinstance(replica._ensemble, TaggedCanonicalEnsemble)
         assert replica._ensemble.tag == "beta"
+
+
+def test_orchestrator_rejects_pool_plus_custom_ensemble_cls(toy_ce, toy_atoms):
+    """pool= and ensemble_cls= together is ambiguous and rejected up-front."""
+    from mchammer_pt import SerialPool
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    pool = SerialPool([
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 600.0])
+    ])
+    try:
+        with pytest.raises(ValueError, match="ensemble_cls"):
+            CanonicalParallelTempering(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperatures=[300.0, 600.0],
+                block_size=10,
+                random_seed=0,
+                pool=pool,
+                ensemble_cls=TaggedCanonicalEnsemble,
+            )
+    finally:
+        pool.shutdown()
+
+
+def test_orchestrator_rejects_pool_plus_ensemble_kwargs(toy_ce, toy_atoms):
+    """Non-empty ensemble_kwargs alongside pool= is also rejected."""
+    from mchammer_pt import SerialPool
+
+    pool = SerialPool([
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 600.0])
+    ])
+    try:
+        with pytest.raises(ValueError, match="ensemble_kwargs"):
+            CanonicalParallelTempering(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperatures=[300.0, 600.0],
+                block_size=10,
+                random_seed=0,
+                pool=pool,
+                ensemble_kwargs={"tag": "x"},
+            )
+    finally:
+        pool.shutdown()
