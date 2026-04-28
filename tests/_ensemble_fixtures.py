@@ -27,9 +27,9 @@ class HighAcceptanceCanonicalEnsemble(CanonicalEnsemble):
     """CanonicalEnsemble subclass that accepts every proposed swap.
 
     Overrides `_acceptance_condition` to short-circuit the Metropolis
-    check. Used by the Task 10 integration test to confirm that a
-    custom `CanonicalEnsemble` subclass — issue #6's stated use case
-    — rides the parallel-tempering machinery end-to-end.
+    check. Used by `test_process_pool_factory_with_custom_trial_step`
+    to confirm that a custom `CanonicalEnsemble` subclass rides the
+    parallel-tempering machinery end-to-end.
     """
 
     def _acceptance_condition(self, potential_diff: float) -> bool:

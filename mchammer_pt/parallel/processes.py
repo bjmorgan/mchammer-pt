@@ -112,23 +112,36 @@ def _worker(
 
 
 def _check_ensemble_cls_importable(ensemble_cls: type) -> None:
-    """Reject ``ensemble_cls`` defined in an interactive ``__main__``.
+    """Reject ``ensemble_cls`` definitions spawn workers cannot re-import.
 
-    Spawn workers re-import ``__main__`` from its file. A class defined
-    at the top of ``python script.py`` works (``__main__.__file__`` is
-    the script path, the worker re-imports it). A class defined in a
-    Jupyter cell or REPL does not (``__main__`` has no importable
-    ``__file__``). The two failure paths if we let this through are
-    both unhelpful: ``PicklingError`` from the multiprocessing
-    internals at parent ``process.start()``, or the worker exiting
-    before ``_worker`` runs and the parent's ``recv()`` raising
-    ``EOFError`` with no mention of ``ensemble_cls``.
+    Spawn workers pickle ``ensemble_cls`` by fully qualified name and
+    re-import it on the other side of the process boundary. Two
+    definition sites break that contract:
 
-    The heuristic is: ``__module__`` is ``"__main__"`` and
-    ``sys.modules["__main__"].__file__`` is either absent or not a
-    ``.py`` path. That distinguishes script callers (which work) from
-    notebook/REPL callers (which don't).
+    1. **Interactive ``__main__``.** A class defined in a Jupyter cell
+       or REPL has ``__module__ == "__main__"``, but
+       ``sys.modules["__main__"]`` has no importable ``__file__``. Top-
+       level classes in ``python script.py`` are fine (the worker re-
+       runs the script as ``__main__``); the discriminator is whether
+       ``__main__.__file__`` ends in ``.py``.
+    2. **Function-local class.** A class defined inside a function has
+       ``"<locals>"`` in its ``__qualname__``. Pickle cannot walk into
+       a function's local scope to recover the class.
+
+    Letting either through produces a deep ``PicklingError`` from the
+    multiprocessing internals at parent ``process.start()``, or the
+    worker exiting before ``_worker`` runs and the parent's
+    ``recv()`` raising ``EOFError`` — neither error mentions
+    ``ensemble_cls``. The preflight raises a clear ``ValueError`` up-
+    front instead.
     """
+    if "<locals>" in ensemble_cls.__qualname__:
+        raise ValueError(
+            f"ensemble_cls={ensemble_cls.__qualname__!r} is defined "
+            f"inside a function, so spawn workers cannot re-import it. "
+            f"Move the class to module top level (or to a method of a "
+            f"top-level class)."
+        )
     if ensemble_cls.__module__ != "__main__":
         return
     main_module = sys.modules.get("__main__")

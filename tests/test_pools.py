@@ -314,11 +314,15 @@ def test_process_pool_rejects_interactive_main_class(
 
     from mchammer.ensembles import CanonicalEnsemble
 
-    # Construct a class that mimics the notebook case: __module__ == "__main__".
+    # Construct a class that mimics the notebook case: __module__ ==
+    # "__main__" and a top-level qualname (the function-local
+    # qualname produced by defining the class here would trip the
+    # separate <locals> guard, not the __main__ guard we want to pin).
     class FakeNotebookEnsemble(CanonicalEnsemble):
         pass
 
     FakeNotebookEnsemble.__module__ = "__main__"
+    FakeNotebookEnsemble.__qualname__ = "FakeNotebookEnsemble"
     # Pretend __main__ has no .py file (Jupyter / REPL look like this).
     monkeypatch.delattr(sys.modules["__main__"], "__file__", raising=False)
 
@@ -331,4 +335,30 @@ def test_process_pool_rejects_interactive_main_class(
             temperatures=[300.0, 400.0],
             seeds=[0, 1],
             ensemble_cls=FakeNotebookEnsemble,
+        )
+
+
+def test_process_pool_rejects_function_local_class(toy_ce, toy_atoms, tmp_path: Path):
+    """`ensemble_cls` defined inside a function is rejected up-front.
+
+    Function-local classes have ``"<locals>"`` in ``__qualname__``;
+    pickle cannot walk a function's local scope to recover them. Same
+    UX problem as the interactive-``__main__`` case: without the
+    preflight, the user sees a deep `PicklingError` from
+    multiprocessing internals that doesn't mention `ensemble_cls`.
+    """
+    from mchammer.ensembles import CanonicalEnsemble
+
+    class LocalEnsemble(CanonicalEnsemble):
+        pass
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(ValueError, match="<locals>"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=LocalEnsemble,
         )
