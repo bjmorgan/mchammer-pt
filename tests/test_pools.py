@@ -428,6 +428,53 @@ def test_serial_pool_attach_observer_unpicklable_raises_eagerly(toy_ce, toy_atom
         pool.shutdown()
 
 
+def test_serial_pool_attach_observer_class_constructs_per_replica(toy_ce, toy_atoms):
+    """attach_observer_class constructs one fresh instance per selected replica."""
+    from tests._observer_fixtures import TaggedObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer_class(
+            TaggedObserver,
+            10,
+            label="run-1",
+            replicas=[0, 1],
+        )
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        assert "tagged" in dcs[0].data.columns
+        assert "tagged" in dcs[1].data.columns
+        assert "tagged" not in dcs[2].data.columns
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_class_constructor_failure_surfaces_in_parent(
+    toy_ce, toy_atoms
+):
+    """A constructor exception raises in the calling process, not from a worker."""
+    from tests._observer_fixtures import BadInitObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(ValueError, match="deliberate constructor failure"):
+            pool.attach_observer_class(BadInitObserver, 10)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_class_rejects_non_observer(toy_ce, toy_atoms):
+    """A class whose instances are not BaseObservers raises TypeError."""
+    from tests._observer_fixtures import NotAnObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(TypeError, match="not a BaseObserver"):
+            pool.attach_observer_class(NotAnObserver, 10)
+    finally:
+        pool.shutdown()
+
+
 def test_process_pool_public_methods_raise_after_shutdown(
     toy_ce, toy_atoms, tmp_path: Path
 ):

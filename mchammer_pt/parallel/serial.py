@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
@@ -89,6 +89,42 @@ class SerialPool:
             ) from exc
         for i in target_indices:
             self._replicas[i].attach_mchammer_observer(pickle.loads(blob))
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to selected replicas.
+
+        Each selected replica receives its own ``cls(*args, **kwargs)``
+        instance. A parent-side dry-run construction validates the
+        arguments and the ``BaseObserver`` return type before any
+        replica is touched.
+
+        The constructor fires ``1 + N`` times for ``N`` selected
+        replicas (one dry-run plus one per replica). Constructors must
+        therefore be free of externally-visible side effects.
+        """
+        target_indices = (
+            range(len(self._replicas))
+            if replicas == "all"
+            else [int(i) for i in replicas]
+        )
+        if not target_indices:
+            return
+        probe = cls(*args, **kwargs)
+        if not isinstance(probe, BaseObserver):
+            raise TypeError(
+                f"attach_observer_class: {cls.__name__}(...) returned "
+                f"{type(probe).__name__}, not a BaseObserver"
+            )
+        del probe
+        for i in target_indices:
+            self._replicas[i].attach_mchammer_observer(cls(*args, **kwargs))
 
     def data_containers(self) -> list[BaseDataContainer]:
         return [r.data_container() for r in self._replicas]
