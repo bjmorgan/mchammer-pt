@@ -153,23 +153,17 @@ def test_both_pools_advance_actually_progresses_state(
 
 
 def test_serial_pool_attach_observer_fires(toy_ce, toy_atoms):
-    from mchammer.observers.base_observer import BaseObserver
-
-    class Counter(BaseObserver):
-        def __init__(self, interval: int) -> None:
-            super().__init__(interval=interval, return_type=int, tag="counter")
-            self.n_calls = 0
-
-        def get_observable(self, structure) -> int:
-            self.n_calls += 1
-            return self.n_calls
+    from tests._observer_fixtures import StatefulCounter
 
     pool = _make_serial(toy_ce, toy_atoms)
     try:
-        obs = Counter(interval=10)
-        pool.attach_observer(obs, replicas=[0, 1])
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
         pool.advance_all(50)
-        assert obs.n_calls > 0
+        dcs = pool.data_containers()
+        # Replicas 0 and 1 had the observer attached; replica 2 did not.
+        assert "counter" in dcs[0].data.columns
+        assert "counter" in dcs[1].data.columns
+        assert "counter" not in dcs[2].data.columns
     finally:
         pool.shutdown()
 
@@ -376,6 +370,62 @@ def test_process_pool_rejects_function_local_class(toy_ce, toy_atoms, tmp_path: 
             seeds=[0, 1],
             ensemble_cls=LocalEnsemble,
         )
+
+
+def test_serial_pool_attach_observer_gives_independent_copies(toy_ce, toy_atoms):
+    """Each replica receives its own deserialised observer copy.
+
+    The user-supplied instance is not registered on any replica; it
+    serves only as a template. Mutations to it after attach do not
+    affect the run.
+    """
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        template = StatefulCounter(interval=10)
+        pool.attach_observer(template, replicas="all")
+        # The template itself was never registered on any replica.
+        assert template.n_calls == 0
+        pool.advance_all(50)
+        # The template's counter is still zero — none of the replicas
+        # called into the template object.
+        assert template.n_calls == 0
+        # Each replica's own observer fired independently. We can read
+        # them back via the data containers' columns.
+        dcs = pool.data_containers()
+        per_replica_calls = [
+            int(dc.data["counter"].iloc[-1]) for dc in dcs
+        ]
+        # Every replica saw at least one observation, and the counters
+        # are not strictly increasing across replicas (which would
+        # indicate a single shared object).
+        assert all(c >= 1 for c in per_replica_calls)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_unpicklable_raises_eagerly(toy_ce, toy_atoms):
+    """An unpicklable observer raises TypeError before any replica is touched."""
+    from mchammer.observers.base_observer import BaseObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        # An observer that closes over a lambda — stdlib pickle refuses lambdas.
+        cb = lambda x: x  # noqa: E731
+
+        class Unpicklable(BaseObserver):
+            def __init__(self, interval: int) -> None:
+                super().__init__(interval=interval, return_type=int, tag="u")
+                self.cb = cb
+
+            def get_observable(self, structure):
+                return self.cb(0)
+
+        with pytest.raises(TypeError, match="attach_observer_class"):
+            pool.attach_observer(Unpicklable(interval=10))
+    finally:
+        pool.shutdown()
 
 
 def test_process_pool_public_methods_raise_after_shutdown(

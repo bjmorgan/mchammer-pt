@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 from collections.abc import Sequence
 from typing import Literal
 
@@ -64,13 +65,30 @@ class SerialPool:
         observer: BaseObserver,
         replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
+        """Attach an mchammer observer to selected replicas.
+
+        Each replica receives its own deserialised copy of ``observer``
+        via a pickle round-trip; the ``observer`` argument itself is
+        never registered on any replica. If ``observer`` is not
+        picklable, raises ``TypeError`` immediately and points at
+        ``attach_observer_class`` as the escape hatch.
+        """
         target_indices = (
             range(len(self._replicas))
             if replicas == "all"
             else [int(i) for i in replicas]
         )
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:  # pickle.PicklingError or TypeError
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
         for i in target_indices:
-            self._replicas[i].attach_mchammer_observer(observer)
+            self._replicas[i].attach_mchammer_observer(pickle.loads(blob))
 
     def data_containers(self) -> list[BaseDataContainer]:
         return [r.data_container() for r in self._replicas]
