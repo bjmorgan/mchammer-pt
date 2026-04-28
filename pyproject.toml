@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.1.0"
+version = "0.2.0"
 description = "Parallel tempering orchestrator for mchammer canonical Monte Carlo"
 readme = "README.md"
 authors = [
