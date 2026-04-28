@@ -127,6 +127,7 @@ the subclass in a `.py` module file rather than a Jupyter cell. See
 - `examples/01_basic_canonical.py` — self-contained run on a toy Cu/Au CE.
 - `examples/02_custom_callback.py` — writing your own `ExchangeCallback`.
 - `examples/03_parallel_workers.py` — PT with the `ProcessPool`.
+- `examples/04_equilibrium_sampling.py` – discarding the initial burn-in period for equilibrium sampling.
 - `examples/05_custom_ensemble.py` — PT with a custom
   `CanonicalEnsemble` subclass.
 
