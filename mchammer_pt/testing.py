@@ -2,27 +2,13 @@
 
 Downstream packages providing custom `CanonicalEnsemble` subclasses
 (custom Monte Carlo moves, alternative acceptance criteria, etc.) can
-use `assert_boltzmann_sampling` to anchor their detailed-balance
-correctness against the same analytic Boltzmann fixture mchammer-pt's
-own test suite uses.
+use `assert_boltzmann_sampling` to anchor their stationarity against
+the same analytic Boltzmann fixture mchammer-pt's own test suite uses.
 
-The fixture is a four-site one-dimensional chain (orthorhombic cell
-with periodic length 4 along x, isolated along y and z) with two Cu
-and two Au and an NN-only pair ECI. The six microstates of (2 Cu,
-2 Au) split into four "clustered" (1 CuCu + 2 CuAu + 1 AuAu NN
-bonds) and two "alternating" (0 CuCu + 4 CuAu + 0 AuAu)
-configurations, giving two distinct CE energies. The pair ECI is
-calibrated so the energy gap is approximately 3 kT at
-`FIXTURE_TEMPERATURE`, producing analytic class populations of
-roughly 0.98 (clustered) and 0.02 (alternating). With 10 000 samples
-at the default 4σ binomial tolerance, the test discriminates the
-correct distribution from any kernel that perturbs class populations
-by more than approximately 0.6%.
-
-For ensembles whose construction depends on fixture geometry
-(e.g. a custom move taking chain definitions), the
-`FIXTURE_CHAIN_INDICES` constant exposes the four-site chain in
-geometric order.
+The function-level docstring on `assert_boltzmann_sampling` describes
+the bundled fixture in full. The module-level public surface is one
+function plus one constant (`FIXTURE_CHAIN_INDICES`) for callers
+whose ensemble kwargs depend on the fixture's chain geometry.
 """
 
 from __future__ import annotations
@@ -38,15 +24,15 @@ from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from .replica import Replica
 
-FIXTURE_N_SITES: int = 4
-"""Number of sites in the bundled detailed-balance fixture."""
-
 FIXTURE_CHAIN_INDICES: tuple[tuple[int, ...], ...] = ((0, 1, 2, 3),)
 """Site indices of the chains in the bundled fixture, in geometric order.
 
 The fixture is a single one-dimensional chain of four sites; downstream
 custom moves that take chain definitions can use this constant to
-construct fixture-aware kwargs. For example::
+construct fixture-aware kwargs. The conversion to ``list[list[int]]``
+in the example below is required by consumers that type their chain
+argument as a nested list (e.g. `mchammer_moves.SlideRow`); consumers
+accepting nested sequences can pass the constant directly. Example::
 
     from mchammer_pt.testing import (
         assert_boltzmann_sampling,
@@ -59,9 +45,8 @@ construct fixture-aware kwargs. For example::
     )
 """
 
-FIXTURE_TEMPERATURE: float = 1000.0
-"""Temperature (K) at which the fixture is sampled and analytic-checked."""
-
+_FIXTURE_N_SITES = 4
+_FIXTURE_TEMPERATURE = 1000.0
 _KB_EV_PER_K = 8.617333262145e-5
 _TARGET_GAP_KT = 3.0
 
@@ -86,11 +71,11 @@ def _build_chain_ce_and_atoms() -> tuple[ClusterExpansion, Atoms]:
     )
     parameters = np.zeros(len(cs), dtype=float)
     # Calibrate the pair ECI so the gap ΔE = E_alt - E_clust is ~3 kT
-    # at FIXTURE_TEMPERATURE. Energy is linear in the pair ECI so we
-    # compute the gap once with a placeholder value, then scale.
+    # at the fixture temperature. Energy is linear in the pair ECI so
+    # we compute the gap once with a placeholder value, then scale.
     parameters[-1] = 1.0
     ce_probe = ClusterExpansion(cluster_space=cs, parameters=parameters)
-    atoms: Atoms = primitive.repeat((FIXTURE_N_SITES, 1, 1))  # type: ignore[no-untyped-call]
+    atoms: Atoms = primitive.repeat((_FIXTURE_N_SITES, 1, 1))  # type: ignore[no-untyped-call]
     atoms.set_chemical_symbols(["Cu", "Cu", "Au", "Au"])  # type: ignore[no-untyped-call]
     e_clust_unit = float(ce_probe.predict(atoms)) * len(atoms)
     atoms.set_chemical_symbols(["Cu", "Au", "Cu", "Au"])  # type: ignore[no-untyped-call]
@@ -100,7 +85,7 @@ def _build_chain_ce_and_atoms() -> tuple[ClusterExpansion, Atoms]:
         raise RuntimeError(
             "ECI probe produced a degenerate energy gap; check ClusterSpace"
         )
-    target_gap = _TARGET_GAP_KT * _KB_EV_PER_K * FIXTURE_TEMPERATURE
+    target_gap = _TARGET_GAP_KT * _KB_EV_PER_K * _FIXTURE_TEMPERATURE
     parameters[-1] = target_gap / gap_unit
     ce = ClusterExpansion(cluster_space=cs, parameters=parameters)
     atoms.set_chemical_symbols(["Cu", "Cu", "Au", "Au"])  # type: ignore[no-untyped-call]
@@ -110,8 +95,8 @@ def _build_chain_ce_and_atoms() -> tuple[ClusterExpansion, Atoms]:
 def _enumerate_two_cu_microstates() -> list[list[str]]:
     """All six (2 Cu, 2 Au) symbol assignments on the 4 fixture sites."""
     configs: list[list[str]] = []
-    for cu_indices in itertools.combinations(range(FIXTURE_N_SITES), 2):
-        symbols = ["Au"] * FIXTURE_N_SITES
+    for cu_indices in itertools.combinations(range(_FIXTURE_N_SITES), 2):
+        symbols = ["Au"] * _FIXTURE_N_SITES
         for i in cu_indices:
             symbols[i] = "Cu"
         configs.append(symbols)
@@ -154,8 +139,8 @@ def _analytic_class_probabilities(
 
 def assert_boltzmann_sampling(
     ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: Mapping[str, Any] | None = None,
     *,
+    ensemble_kwargs: Mapping[str, Any] | None = None,
     n_samples: int = 10_000,
     sample_interval: int = 50,
     burn_in: int = 5_000,
@@ -170,25 +155,25 @@ def assert_boltzmann_sampling(
     2 Au) split into four "clustered" (1 CuCu + 2 CuAu + 1 AuAu NN
     bonds) and two "alternating" (0 CuCu + 4 CuAu + 0 AuAu)
     configurations, giving two distinct CE energies. The pair ECI is
-    calibrated so the energy gap is approximately 3 kT at
-    `FIXTURE_TEMPERATURE`, producing analytic class populations of
-    roughly 0.98 (clustered) and 0.02 (alternating) — far enough from
-    a uniform 4:2 stationary distribution that broken acceptance is
-    detected at default tolerance.
+    calibrated so the energy gap is approximately 3 kT at T = 1000 K,
+    producing analytic class populations of roughly 0.98 (clustered)
+    and 0.02 (alternating) — far enough from a uniform 4:2 stationary
+    distribution that a kernel stationary at the wrong distribution
+    is detected at default tolerance.
 
     The function constructs a `Replica` with `ensemble_cls` and
     `ensemble_kwargs`, advances it for `burn_in` trial steps, then
     collects `n_samples` samples at `sample_interval` step intervals.
-    Compares empirical class proportions to analytic Boltzmann
-    probabilities; raises AssertionError if any class deviates by
+    Empirical class proportions are compared to the analytic Boltzmann
+    probabilities; AssertionError is raised if any class deviates by
     more than `sigma_tolerance` standard errors of the binomial.
 
     Args:
         ensemble_cls: A `CanonicalEnsemble` or subclass.
         ensemble_kwargs: Extra keyword arguments forwarded to
             ``ensemble_cls(...)``. Cannot include `structure`,
-            `calculator`, `temperature`, or `random_seed` (set by
-            `Replica`). For ensembles whose construction depends on
+            `calculator`, `temperature`, or `random_seed` (set by the
+            harness). For ensembles whose construction depends on
             fixture geometry, use the `FIXTURE_CHAIN_INDICES` constant.
         n_samples: Number of samples to collect after burn-in.
         sample_interval: MC trial steps between samples.
@@ -200,22 +185,26 @@ def assert_boltzmann_sampling(
     Raises:
         AssertionError: If any class's empirical population deviates
             from the analytic Boltzmann probability by more than
-            `sigma_tolerance × σ`, or if the fixture itself produces
-            an unexpected number of energy classes.
+            `sigma_tolerance × σ`.
+        RuntimeError: If the bundled fixture itself produces an
+            unexpected number of energy classes (a fixture-invariant
+            failure rather than a stationarity assertion failure).
     """
     ce, atoms = _build_chain_ce_and_atoms()
     multiplicities = _classify_by_energy(ce, atoms, _enumerate_two_cu_microstates())
-    assert len(multiplicities) == 2, (
-        f"Expected exactly 2 distinct energy classes for the 4-site "
-        f"chain with NN-only pair ECI; got {len(multiplicities)}"
-    )
-    p_analytic = _analytic_class_probabilities(multiplicities, FIXTURE_TEMPERATURE)
+    if len(multiplicities) != 2:
+        raise RuntimeError(
+            f"Bundled fixture invariant violated: expected exactly 2 distinct "
+            f"energy classes for the 4-site chain with NN-only pair ECI; "
+            f"got {len(multiplicities)}"
+        )
+    p_analytic = _analytic_class_probabilities(multiplicities, _FIXTURE_TEMPERATURE)
     class_energies = sorted(multiplicities.keys())
 
     rep = Replica(
         cluster_expansion=ce,
         atoms=atoms,
-        temperature=FIXTURE_TEMPERATURE,
+        temperature=_FIXTURE_TEMPERATURE,
         random_seed=seed,
         ensemble_cls=ensemble_cls,
         ensemble_kwargs=ensemble_kwargs,
