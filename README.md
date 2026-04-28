@@ -23,8 +23,15 @@ paths to the colder chains.
   subclass via `ensemble_cls=`, with extra constructor arguments
   forwarded via `ensemble_kwargs=`. Custom `_do_trial_step` overrides
   ride the PT machinery without subclassing `Replica`.
-- Per-replica `mchammer.BaseObserver` attachment, pass-through — use
-  your existing mchammer observers unchanged.
+- Per-replica `mchammer.BaseObserver` attachment on both serial and
+  process-parallel pools, with each replica receiving its own
+  observer copy. Three attach paths cover the spectrum: pass an
+  observer instance for the common case (`attach_observer`), a class
+  plus constructor arguments when picklable (`attach_observer_class`),
+  or a top-level factory that constructs the observer inside each
+  worker — required for observers like `ClusterCountObserver` whose
+  constructors take icet `ClusterSpace` objects that do not pickle
+  (`attach_observer_factory`).
 - HDF5 output bundling one `mchammer.BaseDataContainer` per replica plus
   a compact `ExchangeHistory` of per-pair swap statistics and
   replica-label trajectories.

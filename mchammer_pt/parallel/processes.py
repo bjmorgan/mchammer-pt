@@ -152,10 +152,24 @@ def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
 class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
-    One OS process per replica. Satisfies both `ReplicaPool` and
-    `ObservablePool`. Use ``attach_observer`` for pre-built picklable
-    observer instances; use ``attach_observer_class`` when the class
-    itself is importable but a live instance is not picklable.
+    One OS process per replica. Satisfies `ObservablePool`: observers
+    can be attached via three paths, each suited to a different kind
+    of observer:
+
+    - ``attach_observer(observer)`` — for observers that pickle as
+      whole instances (most stock `mchammer` observers without icet
+      construction inputs, and most user observers built from basic
+      types). Each worker receives its own deserialised copy via a
+      pickle round-trip.
+    - ``attach_observer_class(cls, /, *args, **kwargs)`` — for
+      observers whose constructor arguments are picklable but whose
+      constructed instance is awkward to ship. Each worker constructs
+      its own ``cls(*args, **kwargs)`` locally.
+    - ``attach_observer_factory(factory)`` — for observers whose
+      constructor takes icet objects (``ClusterSpace``,
+      ``ClusterExpansion``) that do not pickle. The factory runs
+      inside each worker with that worker's ``Replica`` and reaches
+      icet objects via ``replica.ensemble.calculator.cluster_expansion``.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -163,16 +177,18 @@ class ProcessPool:
             independent copy.
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
-        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
-            every worker's Replica. Spawn workers re-import the class
-            by fully qualified name, so it must live in an importable
-            module: top-level classes in a ``python script.py``
-            invocation work (the worker re-runs the script as
-            ``__main__``); classes defined in a Jupyter cell or REPL
-            do not. Move such classes to a ``.py`` module file. The
-            interactive-``__main__`` case is rejected up-front in
-            ``__init__`` rather than producing a deep multiprocessing
-            traceback.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used
+            by every worker's Replica. Spawn workers re-import the
+            class by fully qualified name, so it must live in an
+            importable module: top-level classes in a
+            ``python script.py`` invocation work (the worker re-runs
+            the script as ``__main__``); classes defined in a Jupyter
+            cell or REPL do not. Move such classes to a ``.py``
+            module file. The interactive-``__main__`` case is
+            rejected up-front in ``__init__`` rather than producing a
+            deep multiprocessing traceback. The same constraint
+            applies to the class argument of ``attach_observer_class``
+            and the callable argument of ``attach_observer_factory``.
         ensemble_kwargs: extra keyword arguments forwarded to
             ``ensemble_cls(...)``. All values must be picklable.
             Cannot include the four kwargs reserved by `Replica`

@@ -131,7 +131,7 @@ class ObservablePool(ReplicaPool, Protocol):
 
     def attach_observer_factory(
         self,
-        factory: Callable[["Replica"], BaseObserver],
+        factory: Callable[[Replica], BaseObserver],
         *,
         replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:

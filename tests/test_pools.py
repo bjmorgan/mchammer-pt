@@ -489,7 +489,7 @@ def test_process_pool_public_methods_raise_after_shutdown(
     with pytest.raises(RuntimeError, match="shut down"):
         len(pool)
     with pytest.raises(RuntimeError, match="shut down"):
-        pool.temperatures
+        _ = pool.temperatures
     with pytest.raises(RuntimeError, match="shut down"):
         pool.advance_all(1)
     with pytest.raises(RuntimeError, match="shut down"):
@@ -807,7 +807,7 @@ def test_process_pool_attach_observer_factory_with_icet_objects(
 def test_process_pool_attach_observer_factory_rejects_function_local_callable(
     toy_ce, toy_atoms, tmp_path: Path
 ):
-    """Function-local factory is rejected up-front (would fail to re-import in worker)."""
+    """Function-local factory is rejected up-front (re-import in worker would fail)."""
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
         def local_factory(replica):
@@ -868,6 +868,7 @@ def test_observer_factory_data_matches_across_pools(
     observer users actually want to use.
     """
     import pandas as pd
+
     from tests._observer_fixtures import cluster_count_factory
 
     temperatures = [300.0, 400.0, 500.0]

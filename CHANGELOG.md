@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ProcessPool` now satisfies `ObservablePool`: observers can be
+  attached to process-parallel runs without falling back to
+  `SerialPool`. Closes the long-standing parity gap that forced
+  users to choose between observers and parallelism.
+- `ObservablePool.attach_observer_class(cls, /, *args, replicas, **kwargs)`
+  — escape hatch for observers whose instances do not pickle but
+  whose constructor arguments do. Constructs `cls(*args, **kwargs)`
+  once per selected replica inside that replica's process. The
+  parent runs an eager dry-run construction so bad arguments raise
+  at the call site rather than from a worker.
+- `ObservablePool.attach_observer_factory(factory)` — for observers
+  whose constructors take inputs that do not pickle (notably icet
+  `ClusterSpace` and `ClusterExpansion`). The factory is a top-level
+  callable that runs inside each worker with that worker's `Replica`
+  as its argument; it reaches icet objects via
+  `replica.ensemble.calculator.cluster_expansion`. icet objects
+  never cross the process boundary.
+
+### Changed
+
+- `ObservablePool.attach_observer` parameter renamed from `indices=`
+  to `replicas=`. The new name is semantically clearer and avoids
+  collision with constructor kwargs forwarded through
+  `attach_observer_class(**kwargs)`. The same rename was applied to
+  `BaseParallelTempering.attach_observer` for consistency.
+- `SerialPool.attach_observer` now gives each selected replica its
+  own deserialised observer copy via a `pickle` round-trip, instead
+  of registering the same Python instance on every replica. Stateful
+  observers (counters, accumulators, private RNGs) no longer share
+  state across replicas. Stateless observers — the typical case —
+  see no observable change.
+- `ProcessPool` raises `RuntimeError("pool is shut down")` from
+  every public method called after `shutdown()`. Previously these
+  silently no-opped or raised an opaque `IndexError`.
+
+### Internal
+
+- `_check_ensemble_cls_importable` (process-pool spawn-import guard)
+  generalised to `_check_importable(obj, *, kind)` and moved to
+  `mchammer_pt/parallel/_imports.py`. Now accepts both classes and
+  callables; reused for `ensemble_cls`, the class argument to
+  `attach_observer_class`, and the callable argument to
+  `attach_observer_factory`.
+
 ## [0.2.0] - 2026-04-28
 
 ### Added

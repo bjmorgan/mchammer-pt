@@ -76,7 +76,7 @@ class NotAnObserver:
         self.interval = interval
 
 
-def stateful_counter_factory(replica: "Replica") -> BaseObserver:
+def stateful_counter_factory(replica: Replica) -> BaseObserver:
     """Factory used by ProcessPool factory-path tests.
 
     Returns a ``StatefulCounter`` whose tag encodes the replica's
@@ -86,7 +86,7 @@ def stateful_counter_factory(replica: "Replica") -> BaseObserver:
     return StatefulCounter(interval=10, tag=f"counter_T{int(replica.temperature)}")
 
 
-def cluster_count_factory(replica: "Replica") -> BaseObserver:
+def cluster_count_factory(replica: Replica) -> BaseObserver:
     """Factory using icet objects only available inside the worker.
 
     The cluster-space and structure references come from the worker's
@@ -102,6 +102,6 @@ def cluster_count_factory(replica: "Replica") -> BaseObserver:
     )
 
 
-def factory_returning_non_observer(replica: "Replica") -> object:
+def factory_returning_non_observer(replica: Replica) -> object:
     """Factory whose return type is wrong; pins the isinstance check."""
     return "not an observer"

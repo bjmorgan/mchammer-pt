@@ -121,53 +121,30 @@ def test_accepted_exchange_actually_swaps_configurations(toy_ce, toy_atoms):
 
 
 def test_attach_observer_routes_to_specified_replicas(toy_ce, toy_atoms):
-    """attach_observer(replicas=[1, 2]) attaches to exactly those replicas."""
-    from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
-        BaseObserver,
-    )
+    """attach_observer(replicas=[1, 2]) attaches to exactly those replicas.
+
+    Each replica receives its own deserialised copy of the observer;
+    routing is verified via the data containers rather than parent-side
+    instance state, since the parent-side instance is never registered
+    on any replica.
+    """
+    from tests._observer_fixtures import StatefulCounter
 
     replicas = [
         Replica(toy_ce, toy_atoms, temperature=300.0 + 100 * i, random_seed=i)
         for i in range(3)
     ]
     pool = SerialPool(replicas)
-
-    class Counter(BaseObserver):
-        def __init__(self, tag: str) -> None:
-            super().__init__(interval=5, return_type=int, tag=tag)
-            self.n_calls = 0
-
-        def get_observable(self, structure) -> int:
-            self.n_calls += 1
-            return self.n_calls
-
     pt = _AlwaysRejectPT(pool=pool, block_size=20, random_seed=0)
-    # Three distinct observer INSTANCES, one per target replica — mchammer
-    # observers keep per-instance state, so separate instances let us
-    # distinguish which replica fired which observer.
-    obs = [Counter(tag=f"c{i}") for i in range(3)]
-    for i, o in enumerate(obs):
-        pt.attach_observer(o, replicas=[i])
-    pt.run(n_cycles=3)
-    # All three attached; all three should fire.
-    for i, o in enumerate(obs):
-        assert o.n_calls > 0, f"observer on replica {i} did not fire"
 
-    # Now attach a single observer to only replicas 1 and 2, not 0.
-    only_selected = Counter(tag="selected")
-    pt.attach_observer(only_selected, replicas=[1, 2])
+    # Attach a counter to replicas 1 and 2 only; replica 0 gets nothing.
+    pt.attach_observer(StatefulCounter(interval=5, tag="counter"), replicas=[1, 2])
     pt.run(n_cycles=3)
-    # Fires for each of replicas 1 and 2 at each tick; replica 0 does not.
-    assert only_selected.n_calls > 0
-    # The counter is shared across the two target replicas; its call
-    # count should be approximately twice what a single-replica attach
-    # would yield, not three times.
-    single_attach = Counter(tag="single")
-    pt.attach_observer(single_attach, replicas=[0])
-    pt.run(n_cycles=3)
-    # The selected-on-two observer saw roughly twice as many ticks per
-    # cycle as the single-on-one observer would have in the same run.
-    assert single_attach.n_calls > 0
+
+    dcs = pool.data_containers()
+    assert "counter" not in dcs[0].data.columns, "replica 0 should have no observer"
+    assert "counter" in dcs[1].data.columns, "replica 1 should have observer output"
+    assert "counter" in dcs[2].data.columns, "replica 2 should have observer output"
 
 
 def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
@@ -249,37 +226,6 @@ def test_run_assigns_history_on_mid_run_exception(toy_ce, toy_atoms):
     assert pt.history.energies_per_cycle.shape == (6, 3)
     assert np.all(np.isfinite(pt.history.energies_per_cycle[:2]))
 
-
-def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms, tmp_path):
-    """Pools that don't satisfy ObservablePool must reject attach_observer."""
-    from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
-        BaseObserver,
-    )
-
-    from mchammer_pt.parallel.processes import ProcessPool
-
-    ce_path = tmp_path / "toy.ce"
-    toy_ce.write(str(ce_path))
-    pool = ProcessPool(
-        ce_path=ce_path,
-        initial_atoms=toy_atoms,
-        temperatures=[300.0, 400.0],
-        seeds=[0, 1],
-    )
-
-    class _DummyObs(BaseObserver):
-        def __init__(self) -> None:
-            super().__init__(interval=10, return_type=int, tag="dummy")
-
-        def get_observable(self, structure) -> int:
-            return 0
-
-    try:
-        pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
-        with pytest.raises(TypeError, match="ObservablePool"):
-            pt.attach_observer(_DummyObs())
-    finally:
-        pool.shutdown()
 
 
 def test_orchestrator_context_manager_shuts_down_pool(toy_ce, toy_atoms, tmp_path):
