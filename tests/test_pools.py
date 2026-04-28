@@ -857,3 +857,57 @@ def test_process_pool_mid_run_attach(toy_ce, toy_atoms, tmp_path: Path):
         pool.shutdown()
 
 
+def test_observer_factory_data_matches_across_pools(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """attach_observer_factory produces identical data containers on both pools.
+
+    Headline use case: ClusterCountObserver requires a ClusterSpace
+    that does not pickle, so this can only ride the factory path. The
+    test pins that the factory path is cross-pool consistent for an
+    observer users actually want to use.
+    """
+    import pandas as pd
+    from tests._observer_fixtures import cluster_count_factory
+
+    temperatures = [300.0, 400.0, 500.0]
+    seeds = [11, 22, 33]
+    n_steps = 200
+
+    # Serial side.
+    serial_replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=s)
+        for T, s in zip(temperatures, seeds, strict=True)
+    ]
+    serial = SerialPool(serial_replicas)
+    try:
+        serial.attach_observer_factory(cluster_count_factory)
+        serial.advance_all(n_steps)
+        serial_dcs = serial.data_containers()
+    finally:
+        serial.shutdown()
+
+    # Process side.
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    process = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=temperatures,
+        seeds=seeds,
+    )
+    try:
+        process.attach_observer_factory(cluster_count_factory)
+        process.advance_all(n_steps)
+        process_dcs = process.data_containers()
+    finally:
+        process.shutdown()
+
+    # Identical column-for-column.
+    assert len(serial_dcs) == len(process_dcs)
+    for s_dc, p_dc in zip(serial_dcs, process_dcs, strict=True):
+        pd.testing.assert_frame_equal(
+            s_dc.data, p_dc.data, check_exact=False, rtol=1e-12
+        )
+
+
