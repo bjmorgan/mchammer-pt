@@ -23,7 +23,6 @@ from the worker's exception.
 from __future__ import annotations
 
 import multiprocessing as mp
-import sys
 import traceback
 from collections.abc import Mapping, Sequence
 from multiprocessing.connection import Connection
@@ -39,6 +38,7 @@ from mchammer.data_containers.base_data_container import (  # type: ignore[impor
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from ..replica import Replica
+from ._imports import _check_class_importable
 
 
 def _worker(
@@ -111,52 +111,6 @@ def _worker(
             conn.send(("ERR", traceback.format_exc()))
 
 
-def _check_ensemble_cls_importable(ensemble_cls: type) -> None:
-    """Reject ``ensemble_cls`` definitions spawn workers cannot re-import.
-
-    Spawn workers pickle ``ensemble_cls`` by fully qualified name and
-    re-import it on the other side of the process boundary. Two
-    definition sites break that contract:
-
-    1. **Interactive ``__main__``.** A class defined in a Jupyter cell
-       or REPL has ``__module__ == "__main__"``, but
-       ``sys.modules["__main__"]`` has no importable ``__file__``. Top-
-       level classes in ``python script.py`` are fine (the worker re-
-       runs the script as ``__main__``); the discriminator is whether
-       ``__main__.__file__`` ends in ``.py``.
-    2. **Function-local class.** A class defined inside a function has
-       ``"<locals>"`` in its ``__qualname__``. Pickle cannot walk into
-       a function's local scope to recover the class.
-
-    Letting either through produces a deep ``PicklingError`` from the
-    multiprocessing internals at parent ``process.start()``, or the
-    worker exiting before ``_worker`` runs and the parent's
-    ``recv()`` raising ``EOFError`` — neither error mentions
-    ``ensemble_cls``. The preflight raises a clear ``ValueError`` up-
-    front instead.
-    """
-    if "<locals>" in ensemble_cls.__qualname__:
-        raise ValueError(
-            f"ensemble_cls={ensemble_cls.__qualname__!r} is defined "
-            f"inside a function, so spawn workers cannot re-import it. "
-            f"Move the class to module top level (or to a method of a "
-            f"top-level class)."
-        )
-    if ensemble_cls.__module__ != "__main__":
-        return
-    main_module = sys.modules.get("__main__")
-    main_file = getattr(main_module, "__file__", None)
-    if main_file is not None and main_file.endswith(".py"):
-        return
-    raise ValueError(
-        f"ensemble_cls={ensemble_cls.__name__!r} is defined in __main__ "
-        f"in a session whose __main__ cannot be re-imported by spawn "
-        f"workers (typically Jupyter or a REPL). Move the class into a "
-        f".py module that both your session and the workers can import, "
-        f"e.g. ``my_moves.py``, and pass it as ``my_moves.MyEnsemble``."
-    )
-
-
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
     return {
         "numbers": np.asarray(atoms.numbers, dtype=np.int64),
@@ -208,7 +162,7 @@ class ProcessPool:
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
-        _check_ensemble_cls_importable(ensemble_cls)
+        _check_class_importable(ensemble_cls, kind="ensemble_cls")
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
         if len(temperatures_list) != len(seeds_list):
