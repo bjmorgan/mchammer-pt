@@ -61,13 +61,7 @@ def test_data_container_is_mchammer_native(toy_ce, toy_atoms):
 
 
 def test_ensemble_property_returns_underlying_canonical_ensemble(toy_ce, toy_atoms):
-    """`Replica.ensemble` exposes the mchammer ensemble for in-process callers.
-
-    Pinned because the property exists for callers using a `SerialPool`
-    that need to read state on a custom ensemble subclass (e.g. the
-    `acceptance_rates()` method on `mchammer_moves.CustomCanonicalEnsemble`)
-    without reaching into `_ensemble`.
-    """
+    """`Replica.ensemble` returns the underlying mchammer ensemble."""
     from mchammer.ensembles import CanonicalEnsemble
 
     rep = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)

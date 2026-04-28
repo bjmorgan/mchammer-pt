@@ -62,13 +62,7 @@ def test_serial_pool_basic_methods(toy_ce, toy_atoms):
 
 
 def test_serial_pool_replicas_returns_in_process_handles(toy_ce, toy_atoms):
-    """`SerialPool.replicas` exposes the in-process `Replica` list.
-
-    Available because `SerialPool` keeps its replicas in-process; used
-    by callers that need ensemble-level state on a custom ensemble
-    subclass (read via `Replica.ensemble`). The returned list is a
-    copy, so caller-side mutation does not corrupt the pool.
-    """
+    """`SerialPool.replicas` returns a copy of the in-process `Replica` list."""
     pool = _make_serial(toy_ce, toy_atoms)
     try:
         replicas = pool.replicas
