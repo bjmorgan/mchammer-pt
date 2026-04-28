@@ -13,6 +13,8 @@ Worker commands:
 - ``("GET_OCC",)`` -> replies ``("OK", np.ndarray)`` with occupations
 - ``("SET_OCC", occupations)`` -> overwrites state
 - ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
+- ``("ATTACH_OBS", blob)`` -> deserialises a pickled ``BaseObserver``
+  and attaches it to the replica; replies ``("OK", None)``
 - ``("SHUTDOWN",)`` -> worker exits cleanly
 
 Every reply is of the form ``(status, payload)`` with status either
@@ -23,11 +25,12 @@ from the worker's exception.
 from __future__ import annotations
 
 import multiprocessing as mp
+import pickle
 import traceback
 from collections.abc import Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from ase import Atoms
@@ -36,6 +39,9 @@ from mchammer.data_containers.base_data_container import (  # type: ignore[impor
     BaseDataContainer,
 )
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+    BaseObserver,
+)
 
 from ..replica import Replica
 from ._imports import _check_class_importable
@@ -101,6 +107,10 @@ def _worker(
                 conn.send(("OK", None))
             elif op == "GET_DC":
                 conn.send(("OK", replica.data_container()))
+            elif op == "ATTACH_OBS":
+                observer = pickle.loads(cmd[1])
+                replica.attach_mchammer_observer(observer)
+                conn.send(("OK", None))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
                 conn.close()
@@ -123,10 +133,9 @@ def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
 class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
-    One OS process per replica. Satisfies `ReplicaPool`. Does NOT
-    implement `ObservablePool` because `mchammer.BaseObserver`
-    instances do not pickle reliably across the spawn boundary; for
-    observer support use `SerialPool`.
+    One OS process per replica. Satisfies `ReplicaPool`. Does not yet
+    implement `ObservablePool` (``attach_observer_class`` is pending);
+    ``attach_observer`` is available for picklable observer instances.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -299,6 +308,44 @@ class ProcessPool:
                 raise RuntimeError(f"worker GET_DC failed: {payload}")
             containers.append(payload)
         return containers
+
+    def attach_observer(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an mchammer observer to selected workers.
+
+        Each selected worker receives its own deserialised copy via a
+        pickle round-trip in the worker. The parent eagerly validates
+        picklability before contacting any worker. Failure semantics:
+        the parent's ``pickle.dumps`` raising leaves all workers
+        untouched; a worker raising during ``pickle.loads`` leaves the
+        pool partially-attached and the run should abort.
+        """
+        self._check_open()
+        target_indices = (
+            range(len(self._workers))
+            if replicas == "all"
+            else [int(i) for i in replicas]
+        )
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS", blob))
+        for i in target_indices:
+            _, conn = self._workers[i]
+            status, payload = conn.recv()
+            if status != "OK":
+                raise RuntimeError(f"worker ATTACH_OBS failed: {payload}")
 
     def shutdown(self) -> None:
         for _, conn in self._workers:

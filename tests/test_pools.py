@@ -502,3 +502,48 @@ def test_process_pool_public_methods_raise_after_shutdown(
         pool.swap_configurations(0, 1)
     with pytest.raises(RuntimeError, match="shut down"):
         pool.data_containers()
+    with pytest.raises(RuntimeError, match="shut down"):
+        from tests._observer_fixtures import StatefulCounter
+        pool.attach_observer(StatefulCounter(interval=1))
+
+
+def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
+    """Observer fires inside each ProcessPool worker and lands in its DC."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        assert "counter" in dcs[0].data.columns
+        assert "counter" in dcs[1].data.columns
+        assert "counter" not in dcs[2].data.columns
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_unpicklable_raises_eagerly(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Unpicklable observer raises TypeError without contacting any worker."""
+    from mchammer.observers.base_observer import BaseObserver
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        cb = lambda x: x  # noqa: E731
+
+        class Unpicklable(BaseObserver):
+            def __init__(self, interval: int) -> None:
+                super().__init__(interval=interval, return_type=int, tag="u")
+                self.cb = cb
+
+            def get_observable(self, structure):
+                return self.cb(0)
+
+        with pytest.raises(TypeError, match="attach_observer_class"):
+            pool.attach_observer(Unpicklable(interval=10))
+        # Workers are still alive and responsive.
+        pool.advance_all(5)
+    finally:
+        pool.shutdown()
