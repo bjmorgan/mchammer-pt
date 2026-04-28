@@ -390,6 +390,10 @@ def test_process_pool_public_methods_raise_after_shutdown(
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     pool.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
+        len(pool)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.temperatures
+    with pytest.raises(RuntimeError, match="shut down"):
         pool.advance_all(1)
     with pytest.raises(RuntimeError, match="shut down"):
         pool.current_energies()
