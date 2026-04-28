@@ -689,6 +689,76 @@ def test_observer_data_matches_across_pools(
         )
 
 
+def test_serial_pool_attach_observer_factory_constructs_per_replica(toy_ce, toy_atoms):
+    """attach_observer_factory calls the factory once per replica with that replica."""
+    from tests._observer_fixtures import StatefulCounter
+
+    def make_counter(replica):
+        # Use the replica's temperature in the tag so different replicas
+        # get different tags — proves the factory really did see each
+        # replica's own state.
+        return StatefulCounter(interval=10, tag=f"counter_T{int(replica.temperature)}")
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer_factory(make_counter, replicas=[0, 1])
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        assert "counter_T300" in dcs[0].data.columns
+        assert "counter_T400" in dcs[1].data.columns
+        # Replica 2 had no factory called for it.
+        assert "counter_T500" not in dcs[2].data.columns
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_factory_rejects_non_observer(toy_ce, toy_atoms):
+    """Factory returning a non-BaseObserver raises TypeError."""
+
+    def bad_factory(replica):
+        return "not an observer"
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(TypeError, match="not a BaseObserver"):
+            pool.attach_observer_factory(bad_factory)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_factory_with_unpicklable_construction_inputs(
+    toy_ce, toy_atoms
+):
+    """Factory can use icet objects (ClusterSpace) that wouldn't survive pickle.
+
+    This pins the central use case: ClusterCountObserver requires a
+    ClusterSpace, which is not picklable. The factory pattern lets the
+    worker reach the cluster space via the replica's ensemble.
+    """
+    from mchammer.observers import ClusterCountObserver  # type: ignore[import-untyped]
+
+    def make_cco(replica):
+        cs = replica.ensemble.calculator.cluster_expansion.get_cluster_space_copy()
+        return ClusterCountObserver(
+            cluster_space=cs,
+            structure=replica.ensemble.structure,
+            interval=20,
+        )
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer_factory(make_cco)
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        for dc in dcs:
+            # ClusterCountObserver writes columns named
+            # "<cluster_label>_<species>" — at least one such column
+            # must exist if the observer fired.
+            assert any(col not in {"mctrial", "potential"} for col in dc.data.columns)
+    finally:
+        pool.shutdown()
+
+
 def test_process_pool_mid_run_attach(toy_ce, toy_atoms, tmp_path: Path):
     """Observer attached mid-run only fires on subsequent advances.
 

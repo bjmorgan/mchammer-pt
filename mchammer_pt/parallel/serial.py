@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pickle
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -125,6 +125,44 @@ class SerialPool:
         del probe
         for i in target_indices:
             self._replicas[i].attach_mchammer_observer(cls(*args, **kwargs))
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[Replica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed locally per replica.
+
+        ``factory(replica)`` is called once per selected replica with
+        that replica as its sole argument and must return a fresh
+        ``BaseObserver``. The factory can reach any worker-local
+        state via the replica (notably ``replica.ensemble.cluster_expansion``)
+        — useful for observers whose constructors take icet objects
+        (``ClusterSpace``, ``ClusterExpansion``) that do not pickle and
+        therefore cannot travel via ``attach_observer_class``.
+
+        On ``ProcessPool``, the factory must be a top-level function
+        or class method importable by fully qualified name. ``SerialPool``
+        runs in-process and is permissive about this, but writing
+        portable factories means they will work unchanged when the
+        pool type is swapped.
+        """
+        target_indices = (
+            range(len(self._replicas))
+            if replicas == "all"
+            else [int(i) for i in replicas]
+        )
+        if not target_indices:
+            return
+        for i in target_indices:
+            observer = factory(self._replicas[i])
+            if not isinstance(observer, BaseObserver):
+                raise TypeError(
+                    f"attach_observer_factory: factory returned "
+                    f"{type(observer).__name__}, not a BaseObserver"
+                )
+            self._replicas[i].attach_mchammer_observer(observer)
 
     def data_containers(self) -> list[BaseDataContainer]:
         return [r.data_container() for r in self._replicas]
