@@ -15,7 +15,7 @@ interpreters) satisfy only `ReplicaPool`.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
@@ -110,4 +110,18 @@ class ObservablePool(ReplicaPool, Protocol):
         replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         """Attach an mchammer observer to selected replicas."""
+        ...
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer per selected replica.
+
+        Escape hatch for observers whose instances do not pickle.
+        """
         ...
