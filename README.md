@@ -32,6 +32,12 @@ paths to the colder chains.
   as pure functions over the run output.
 - `ExchangeCallback` protocol for PT-level events (with `ExchangePrinter`
   and `SwapRateTracker` built-ins).
+- `mchammer_pt.testing.assert_boltzmann_sampling` — public utility for
+  pinning the empirical stationary distribution of a custom
+  `CanonicalEnsemble` subclass against an analytic Boltzmann fixture.
+  Downstream packages providing custom moves can use this to pin
+  stationarity correctness against the same anchor as mchammer-pt's
+  own test suite.
 
 ## Install
 
