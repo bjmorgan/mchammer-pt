@@ -167,7 +167,7 @@ def test_serial_pool_attach_observer_fires(toy_ce, toy_atoms):
     pool = _make_serial(toy_ce, toy_atoms)
     try:
         obs = Counter(interval=10)
-        pool.attach_observer(obs, indices=[0, 1])
+        pool.attach_observer(obs, replicas=[0, 1])
         pool.advance_all(50)
         assert obs.n_calls > 0
     finally:

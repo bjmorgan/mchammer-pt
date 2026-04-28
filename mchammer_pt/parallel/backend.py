@@ -107,7 +107,7 @@ class ObservablePool(ReplicaPool, Protocol):
     def attach_observer(
         self,
         observer: BaseObserver,
-        indices: Sequence[int] | Literal["all"] = "all",
+        replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         """Attach an mchammer observer to selected replicas."""
         ...

@@ -62,12 +62,12 @@ class SerialPool:
     def attach_observer(
         self,
         observer: BaseObserver,
-        indices: Sequence[int] | Literal["all"] = "all",
+        replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         target_indices = (
             range(len(self._replicas))
-            if indices == "all"
-            else [int(i) for i in indices]
+            if replicas == "all"
+            else [int(i) for i in replicas]
         )
         for i in target_indices:
             self._replicas[i].attach_mchammer_observer(observer)
