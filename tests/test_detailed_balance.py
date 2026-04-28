@@ -11,9 +11,9 @@ two Cu and two Au and an NN-only pair ECI. The six microstates of
 NN bonds) and two "alternating" (0 CuCu + 4 CuAu + 0 AuAu)
 configurations, giving two distinct CE energies. The pair ECI is
 calibrated so the energy gap is approximately 3 kT at T = 1000 K,
-producing analytic class populations of roughly 0.98 / 0.02 — far
-from the 4:2 uniform ratio a broken acceptance criterion would
-produce.
+producing analytic class populations of roughly 0.98 (clustered)
+and 0.02 (alternating) — far from the 4:2 uniform ratio a broken
+acceptance criterion would produce on this fixture.
 
 Parametrise the main test over ``ensemble_cls`` so future custom
 moves (e.g. row-translation subclasses) join the list as a one-line
@@ -34,7 +34,6 @@ from icet import ClusterExpansion, ClusterSpace  # type: ignore[import-untyped]
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from mchammer_pt.replica import Replica
-from tests._ensemble_fixtures import HighAcceptanceCanonicalEnsemble
 
 _T_KELVIN = 1000.0
 _KB_EV_PER_K = 8.617333262145e-5
@@ -100,11 +99,16 @@ def _classify_by_energy(
     atoms: Atoms,
     configs: list[list[str]],
 ) -> dict[float, int]:
-    """Group microstates by total CE energy; return {energy: multiplicity}."""
+    """Group microstates by total CE energy; return {energy: multiplicity}.
+
+    Operates on a copy of `atoms` so the caller's symbol assignment
+    is preserved.
+    """
+    work = atoms.copy()
     multiplicities: dict[float, int] = {}
     for symbols in configs:
-        atoms.set_chemical_symbols(symbols)
-        e_total = float(ce.predict(atoms)) * len(atoms)
+        work.set_chemical_symbols(symbols)
+        e_total = float(ce.predict(work)) * len(work)
         for e_existing in list(multiplicities):
             if abs(e_total - e_existing) < 1e-9:
                 multiplicities[e_existing] += 1
@@ -115,10 +119,10 @@ def _classify_by_energy(
 
 
 def _analytic_class_probabilities(
-    multiplicities: dict[float, int], T: float
+    multiplicities: dict[float, int], temperature: float
 ) -> dict[float, float]:
     """Boltzmann probability per energy class, P(E) ∝ g(E) exp(-βE)."""
-    beta = 1.0 / (_KB_EV_PER_K * T)
+    beta = 1.0 / (_KB_EV_PER_K * temperature)
     weights = {e: g * np.exp(-e * beta) for e, g in multiplicities.items()}
     Z = sum(weights.values())
     return {e: float(w / Z) for e, w in weights.items()}
@@ -195,11 +199,16 @@ def test_detailed_balance_test_detects_broken_acceptance() -> None:
     """Sanity: the test fails when the ensemble accepts every move.
 
     `HighAcceptanceCanonicalEnsemble` overrides `_acceptance_condition`
-    to always return True. The stationary distribution under that
-    chain is uniform over the six microstates (4:2 by class
-    multiplicity); the analytic Boltzmann distribution at T=1000 K
-    with ΔE ≈ 3 kT is far from uniform. The detailed-balance check
-    must detect the deviation.
+    to always return True. On this fixture the stationary distribution
+    under always-accept is uniform over the six microstates (4:2 by
+    class multiplicity, because every state has the same number of
+    (Cu, Au) site-pairs and the proposal kernel is therefore doubly
+    stochastic — this is a property of the symmetric 2-Cu/2-Au
+    fixture, not of always-accept in general). The analytic Boltzmann
+    distribution at T = 1000 K with ΔE ≈ 3 kT is far from uniform; the
+    detailed-balance check must detect the deviation.
     """
+    from tests._ensemble_fixtures import HighAcceptanceCanonicalEnsemble
+
     with pytest.raises(AssertionError, match="empirical"):
         _run_and_assert_boltzmann(HighAcceptanceCanonicalEnsemble)
