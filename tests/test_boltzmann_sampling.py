@@ -1,4 +1,4 @@
-"""Detailed-balance test: empirical Boltzmann distribution at fixed T.
+"""Boltzmann-sampling test: empirical distribution at fixed T.
 
 Pins that a `CanonicalEnsemble` subclass passed via ``ensemble_cls=``
 samples the analytic Boltzmann distribution at a chosen temperature,
@@ -195,7 +195,7 @@ def test_ensemble_samples_correct_boltzmann_distribution(
     _run_and_assert_boltzmann(ensemble_cls)
 
 
-def test_detailed_balance_test_detects_broken_acceptance() -> None:
+def test_boltzmann_check_detects_broken_acceptance() -> None:
     """Sanity: the test fails when the ensemble accepts every move.
 
     `HighAcceptanceCanonicalEnsemble` overrides `_acceptance_condition`
@@ -206,7 +206,7 @@ def test_detailed_balance_test_detects_broken_acceptance() -> None:
     stochastic — this is a property of the symmetric 2-Cu/2-Au
     fixture, not of always-accept in general). The analytic Boltzmann
     distribution at T = 1000 K with ΔE ≈ 3 kT is far from uniform; the
-    detailed-balance check must detect the deviation.
+    Boltzmann-sampling assertion must detect the deviation.
     """
     from tests._ensemble_fixtures import HighAcceptanceCanonicalEnsemble
 
