@@ -61,6 +61,26 @@ def test_serial_pool_basic_methods(toy_ce, toy_atoms):
         pool.shutdown()
 
 
+def test_serial_pool_replicas_returns_in_process_handles(toy_ce, toy_atoms):
+    """`SerialPool.replicas` exposes the in-process `Replica` list.
+
+    Available because `SerialPool` keeps its replicas in-process; used
+    by callers that need ensemble-level state on a custom ensemble
+    subclass (read via `Replica.ensemble`). The returned list is a
+    copy, so caller-side mutation does not corrupt the pool.
+    """
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        replicas = pool.replicas
+        assert len(replicas) == 3
+        assert [r.temperature for r in replicas] == [300.0, 400.0, 500.0]
+        # Mutation of the returned list must not affect the pool.
+        replicas.clear()
+        assert len(pool) == 3
+    finally:
+        pool.shutdown()
+
+
 def test_process_pool_basic_methods(toy_ce, toy_atoms, tmp_path: Path):
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:

@@ -32,6 +32,18 @@ class SerialPool:
         return len(self._replicas)
 
     @property
+    def replicas(self) -> list[Replica]:
+        """The pool's `Replica` instances.
+
+        Available because `SerialPool` keeps its replicas in-process.
+        `ProcessPool` does not expose this — its replicas live in
+        worker processes — so callers that need per-replica state
+        across both pool kinds must go through pool methods such as
+        `data_containers`.
+        """
+        return list(self._replicas)
+
+    @property
     def temperatures(self) -> list[float]:
         return [r.temperature for r in self._replicas]
 

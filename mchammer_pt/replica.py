@@ -110,6 +110,19 @@ class Replica:
         """Replica temperature in kelvin."""
         return self._temperature
 
+    @property
+    def ensemble(self) -> CanonicalEnsemble:
+        """The underlying mchammer ensemble.
+
+        Exposed so callers using a `SerialPool` can read ensemble-level
+        state directly (e.g. per-move acceptance counters on a custom
+        ensemble subclass). For `ProcessPool` runs the ensemble lives
+        in a worker process and is not reachable through this property
+        on the parent-side replica handle — that path requires a pool
+        method (e.g. `data_containers`) that performs IPC.
+        """
+        return self._ensemble
+
     def advance(self, n_steps: int) -> None:
         """Run `n_steps` canonical MC trial steps.
 
