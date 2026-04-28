@@ -259,3 +259,123 @@ def test_run_writes_hdf5_when_file_provided(tmp_path, toy_ce, toy_atoms):
     assert history.energies_per_cycle.shape == (4, 2)
     assert len(containers) == 2
     assert meta["block_size"] == 50
+
+
+def test_orchestrator_forwards_ensemble_cls_to_default_pool(toy_ce, toy_atoms):
+    """Default-pool path constructs replicas with the supplied class."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0, 1200.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "beta"},
+    )
+    pool = pt.pool
+    # Default pool is SerialPool; replicas are reachable for inspection.
+    for replica in pool._replicas:  # type: ignore[attr-defined]
+        assert isinstance(replica._ensemble, TaggedCanonicalEnsemble)
+        assert replica._ensemble.tag == "beta"
+
+
+def test_orchestrator_rejects_pool_plus_custom_ensemble_cls(toy_ce, toy_atoms):
+    """pool= and ensemble_cls= together is ambiguous and rejected up-front."""
+    from mchammer_pt import SerialPool
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    pool = SerialPool([
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 600.0])
+    ])
+    try:
+        with pytest.raises(ValueError, match="ensemble_cls"):
+            CanonicalParallelTempering(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperatures=[300.0, 600.0],
+                block_size=10,
+                random_seed=0,
+                pool=pool,
+                ensemble_cls=TaggedCanonicalEnsemble,
+            )
+    finally:
+        pool.shutdown()
+
+
+def test_orchestrator_rejects_pool_plus_ensemble_kwargs(toy_ce, toy_atoms):
+    """Non-empty ensemble_kwargs alongside pool= is also rejected."""
+    from mchammer_pt import SerialPool
+
+    pool = SerialPool([
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 600.0])
+    ])
+    try:
+        with pytest.raises(ValueError, match="ensemble_kwargs"):
+            CanonicalParallelTempering(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperatures=[300.0, 600.0],
+                block_size=10,
+                random_seed=0,
+                pool=pool,
+                ensemble_kwargs={"tag": "x"},
+            )
+    finally:
+        pool.shutdown()
+
+
+def test_pool_plus_ensemble_cls_fires_before_temperature_mismatch(toy_ce, toy_atoms):
+    """If both errors apply, the ensemble exclusion fires first.
+
+    A user passing both an inconsistent pool ladder AND ensemble args
+    has the ensemble misconception at root: their mental model of the
+    API is that the orchestrator builds pool replicas from
+    ``ensemble_cls``. Surfacing the ensemble error first lets them
+    correct that mental model in one round; otherwise they fix the
+    length, re-run, and only then see the ensemble error.
+    """
+    from mchammer_pt import SerialPool
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    # Pool length does NOT match temperatures (2 vs 3).
+    pool = SerialPool([
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 600.0])
+    ])
+    try:
+        with pytest.raises(ValueError, match="ensemble_cls"):
+            CanonicalParallelTempering(
+                cluster_expansion=toy_ce,
+                atoms=toy_atoms,
+                temperatures=[300.0, 600.0, 1200.0],
+                block_size=10,
+                random_seed=0,
+                pool=pool,
+                ensemble_cls=TaggedCanonicalEnsemble,
+            )
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_factory_forwards_ensemble_cls(toy_ce, toy_atoms):
+    """The process_pool factory threads ensemble_cls/kwargs through to workers."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "delta"},
+    ) as pt:
+        # If the kwargs did not reach the workers, the workers would
+        # have failed at startup (TaggedCanonicalEnsemble requires
+        # `tag`) and the factory would have raised in __init__.
+        history = pt.run(n_cycles=2)
+    assert history.energies_per_cycle.shape == (3, 2)

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import weakref
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
+from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
 from .history import ExchangeHistory
@@ -49,6 +51,15 @@ class CanonicalParallelTempering(BaseParallelTempering):
             HDF5 bundle of the `ExchangeHistory`, each replica's
             `mchammer.BaseDataContainer`, and run metadata to this path
             on completion.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+            every replica when this orchestrator constructs the default
+            pool. Rejected when ``pool`` is supplied directly. Pinned to
+            canonical because the exchange acceptance is canonical-only.
+        ensemble_kwargs: extra keyword arguments forwarded to
+            ``ensemble_cls(...)`` for every replica. Cannot include
+            ``structure``, ``calculator``, ``temperature``, or
+            ``random_seed`` (these are set by `Replica`). Rejected when
+            ``pool`` is supplied directly.
     """
 
     def __init__(
@@ -60,6 +71,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
         random_seed: int,
         pool: ReplicaPool | None = None,
         data_container_file: Path | str | None = None,
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         temperatures = [float(T) for T in temperatures]
         if len(temperatures) < 2:
@@ -75,6 +89,22 @@ class CanonicalParallelTempering(BaseParallelTempering):
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
+        # Pool/ensemble exclusion runs first: combining ``pool=`` with
+        # custom ensemble args reflects a more fundamental misuse of the
+        # API than a length/temperature mismatch, and the latter is
+        # often a downstream consequence of the former (the user built
+        # a pool with the wrong ladder *because* they thought the
+        # orchestrator would re-derive the ladder from ensemble_cls).
+        if pool is not None and (
+            ensemble_cls is not CanonicalEnsemble or ensemble_kwargs
+        ):
+            raise ValueError(
+                "ensemble_cls / ensemble_kwargs cannot be combined with an "
+                "explicit pool=; the pool already owns its replicas. Pass "
+                "these kwargs only when letting CanonicalParallelTempering "
+                "build the default SerialPool, or use process_pool(...) "
+                "which forwards them."
+            )
         if pool is None:
             replicas = [
                 Replica(
@@ -82,6 +112,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     atoms=atoms,
                     temperature=T,
                     random_seed=seed,
+                    ensemble_cls=ensemble_cls,
+                    ensemble_kwargs=ensemble_kwargs,
                 )
                 for T, seed in zip(temperatures, replica_seeds, strict=True)
             ]
@@ -164,6 +196,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
         block_size: int,
         random_seed: int,
         data_container_file: Path | str | None = None,
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> CanonicalParallelTempering:
         """Construct a process-parallel PT run in one call.
 
@@ -192,6 +227,35 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         On exit the pool's workers are joined; the CE tempdir is
         cleaned shortly after by Python's garbage collector.
+
+        Args:
+            cluster_expansion: icet ClusterExpansion defining the energy.
+            atoms: starting structure; every replica begins from a copy.
+            temperatures: non-decreasing temperatures in kelvin. At least
+                two values required. Equal adjacent temperatures are
+                allowed (produces a same-T null case where exchange is a
+                pure relabelling); strictly decreasing values are rejected.
+            block_size: MC trial steps per replica per cycle. Must be >= 1.
+            random_seed: master seed; each replica's MC RNG and the
+                orchestrator's exchange-proposal RNG are deterministically
+                spawned from it.
+            data_container_file: optional path; if given, `run` writes an
+                HDF5 bundle of the `ExchangeHistory`, each replica's
+                `mchammer.BaseDataContainer`, and run metadata to this path
+                on completion.
+            ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+                every worker's Replica. Spawn workers re-import the class by
+                fully qualified name. Top-level classes in a ``python
+                script.py`` invocation work (the worker re-runs the script as
+                ``__main__``); classes defined in a Jupyter cell or REPL do
+                not — `ProcessPool` rejects the interactive-``__main__``
+                case up-front rather than letting it surface as an opaque
+                multiprocessing error.
+            ensemble_kwargs: extra keyword arguments forwarded to
+                ``ensemble_cls(...)`` for every worker's Replica. Cannot
+                include ``structure``, ``calculator``, ``temperature``, or
+                ``random_seed`` (these are set by `Replica`). All values must
+                be picklable for the spawn boundary.
         """
         temperatures_list = [float(T) for T in temperatures]
         seed_sequence = np.random.SeedSequence(int(random_seed))
@@ -207,6 +271,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 initial_atoms=atoms,
                 temperatures=temperatures_list,
                 seeds=replica_seeds,
+                ensemble_cls=ensemble_cls,
+                ensemble_kwargs=ensemble_kwargs,
             )
         except BaseException:
             tmpdir.cleanup()

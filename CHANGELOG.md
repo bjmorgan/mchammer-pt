@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Replica`, `CanonicalParallelTempering`, and
+  `CanonicalParallelTempering.process_pool` accept new keyword-only
+  parameters `ensemble_cls` (a `CanonicalEnsemble` subclass; defaults
+  to `CanonicalEnsemble`) and `ensemble_kwargs` (extra keyword
+  arguments forwarded to the ensemble constructor). Lets callers
+  run parallel tempering with custom Monte Carlo moves implemented
+  as `CanonicalEnsemble` subclasses without duplicating `Replica`'s
+  body. Resolves #6.
+- `ProcessPool` gained the same two parameters and forwards them to
+  each worker. Workers must be able to import the supplied class by
+  fully qualified module name (i.e. defined in a module file).
+- `Replica` rejects `ensemble_kwargs` containing any of `structure`,
+  `calculator`, `temperature`, or `random_seed` (set by `Replica`
+  itself). `CanonicalParallelTempering` rejects `pool=` combined
+  with non-default `ensemble_cls` / `ensemble_kwargs`.
+
 ## [0.1.0] - 2026-04-21
 
 ### Added

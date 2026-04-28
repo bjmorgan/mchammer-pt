@@ -239,3 +239,126 @@ def test_process_pool_context_manager_shuts_down_on_exception(
         with pool:
             raise RuntimeError("deliberate")
     assert not pool._workers
+
+
+def test_process_pool_constructs_supplied_ensemble_subclass(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """ProcessPool workers build the supplied subclass with extra kwargs.
+
+    The subclass `TaggedCanonicalEnsemble` requires a `tag` keyword.
+    If `ensemble_kwargs` does not reach the worker's Replica
+    construction, the worker fails to start and the parent raises
+    `RuntimeError` from the ready-handshake.
+    """
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        seeds=[0, 1, 2],
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "gamma"},
+    )
+    try:
+        # Workers came up: handshake passed and basic queries work.
+        pool.advance_all(20)
+        es = pool.current_energies()
+        assert es.shape == (3,)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_bad_ensemble_kwargs_surfaces_at_init(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Unknown ensemble_kwargs make every worker fail in __init__.
+
+    Pins that the failure mode is the existing ready-handshake path:
+    the parent's __init__ raises RuntimeError carrying the worker's
+    TypeError traceback. Without this, an unrecognised kwarg would
+    only surface on the first ADVANCE.
+    """
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(RuntimeError, match="worker startup failed"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=TaggedCanonicalEnsemble,
+            ensemble_kwargs={"nonexistent": 1},
+        )
+
+
+def test_process_pool_rejects_interactive_main_class(
+    toy_ce, toy_atoms, tmp_path: Path, monkeypatch
+):
+    """`ensemble_cls` defined in an interactive __main__ is rejected up-front.
+
+    A class in a Jupyter cell has ``__module__ == "__main__"`` and
+    ``sys.modules["__main__"].__file__`` either absent or pointing
+    somewhere spawn workers cannot re-import. Without the preflight,
+    the user sees either a deep multiprocessing PicklingError or an
+    EOFError on the parent's first ``recv()`` — neither mentions
+    ``ensemble_cls``. The preflight raises a clear ``ValueError``
+    before any worker starts.
+    """
+    import sys
+
+    from mchammer.ensembles import CanonicalEnsemble
+
+    # Construct a class that mimics the notebook case: __module__ ==
+    # "__main__" and a top-level qualname (the function-local
+    # qualname produced by defining the class here would trip the
+    # separate <locals> guard, not the __main__ guard we want to pin).
+    class FakeNotebookEnsemble(CanonicalEnsemble):
+        pass
+
+    FakeNotebookEnsemble.__module__ = "__main__"
+    FakeNotebookEnsemble.__qualname__ = "FakeNotebookEnsemble"
+    # Pretend __main__ has no .py file (Jupyter / REPL look like this).
+    monkeypatch.delattr(sys.modules["__main__"], "__file__", raising=False)
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(ValueError, match="__main__"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=FakeNotebookEnsemble,
+        )
+
+
+def test_process_pool_rejects_function_local_class(toy_ce, toy_atoms, tmp_path: Path):
+    """`ensemble_cls` defined inside a function is rejected up-front.
+
+    Function-local classes have ``"<locals>"`` in ``__qualname__``;
+    pickle cannot walk a function's local scope to recover them. Same
+    UX problem as the interactive-``__main__`` case: without the
+    preflight, the user sees a deep `PicklingError` from
+    multiprocessing internals that doesn't mention `ensemble_cls`.
+    """
+    from mchammer.ensembles import CanonicalEnsemble
+
+    class LocalEnsemble(CanonicalEnsemble):
+        pass
+
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    with pytest.raises(ValueError, match="<locals>"):
+        ProcessPool(
+            ce_path=ce_path,
+            initial_atoms=toy_atoms,
+            temperatures=[300.0, 400.0],
+            seeds=[0, 1],
+            ensemble_cls=LocalEnsemble,
+        )

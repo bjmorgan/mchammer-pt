@@ -23,8 +23,9 @@ from the worker's exception.
 from __future__ import annotations
 
 import multiprocessing as mp
+import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
     BaseDataContainer,
 )
+from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from ..replica import Replica
 
@@ -45,6 +47,8 @@ def _worker(
     atoms_dict: dict[str, Any],
     temperature: float,
     seed: int,
+    ensemble_cls: type[CanonicalEnsemble],
+    ensemble_kwargs: dict[str, Any],
 ) -> None:
     """Worker entry point: build a Replica, then serve commands.
 
@@ -68,6 +72,8 @@ def _worker(
             atoms=atoms,
             temperature=temperature,
             random_seed=seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
         )
     except BaseException:
         conn.send(("ERR", traceback.format_exc()))
@@ -105,6 +111,52 @@ def _worker(
             conn.send(("ERR", traceback.format_exc()))
 
 
+def _check_ensemble_cls_importable(ensemble_cls: type) -> None:
+    """Reject ``ensemble_cls`` definitions spawn workers cannot re-import.
+
+    Spawn workers pickle ``ensemble_cls`` by fully qualified name and
+    re-import it on the other side of the process boundary. Two
+    definition sites break that contract:
+
+    1. **Interactive ``__main__``.** A class defined in a Jupyter cell
+       or REPL has ``__module__ == "__main__"``, but
+       ``sys.modules["__main__"]`` has no importable ``__file__``. Top-
+       level classes in ``python script.py`` are fine (the worker re-
+       runs the script as ``__main__``); the discriminator is whether
+       ``__main__.__file__`` ends in ``.py``.
+    2. **Function-local class.** A class defined inside a function has
+       ``"<locals>"`` in its ``__qualname__``. Pickle cannot walk into
+       a function's local scope to recover the class.
+
+    Letting either through produces a deep ``PicklingError`` from the
+    multiprocessing internals at parent ``process.start()``, or the
+    worker exiting before ``_worker`` runs and the parent's
+    ``recv()`` raising ``EOFError`` — neither error mentions
+    ``ensemble_cls``. The preflight raises a clear ``ValueError`` up-
+    front instead.
+    """
+    if "<locals>" in ensemble_cls.__qualname__:
+        raise ValueError(
+            f"ensemble_cls={ensemble_cls.__qualname__!r} is defined "
+            f"inside a function, so spawn workers cannot re-import it. "
+            f"Move the class to module top level (or to a method of a "
+            f"top-level class)."
+        )
+    if ensemble_cls.__module__ != "__main__":
+        return
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None)
+    if main_file is not None and main_file.endswith(".py"):
+        return
+    raise ValueError(
+        f"ensemble_cls={ensemble_cls.__name__!r} is defined in __main__ "
+        f"in a session whose __main__ cannot be re-imported by spawn "
+        f"workers (typically Jupyter or a REPL). Move the class into a "
+        f".py module that both your session and the workers can import, "
+        f"e.g. ``my_moves.py``, and pass it as ``my_moves.MyEnsemble``."
+    )
+
+
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
     return {
         "numbers": np.asarray(atoms.numbers, dtype=np.int64),
@@ -118,9 +170,9 @@ class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
     One OS process per replica. Satisfies `ReplicaPool`. Does NOT
-    implement `ObservablePool` - workers cannot receive pickled
-    `BaseObserver` instances reliably. For observer support, use
-    `SerialPool` or wait for v0.2's class-plus-factory-args API.
+    implement `ObservablePool` because `mchammer.BaseObserver`
+    instances do not pickle reliably across the spawn boundary; for
+    observer support use `SerialPool`.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -128,6 +180,22 @@ class ProcessPool:
             independent copy.
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
+            every worker's Replica. Spawn workers re-import the class
+            by fully qualified name, so it must live in an importable
+            module: top-level classes in a ``python script.py``
+            invocation work (the worker re-runs the script as
+            ``__main__``); classes defined in a Jupyter cell or REPL
+            do not. Move such classes to a ``.py`` module file. The
+            interactive-``__main__`` case is rejected up-front in
+            ``__init__`` rather than producing a deep multiprocessing
+            traceback.
+        ensemble_kwargs: extra keyword arguments forwarded to
+            ``ensemble_cls(...)``. All values must be picklable.
+            Cannot include the four kwargs reserved by `Replica`
+            (`structure`, `calculator`, `temperature`, `random_seed`);
+            a clash raises in the worker and surfaces via the
+            startup handshake.
     """
 
     def __init__(
@@ -136,7 +204,11 @@ class ProcessPool:
         initial_atoms: Atoms,
         temperatures: Sequence[float],
         seeds: Sequence[int],
+        *,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
+        _check_ensemble_cls_importable(ensemble_cls)
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
         if len(temperatures_list) != len(seeds_list):
@@ -144,24 +216,42 @@ class ProcessPool:
         self._temperatures: list[float] = [float(T) for T in temperatures_list]
         self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         atoms_dict = _atoms_to_dict(initial_atoms)
+        extra_kwargs: dict[str, Any] = (
+            dict(ensemble_kwargs) if ensemble_kwargs else {}
+        )
+        # Cover both spawn-time failures (e.g. ``process.start()``
+        # raising ``PicklingError`` when ``extra_kwargs`` contains an
+        # unpicklable value) and handshake-time failures with one
+        # cleanup path. ``ctx.Process(...).start()`` pickles ``args=``
+        # eagerly, so a failure on iteration N>1 leaves N-1 daemon
+        # workers in ``self._workers`` that ``shutdown()`` then joins.
         ctx = mp.get_context("spawn")
-        for T, seed in zip(self._temperatures, seeds_list, strict=True):
-            parent_conn, child_conn = ctx.Pipe(duplex=True)
-            process = ctx.Process(
-                target=_worker,
-                args=(child_conn, str(ce_path), atoms_dict, T, int(seed)),
-                daemon=True,
-            )
-            process.start()
-            child_conn.close()
-            self._workers.append((process, parent_conn))
-
-        # Synchronous ready-handshake. Each worker sends a single OK
-        # after successful Replica construction, or ERR + traceback if
-        # startup fails. Surfacing failures here means the caller gets
-        # the actual traceback, rather than a BrokenPipeError on the
-        # first ADVANCE with the original cause lost.
         try:
+            for T, seed in zip(self._temperatures, seeds_list, strict=True):
+                parent_conn, child_conn = ctx.Pipe(duplex=True)
+                process = ctx.Process(
+                    target=_worker,
+                    args=(
+                        child_conn,
+                        str(ce_path),
+                        atoms_dict,
+                        T,
+                        int(seed),
+                        ensemble_cls,
+                        extra_kwargs,
+                    ),
+                    daemon=True,
+                )
+                process.start()
+                child_conn.close()
+                self._workers.append((process, parent_conn))
+
+            # Synchronous ready-handshake. Each worker sends a single
+            # OK after successful Replica construction, or ERR +
+            # traceback if startup fails. Surfacing failures here means
+            # the caller gets the actual traceback, rather than a
+            # BrokenPipeError on the first ADVANCE with the original
+            # cause lost.
             for _, conn in self._workers:
                 status, payload = conn.recv()
                 if status != "OK":

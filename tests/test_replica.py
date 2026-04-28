@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from mchammer_pt.replica import Replica
 
@@ -158,3 +159,43 @@ def test_replica_construction_leaves_caller_random_state_untouched(toy_ce, toy_a
     observed = [random.random() for _ in range(5)]
 
     assert observed == reference
+
+
+def test_replica_uses_supplied_ensemble_class(toy_ce, toy_atoms):
+    """Replica builds the ensemble from the supplied class, not CanonicalEnsemble."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=1,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "alpha"},
+    )
+    assert isinstance(rep._ensemble, TaggedCanonicalEnsemble)
+    assert rep._ensemble.tag == "alpha"
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    ["structure", "calculator", "temperature", "random_seed"],
+)
+def test_replica_rejects_reserved_ensemble_kwargs(toy_ce, toy_atoms, reserved):
+    """Replica must raise if ensemble_kwargs shadows a reserved name.
+
+    The four kwargs (`structure`, `calculator`, `temperature`,
+    `random_seed`) are computed and owned by Replica. Allowing the
+    caller to pass them through `ensemble_kwargs` would either
+    silently shadow Replica's value (wrong physics) or be silently
+    overwritten (confusing). Up-front rejection keeps the contract
+    explicit.
+    """
+    with pytest.raises(ValueError, match=reserved):
+        Replica(
+            toy_ce,
+            toy_atoms,
+            temperature=300.0,
+            random_seed=1,
+            ensemble_kwargs={reserved: "anything"},
+        )
