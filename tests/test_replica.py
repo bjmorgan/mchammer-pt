@@ -60,6 +60,15 @@ def test_data_container_is_mchammer_native(toy_ce, toy_atoms):
     assert isinstance(rep.data_container(), BaseDataContainer)
 
 
+def test_ensemble_property_returns_underlying_canonical_ensemble(toy_ce, toy_atoms):
+    """`Replica.ensemble` returns the underlying mchammer ensemble."""
+    from mchammer.ensembles import CanonicalEnsemble
+
+    rep = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1)
+    assert isinstance(rep.ensemble, CanonicalEnsemble)
+    assert rep.ensemble is rep._ensemble
+
+
 def test_attach_mchammer_observer_fires_during_advance(toy_ce, toy_atoms):
     """Attached observers must fire inside advance; not just be accepted.
 

@@ -110,6 +110,11 @@ class Replica:
         """Replica temperature in kelvin."""
         return self._temperature
 
+    @property
+    def ensemble(self) -> CanonicalEnsemble:
+        """The underlying mchammer ensemble."""
+        return self._ensemble
+
     def advance(self, n_steps: int) -> None:
         """Run `n_steps` canonical MC trial steps.
 

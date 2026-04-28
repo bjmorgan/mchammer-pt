@@ -32,6 +32,11 @@ class SerialPool:
         return len(self._replicas)
 
     @property
+    def replicas(self) -> list[Replica]:
+        """The pool's `Replica` instances. Returns a copy."""
+        return list(self._replicas)
+
+    @property
     def temperatures(self) -> list[float]:
         return [r.temperature for r in self._replicas]
 

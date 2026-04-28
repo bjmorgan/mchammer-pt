@@ -61,6 +61,20 @@ def test_serial_pool_basic_methods(toy_ce, toy_atoms):
         pool.shutdown()
 
 
+def test_serial_pool_replicas_returns_in_process_handles(toy_ce, toy_atoms):
+    """`SerialPool.replicas` returns a copy of the in-process `Replica` list."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        replicas = pool.replicas
+        assert len(replicas) == 3
+        assert [r.temperature for r in replicas] == [300.0, 400.0, 500.0]
+        # Mutation of the returned list must not affect the pool.
+        replicas.clear()
+        assert len(pool) == 3
+    finally:
+        pool.shutdown()
+
+
 def test_process_pool_basic_methods(toy_ce, toy_atoms, tmp_path: Path):
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
