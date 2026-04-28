@@ -376,3 +376,28 @@ def test_process_pool_rejects_function_local_class(toy_ce, toy_atoms, tmp_path: 
             seeds=[0, 1],
             ensemble_cls=LocalEnsemble,
         )
+
+
+def test_process_pool_public_methods_raise_after_shutdown(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Every public method on ProcessPool raises RuntimeError after shutdown.
+
+    Pre-fix, methods silently no-op or raised opaque IndexError from
+    self._workers indexing. The guard converts every entry-point into
+    a single clear failure.
+    """
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool.shutdown()
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.advance_all(1)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.current_energies()
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.current_energy(0)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.current_occupations(0)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.swap_configurations(0, 1)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.data_containers()

@@ -214,14 +214,21 @@ class ProcessPool:
             self.shutdown()
             raise
 
+    def _check_open(self) -> None:
+        if not self._workers:
+            raise RuntimeError("pool is shut down")
+
     def __len__(self) -> int:
+        self._check_open()
         return len(self._workers)
 
     @property
     def temperatures(self) -> list[float]:
+        self._check_open()
         return list(self._temperatures)
 
     def advance_all(self, n_steps: int) -> None:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("ADVANCE", int(n_steps)))
         for _, conn in self._workers:
@@ -230,6 +237,7 @@ class ProcessPool:
                 raise RuntimeError(f"worker ADVANCE failed: {payload}")
 
     def current_energies(self) -> np.ndarray:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("ENERGY",))
         result = np.empty(len(self._workers), dtype=np.float64)
@@ -241,6 +249,7 @@ class ProcessPool:
         return result
 
     def current_energy(self, i: int) -> float:
+        self._check_open()
         _, conn = self._workers[i]
         conn.send(("ENERGY",))
         status, payload = conn.recv()
@@ -249,6 +258,7 @@ class ProcessPool:
         return float(payload)
 
     def current_occupations(self, i: int) -> np.ndarray:
+        self._check_open()
         _, conn = self._workers[i]
         conn.send(("GET_OCC",))
         status, payload = conn.recv()
@@ -257,6 +267,7 @@ class ProcessPool:
         return np.asarray(payload)
 
     def swap_configurations(self, i: int, j: int) -> None:
+        self._check_open()
         # Interleaved send/recv to halve round-trip latency.
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
@@ -278,6 +289,7 @@ class ProcessPool:
             raise RuntimeError(f"worker SET_OCC failed: {payload_j}")
 
     def data_containers(self) -> list[BaseDataContainer]:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("GET_DC",))
         containers: list[BaseDataContainer] = []
