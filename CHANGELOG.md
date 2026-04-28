@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mchammer_pt.testing.assert_boltzmann_sampling` — public utility
+  for pinning the empirical stationary distribution of a
+  `CanonicalEnsemble` subclass against an analytic Boltzmann fixture
+  (4-site 1D chain, NN-only pair ECI, ΔE ≈ 3 kT at the test
+  temperature). Downstream packages providing custom ensembles can
+  pin their stationarity correctness against the same anchor as
+  mchammer-pt's own test suite. Exposes `FIXTURE_CHAIN_INDICES` for
+  consumers whose `ensemble_kwargs` depend on the fixture's chain
+  geometry.
 - `Replica`, `CanonicalParallelTempering`, and
   `CanonicalParallelTempering.process_pool` accept new keyword-only
   parameters `ensemble_cls` (a `CanonicalEnsemble` subclass; defaults
