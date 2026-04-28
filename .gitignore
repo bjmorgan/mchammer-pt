@@ -16,6 +16,7 @@ htmlcov/
 .coverage
 *.h5
 docs/superpowers/
+.DS_Store
 
 # Top-level .md files are local by default
 # Whitelist the ones that should ship.
