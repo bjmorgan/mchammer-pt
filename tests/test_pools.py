@@ -508,6 +508,9 @@ def test_process_pool_public_methods_raise_after_shutdown(
     with pytest.raises(RuntimeError, match="shut down"):
         from tests._observer_fixtures import TaggedObserver
         pool.attach_observer_class(TaggedObserver, 10, label="x")
+    with pytest.raises(RuntimeError, match="shut down"):
+        from tests._observer_fixtures import factory_returning_non_observer
+        pool.attach_observer_factory(factory_returning_non_observer)
 
 
 def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
@@ -755,6 +758,77 @@ def test_serial_pool_attach_observer_factory_with_unpicklable_construction_input
             # "<cluster_label>_<species>" — at least one such column
             # must exist if the observer fired.
             assert any(col not in {"mctrial", "potential"} for col in dc.data.columns)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_factory_constructs_per_worker(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Factory runs inside each worker and produces a per-replica observer."""
+    from tests._observer_fixtures import stateful_counter_factory
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_factory(stateful_counter_factory, replicas=[0, 1])
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        assert "counter_T300" in dcs[0].data.columns
+        assert "counter_T400" in dcs[1].data.columns
+        assert "counter_T500" not in dcs[2].data.columns
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_factory_with_icet_objects(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """The escape-hatch use case: attach ClusterCountObserver across processes.
+
+    ClusterSpace doesn't pickle, so neither attach_observer nor
+    attach_observer_class can ship a ClusterCountObserver. The factory
+    path constructs it inside the worker from worker-local state.
+    """
+    from tests._observer_fixtures import cluster_count_factory
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_factory(cluster_count_factory)
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        for dc in dcs:
+            # ClusterCountObserver writes columns named per cluster orbit;
+            # any non-baseline column is evidence it fired.
+            assert any(col not in {"mctrial", "potential"} for col in dc.data.columns)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_factory_rejects_function_local_callable(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Function-local factory is rejected up-front (would fail to re-import in worker)."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        def local_factory(replica):
+            from tests._observer_fixtures import StatefulCounter
+            return StatefulCounter(interval=10)
+        with pytest.raises(ValueError, match="<locals>"):
+            pool.attach_observer_factory(local_factory)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_factory_rejects_non_observer(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A factory that returns a non-BaseObserver surfaces the error from the worker."""
+    from tests._observer_fixtures import factory_returning_non_observer
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="not a BaseObserver"):
+            pool.attach_observer_factory(factory_returning_non_observer)
     finally:
         pool.shutdown()
 

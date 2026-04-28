@@ -17,6 +17,9 @@ Worker commands:
   and attaches it to the replica; replies ``("OK", None)``
 - ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
   ``cls(*args, **kwargs)`` locally and attaches it; replies ``("OK", None)``
+- ``("ATTACH_OBS_FACTORY", factory)`` -> calls ``factory(replica)``
+  locally, checks the result is a ``BaseObserver``, and attaches it;
+  replies ``("OK", None)``
 - ``("SHUTDOWN",)`` -> worker exits cleanly
 
 Every reply is of the form ``(status, payload)`` with status either
@@ -29,7 +32,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import pickle
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Literal
@@ -116,6 +119,16 @@ def _worker(
             elif op == "ATTACH_OBS_CLS":
                 cls, args, kwargs = cmd[1], cmd[2], cmd[3]
                 replica.attach_mchammer_observer(cls(*args, **kwargs))
+                conn.send(("OK", None))
+            elif op == "ATTACH_OBS_FACTORY":
+                factory = cmd[1]
+                observer = factory(replica)
+                if not isinstance(observer, BaseObserver):
+                    raise TypeError(
+                        f"attach_observer_factory: factory returned "
+                        f"{type(observer).__name__}, not a BaseObserver"
+                    )
+                replica.attach_mchammer_observer(observer)
                 conn.send(("OK", None))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
@@ -404,6 +417,60 @@ class ProcessPool:
             status, payload = conn.recv()
             if status != "OK":
                 raise RuntimeError(f"worker ATTACH_OBS_CLS failed: {payload}")
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[Replica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed inside each worker.
+
+        Each selected worker calls ``factory(replica)`` locally and
+        attaches the returned ``BaseObserver``. Use this for observers
+        whose constructors take icet objects (``ClusterSpace``,
+        ``ClusterExpansion``) that do not pickle: the worker reaches
+        them via ``replica.ensemble.calculator.cluster_expansion``,
+        and they never cross the process boundary.
+
+        ``factory`` must be a top-level function or class method
+        importable by fully qualified name; lambdas, locally-defined
+        functions, and callables defined in interactive ``__main__``
+        do not survive pickling and are rejected up-front.
+
+        Eager parent-side checks: importability of ``factory`` and
+        picklability of ``factory``. Construction errors inside the
+        worker (the factory raising, or returning a non-``BaseObserver``)
+        surface via the standard worker-error path as
+        ``RuntimeError`` with the worker traceback. The pool is
+        partially-attached on a worker-side construction failure and
+        the run should abort.
+        """
+        self._check_open()
+        target_indices = (
+            range(len(self._workers))
+            if replicas == "all"
+            else [int(i) for i in replicas]
+        )
+        if not target_indices:
+            return
+        _check_importable(factory, kind="observer factory")
+        try:
+            pickle.dumps(factory)
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_factory: factory "
+                f"{getattr(factory, '__name__', repr(factory))!r} "
+                f"is not picklable ({exc})"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_FACTORY", factory))
+        for i in target_indices:
+            _, conn = self._workers[i]
+            status, payload = conn.recv()
+            if status != "OK":
+                raise RuntimeError(f"worker ATTACH_OBS_FACTORY failed: {payload}")
 
     def shutdown(self) -> None:
         for _, conn in self._workers:

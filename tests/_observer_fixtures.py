@@ -6,11 +6,14 @@ ProcessPool spawn workers can re-import them by fully qualified name.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
+
+if TYPE_CHECKING:
+    from mchammer_pt.replica import Replica
 
 
 class StatefulCounter(BaseObserver):
@@ -71,3 +74,34 @@ class NotAnObserver:
 
     def __init__(self, interval: int) -> None:
         self.interval = interval
+
+
+def stateful_counter_factory(replica: "Replica") -> BaseObserver:
+    """Factory used by ProcessPool factory-path tests.
+
+    Returns a ``StatefulCounter`` whose tag encodes the replica's
+    temperature, so test assertions can confirm each worker really
+    saw its own replica.
+    """
+    return StatefulCounter(interval=10, tag=f"counter_T{int(replica.temperature)}")
+
+
+def cluster_count_factory(replica: "Replica") -> BaseObserver:
+    """Factory using icet objects only available inside the worker.
+
+    The cluster-space and structure references come from the worker's
+    own Replica; neither needs to pickle.
+    """
+    from mchammer.observers import ClusterCountObserver  # type: ignore[import-untyped]
+
+    cs = replica.ensemble.calculator.cluster_expansion.get_cluster_space_copy()
+    return ClusterCountObserver(
+        cluster_space=cs,
+        structure=replica.ensemble.structure,
+        interval=20,
+    )
+
+
+def factory_returning_non_observer(replica: "Replica") -> object:
+    """Factory whose return type is wrong; pins the isinstance check."""
+    return "not an observer"
