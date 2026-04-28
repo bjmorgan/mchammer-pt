@@ -46,7 +46,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from ..replica import Replica
-from ._imports import _check_class_importable
+from ._imports import _check_importable
 
 
 def _worker(
@@ -178,7 +178,7 @@ class ProcessPool:
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
-        _check_class_importable(ensemble_cls, kind="ensemble_cls")
+        _check_importable(ensemble_cls, kind="ensemble_cls")
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
         if len(temperatures_list) != len(seeds_list):
@@ -381,7 +381,7 @@ class ProcessPool:
         )
         if not target_indices:
             return
-        _check_class_importable(cls, kind="observer class")
+        _check_importable(cls, kind="observer class")
         try:
             pickle.dumps((args, kwargs))
         except Exception as exc:
