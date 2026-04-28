@@ -137,7 +137,8 @@ class SerialPool:
         ``factory(replica)`` is called once per selected replica with
         that replica as its sole argument and must return a fresh
         ``BaseObserver``. The factory can reach any worker-local
-        state via the replica (notably ``replica.ensemble.cluster_expansion``)
+        state via the replica (notably
+        ``replica.ensemble.calculator.cluster_expansion``)
         — useful for observers whose constructors take icet objects
         (``ClusterSpace``, ``ClusterExpansion``) that do not pickle and
         therefore cannot travel via ``attach_observer_class``.

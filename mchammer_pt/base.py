@@ -97,10 +97,12 @@ class BaseParallelTempering(ABC):
     ) -> None:
         """Attach an mchammer observer to one or more replicas.
 
-        Requires the pool to satisfy `ObservablePool`. Pools that cannot
-        marshal observer instances across their execution boundary (e.g.
-        `ProcessPool`) do not satisfy it; calling this method with such
-        a pool raises `TypeError`.
+        Requires the pool to satisfy `ObservablePool`. Any pool that
+        implements only `ReplicaPool` does not satisfy it; calling this
+        method with such a pool raises `TypeError`.
+
+        For ``attach_observer_class`` and ``attach_observer_factory``,
+        reach the pool directly via ``self.pool``.
 
         Args:
             observer: an mchammer `BaseObserver` instance.
@@ -110,8 +112,7 @@ class BaseParallelTempering(ABC):
         if not isinstance(self._pool, ObservablePool):
             raise TypeError(
                 f"attach_observer requires an ObservablePool; "
-                f"{type(self._pool).__name__} does not support observers. "
-                f"Use SerialPool to attach observers."
+                f"{type(self._pool).__name__} does not satisfy it."
             )
         self._pool.attach_observer(observer, replicas)
 

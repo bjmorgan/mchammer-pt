@@ -102,9 +102,9 @@ class ObservablePool(ReplicaPool, Protocol):
 
     Separate protocol because not every pool implementation can carry
     observer instances across its execution boundary. Pool implementations
-    that support observer forwarding implement this protocol; those that
-    don't satisfy only `ReplicaPool` and force the user to use a different
-    pool type to attach observers.
+    that support observer forwarding implement this protocol; a future pool
+    type that does not would satisfy only `ReplicaPool` and require the user
+    to choose a different pool type to attach observers.
     """
 
     def attach_observer(

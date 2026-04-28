@@ -105,9 +105,8 @@ The factory handles seed spawning, writing the CE to a managed temp
 directory, and constructing a `ProcessPool` at the same ladder as
 the orchestrator. See `examples/03_parallel_workers.py`.
 
-Observer attachment is only supported on `SerialPool`; use
-`CanonicalParallelTempering.attach_observer(...)` on a pool that
-satisfies `ObservablePool` (currently only `SerialPool` does).
+Observer attachment is supported on both `SerialPool` and `ProcessPool`.
+See the Features list above for the three attach paths and when to use each.
 
 For custom Monte Carlo moves, subclass `mchammer.CanonicalEnsemble`
 and pass via `ensemble_cls=`:

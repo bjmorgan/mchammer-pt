@@ -635,12 +635,6 @@ def test_observer_data_matches_across_pools(
 
     Catches subtle divergences in observation timing, RNG threading, or
     tag handling between the two pool implementations.
-
-    Note: ClusterCountObserver is not used here because neither the observer
-    instance (ClusterSpace is not picklable) nor its construction arguments
-    (ClusterSpace is not picklable) can cross the process boundary. StatefulCounter
-    records step-indexed integers and is picklable, making it the appropriate
-    fixture for cross-pool column-for-column comparison.
     """
     import pandas as pd
 
