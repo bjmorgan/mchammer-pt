@@ -622,3 +622,92 @@ def test_process_pool_attach_observer_class_rejects_non_observer(
             pool.attach_observer_class(NotAnObserver, 10)
     finally:
         pool.shutdown()
+
+
+def test_observer_data_matches_across_pools(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Same setup + same observer should produce identical data containers
+    on SerialPool and ProcessPool.
+
+    Catches subtle divergences in observation timing, RNG threading, or
+    tag handling between the two pool implementations.
+
+    Note: ClusterCountObserver is not used here because neither the observer
+    instance (ClusterSpace is not picklable) nor its construction arguments
+    (ClusterSpace is not picklable) can cross the process boundary. StatefulCounter
+    records step-indexed integers and is picklable, making it the appropriate
+    fixture for cross-pool column-for-column comparison.
+    """
+    import pandas as pd
+
+    from tests._observer_fixtures import StatefulCounter
+
+    temperatures = [300.0, 400.0, 500.0]
+    seeds = [11, 22, 33]
+    n_steps = 200
+    interval = 20
+
+    # Serial side.
+    serial_replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=s)
+        for T, s in zip(temperatures, seeds, strict=True)
+    ]
+    serial = SerialPool(serial_replicas)
+    try:
+        serial.attach_observer(
+            StatefulCounter(interval=interval),
+        )
+        serial.advance_all(n_steps)
+        serial_dcs = serial.data_containers()
+    finally:
+        serial.shutdown()
+
+    # Process side.
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    process = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=temperatures,
+        seeds=seeds,
+    )
+    try:
+        process.attach_observer(
+            StatefulCounter(interval=interval),
+        )
+        process.advance_all(n_steps)
+        process_dcs = process.data_containers()
+    finally:
+        process.shutdown()
+
+    # Identical column-for-column.
+    assert len(serial_dcs) == len(process_dcs)
+    for s_dc, p_dc in zip(serial_dcs, process_dcs, strict=True):
+        pd.testing.assert_frame_equal(
+            s_dc.data, p_dc.data, check_exact=False, rtol=1e-12
+        )
+
+
+def test_process_pool_mid_run_attach(toy_ce, toy_atoms, tmp_path: Path):
+    """Observer attached mid-run only fires on subsequent advances.
+
+    The data container's ``mctrial`` column records the step number of
+    each observation. After advancing 100 steps and then attaching with
+    ``interval=10``, every recorded observation must have
+    ``mctrial >= 100``.
+    """
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.advance_all(100)  # No observer attached during this run.
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(100)  # Observer fires here.
+        dcs = pool.data_containers()
+        observed = dcs[0].data
+        assert "counter" in observed.columns
+        counter_rows = observed[observed["counter"].notna()]
+        assert int(counter_rows["mctrial"].min()) >= 100
+    finally:
+        pool.shutdown()
