@@ -257,3 +257,70 @@ def test_orchestrator_context_manager_shuts_down_pool(toy_ce, toy_atoms, tmp_pat
         with pt2:
             raise RuntimeError("deliberate")
     assert not pool2._workers
+
+
+def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
+    """Orchestrator rejects attach_observer when its pool isn't ObservablePool.
+
+    Both built-in pools (`SerialPool`, `ProcessPool`) now satisfy
+    `ObservablePool`, but the runtime check still matters for any
+    future pool that implements only `ReplicaPool`. A small dummy
+    pool that lacks the attach methods stands in for that case.
+    """
+    from collections.abc import Sequence
+
+    from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+        BaseDataContainer,
+    )
+    from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+        BaseObserver,
+    )
+
+    class _NotObservablePool:
+        """Minimum surface to satisfy `ReplicaPool` but not `ObservablePool`.
+
+        Methods raise NotImplementedError because the test never calls
+        them — it only triggers the orchestrator's runtime
+        isinstance check, which fails before any pool method is
+        reached.
+        """
+
+        def __len__(self) -> int:
+            return 2
+
+        @property
+        def temperatures(self) -> Sequence[float]:
+            return [300.0, 400.0]
+
+        def advance_all(self, n_steps: int) -> None:
+            raise NotImplementedError
+
+        def current_energies(self) -> np.ndarray:
+            raise NotImplementedError
+
+        def current_energy(self, i: int) -> float:
+            raise NotImplementedError
+
+        def current_occupations(self, i: int) -> np.ndarray:
+            raise NotImplementedError
+
+        def swap_configurations(self, i: int, j: int) -> None:
+            raise NotImplementedError
+
+        def data_containers(self) -> list[BaseDataContainer]:
+            raise NotImplementedError
+
+        def shutdown(self) -> None:
+            return None
+
+    class _DummyObs(BaseObserver):
+        def __init__(self) -> None:
+            super().__init__(interval=10, return_type=int, tag="dummy")
+
+        def get_observable(self, structure) -> int:
+            return 0
+
+    pool = _NotObservablePool()
+    pt = _AlwaysRejectPT(pool=pool, block_size=20, random_seed=0)
+    with pytest.raises(TypeError, match="ObservablePool"):
+        pt.attach_observer(_DummyObs())
