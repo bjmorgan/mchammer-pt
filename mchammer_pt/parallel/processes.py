@@ -439,12 +439,14 @@ class ProcessPool:
         do not survive pickling and are rejected up-front.
 
         Eager parent-side checks: importability of ``factory`` and
-        picklability of ``factory``. Construction errors inside the
-        worker (the factory raising, or returning a non-``BaseObserver``)
-        surface via the standard worker-error path as
-        ``RuntimeError`` with the worker traceback. The pool is
-        partially-attached on a worker-side construction failure and
-        the run should abort.
+        picklability of ``factory``. Unlike `attach_observer_class`,
+        there is no parent-side dry-run because the parent has no
+        `Replica` instances — construction failures surface from the
+        worker instead. Construction errors inside the worker (the
+        factory raising, or returning a non-``BaseObserver``) surface
+        via the standard worker-error path as ``RuntimeError`` with
+        the worker traceback. The pool is partially-attached on a
+        worker-side construction failure and the run should abort.
         """
         self._check_open()
         target_indices = (

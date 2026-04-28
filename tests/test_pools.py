@@ -855,3 +855,5 @@ def test_process_pool_mid_run_attach(toy_ce, toy_atoms, tmp_path: Path):
         assert int(counter_rows["mctrial"].min()) >= 100
     finally:
         pool.shutdown()
+
+

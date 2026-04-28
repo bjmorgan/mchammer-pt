@@ -14,8 +14,11 @@ interpreters) satisfy only `ReplicaPool`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Literal, Protocol, runtime_checkable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..replica import Replica
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
@@ -123,5 +126,20 @@ class ObservablePool(ReplicaPool, Protocol):
         """Attach a freshly-constructed observer per selected replica.
 
         Escape hatch for observers whose instances do not pickle.
+        """
+        ...
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[["Replica"], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed locally per replica.
+
+        Required for observers whose constructors take icet objects
+        (`ClusterSpace`, `ClusterExpansion`) that do not pickle and
+        therefore cannot travel via `attach_observer` or
+        `attach_observer_class`.
         """
         ...
