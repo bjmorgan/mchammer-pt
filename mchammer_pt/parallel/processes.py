@@ -15,6 +15,8 @@ Worker commands:
 - ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
 - ``("ATTACH_OBS", blob)`` -> deserialises a pickled ``BaseObserver``
   and attaches it to the replica; replies ``("OK", None)``
+- ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
+  ``cls(*args, **kwargs)`` locally and attaches it; replies ``("OK", None)``
 - ``("SHUTDOWN",)`` -> worker exits cleanly
 
 Every reply is of the form ``(status, payload)`` with status either
@@ -111,6 +113,10 @@ def _worker(
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)
                 conn.send(("OK", None))
+            elif op == "ATTACH_OBS_CLS":
+                cls, args, kwargs = cmd[1], cmd[2], cmd[3]
+                replica.attach_mchammer_observer(cls(*args, **kwargs))
+                conn.send(("OK", None))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
                 conn.close()
@@ -133,9 +139,10 @@ def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
 class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
-    One OS process per replica. Satisfies `ReplicaPool`. Does not yet
-    implement `ObservablePool` (``attach_observer_class`` is pending);
-    ``attach_observer`` is available for picklable observer instances.
+    One OS process per replica. Satisfies both `ReplicaPool` and
+    `ObservablePool`. Use ``attach_observer`` for pre-built picklable
+    observer instances; use ``attach_observer_class`` when the class
+    itself is importable but a live instance is not picklable.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -346,6 +353,57 @@ class ProcessPool:
             status, payload = conn.recv()
             if status != "OK":
                 raise RuntimeError(f"worker ATTACH_OBS failed: {payload}")
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to selected workers.
+
+        Each selected worker constructs its own ``cls(*args, **kwargs)``
+        locally. Multiprocessing pickles ``cls`` by fully qualified name
+        — the same constraint as ``ensemble_cls``. Eager parent-side
+        checks: importability of ``cls``, picklability of
+        ``(args, kwargs)``, and a dry-run construction that asserts the
+        result is a ``BaseObserver``. The constructor therefore fires
+        ``1 + N`` times for ``N`` selected workers; it must be free of
+        externally-visible side effects.
+        """
+        self._check_open()
+        target_indices = (
+            range(len(self._workers))
+            if replicas == "all"
+            else [int(i) for i in replicas]
+        )
+        if not target_indices:
+            return
+        _check_class_importable(cls, kind="observer class")
+        try:
+            pickle.dumps((args, kwargs))
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_class: args/kwargs for "
+                f"{cls.__name__} are not picklable ({exc})"
+            ) from exc
+        probe = cls(*args, **kwargs)
+        if not isinstance(probe, BaseObserver):
+            raise TypeError(
+                f"attach_observer_class: {cls.__name__}(...) returned "
+                f"{type(probe).__name__}, not a BaseObserver"
+            )
+        del probe
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
+        for i in target_indices:
+            _, conn = self._workers[i]
+            status, payload = conn.recv()
+            if status != "OK":
+                raise RuntimeError(f"worker ATTACH_OBS_CLS failed: {payload}")
 
     def shutdown(self) -> None:
         for _, conn in self._workers:

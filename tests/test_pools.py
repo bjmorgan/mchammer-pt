@@ -38,13 +38,13 @@ def test_serial_pool_satisfies_observable_pool(toy_ce, toy_atoms):
         pool.shutdown()
 
 
-def test_process_pool_is_replica_pool_but_not_observable_pool(
+def test_process_pool_satisfies_both_replica_pool_and_observable_pool(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
         assert isinstance(pool, ReplicaPool)
-        assert not isinstance(pool, ObservablePool)
+        assert isinstance(pool, ObservablePool)
     finally:
         pool.shutdown()
 
@@ -505,6 +505,9 @@ def test_process_pool_public_methods_raise_after_shutdown(
     with pytest.raises(RuntimeError, match="shut down"):
         from tests._observer_fixtures import StatefulCounter
         pool.attach_observer(StatefulCounter(interval=1))
+    with pytest.raises(RuntimeError, match="shut down"):
+        from tests._observer_fixtures import TaggedObserver
+        pool.attach_observer_class(TaggedObserver, 10, label="x")
 
 
 def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
@@ -545,5 +548,77 @@ def test_process_pool_attach_observer_unpicklable_raises_eagerly(
             pool.attach_observer(Unpicklable(interval=10))
         # Workers are still alive and responsive.
         pool.advance_all(5)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_class_constructs_per_worker(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """attach_observer_class constructs the observer inside each worker."""
+    from tests._observer_fixtures import TaggedObserver
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_class(
+            TaggedObserver,
+            10,
+            label="run-2",
+            replicas=[0, 1],
+        )
+        pool.advance_all(50)
+        dcs = pool.data_containers()
+        assert "tagged" in dcs[0].data.columns
+        assert "tagged" in dcs[1].data.columns
+        assert "tagged" not in dcs[2].data.columns
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_class_rejects_function_local_class(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A function-local observer class is rejected up-front."""
+    from mchammer.observers.base_observer import BaseObserver
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        class LocalObs(BaseObserver):
+            def __init__(self, interval: int) -> None:
+                super().__init__(interval=interval, return_type=int, tag="l")
+
+            def get_observable(self, structure):
+                return 0
+
+        with pytest.raises(ValueError, match="<locals>"):
+            pool.attach_observer_class(LocalObs, 10)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_class_constructor_failure_surfaces_in_parent(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Constructor exception raises in the parent, not from a worker."""
+    from tests._observer_fixtures import BadInitObserver
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(ValueError, match="deliberate constructor failure"):
+            pool.attach_observer_class(BadInitObserver, 10)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_class_rejects_non_observer(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A class whose instances are not BaseObservers raises TypeError."""
+    from tests._observer_fixtures import NotAnObserver
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(TypeError, match="not a BaseObserver"):
+            pool.attach_observer_class(NotAnObserver, 10)
     finally:
         pool.shutdown()
