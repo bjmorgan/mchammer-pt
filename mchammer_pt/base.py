@@ -93,7 +93,7 @@ class BaseParallelTempering(ABC):
     def attach_observer(
         self,
         observer: BaseObserver,
-        indices: Sequence[int] | Literal["all"] = "all",
+        replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         """Attach an mchammer observer to one or more replicas.
 
@@ -104,7 +104,7 @@ class BaseParallelTempering(ABC):
 
         Args:
             observer: an mchammer `BaseObserver` instance.
-            indices: either the string ``"all"``, or an explicit sequence
+            replicas: either the string ``"all"``, or an explicit sequence
                 of replica indices to attach to.
         """
         if not isinstance(self._pool, ObservablePool):
@@ -113,7 +113,7 @@ class BaseParallelTempering(ABC):
                 f"{type(self._pool).__name__} does not support observers. "
                 f"Use SerialPool to attach observers."
             )
-        self._pool.attach_observer(observer, indices)
+        self._pool.attach_observer(observer, replicas)
 
     def run(self, n_cycles: int) -> ExchangeHistory:
         """Advance all replicas for ``n_cycles`` MC+exchange cycles.

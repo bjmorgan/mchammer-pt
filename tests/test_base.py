@@ -120,8 +120,8 @@ def test_accepted_exchange_actually_swaps_configurations(toy_ce, toy_atoms):
     np.testing.assert_array_equal(pool.current_occupations(1), snapshot["pre_0"])
 
 
-def test_attach_observer_routes_to_specified_indices(toy_ce, toy_atoms):
-    """attach_observer(indices=[1, 2]) attaches to exactly those replicas."""
+def test_attach_observer_routes_to_specified_replicas(toy_ce, toy_atoms):
+    """attach_observer(replicas=[1, 2]) attaches to exactly those replicas."""
     from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
         BaseObserver,
     )
@@ -147,7 +147,7 @@ def test_attach_observer_routes_to_specified_indices(toy_ce, toy_atoms):
     # distinguish which replica fired which observer.
     obs = [Counter(tag=f"c{i}") for i in range(3)]
     for i, o in enumerate(obs):
-        pt.attach_observer(o, indices=[i])
+        pt.attach_observer(o, replicas=[i])
     pt.run(n_cycles=3)
     # All three attached; all three should fire.
     for i, o in enumerate(obs):
@@ -155,7 +155,7 @@ def test_attach_observer_routes_to_specified_indices(toy_ce, toy_atoms):
 
     # Now attach a single observer to only replicas 1 and 2, not 0.
     only_selected = Counter(tag="selected")
-    pt.attach_observer(only_selected, indices=[1, 2])
+    pt.attach_observer(only_selected, replicas=[1, 2])
     pt.run(n_cycles=3)
     # Fires for each of replicas 1 and 2 at each tick; replica 0 does not.
     assert only_selected.n_calls > 0
@@ -163,7 +163,7 @@ def test_attach_observer_routes_to_specified_indices(toy_ce, toy_atoms):
     # count should be approximately twice what a single-replica attach
     # would yield, not three times.
     single_attach = Counter(tag="single")
-    pt.attach_observer(single_attach, indices=[0])
+    pt.attach_observer(single_attach, replicas=[0])
     pt.run(n_cycles=3)
     # The selected-on-two observer saw roughly twice as many ticks per
     # cycle as the single-on-one observer would have in the same run.
