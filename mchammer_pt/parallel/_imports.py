@@ -49,6 +49,11 @@ def _resolve_replicas(
 def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:
     """Reject ``obj`` definitions spawn workers cannot re-import.
 
+    ``obj`` can be a class, a function/method, or an instance of a
+    user-defined callable class. For instances the check is applied to
+    ``type(obj)`` because that is what pickle walks to find the class
+    for reconstruction.
+
     Two definition sites break the FQN-import contract:
 
     1. **Interactive ``__main__``.** An object defined in a Jupyter cell
@@ -62,28 +67,32 @@ def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:
        a function's local scope to recover the object.
 
     Args:
-        obj: the class or callable to check.
+        obj: the class, callable, or callable instance to check.
         kind: short human-readable noun phrase used in error messages
             (e.g. ``"ensemble_cls"`` or ``"observer class"``).
 
     Raises:
         ValueError: if ``obj`` cannot be re-imported by a spawn worker.
     """
-    if "<locals>" in obj.__qualname__:
+    # Resolve the importable target. Functions and classes carry
+    # __qualname__ directly; instances of user-defined callable classes
+    # do not, so fall through to the class.
+    target = obj if hasattr(obj, "__qualname__") else type(obj)
+    if "<locals>" in target.__qualname__:
         raise ValueError(
-            f"{kind}={obj.__qualname__!r} is defined inside a function, "
-            f"so spawn workers cannot re-import it. Move the object to "
-            f"module top level (or to a method of a top-level class)."
+            f"{kind}={target.__qualname__!r} is defined inside a function, "
+            f"so spawn workers cannot re-import it. Move it to module "
+            f"top level (or make it a method of a top-level class)."
         )
-    if obj.__module__ != "__main__":
+    if target.__module__ != "__main__":
         return
     main_module = sys.modules.get("__main__")
     main_file = getattr(main_module, "__file__", None)
     if main_file is not None and main_file.endswith(".py"):
         return
     raise ValueError(
-        f"{kind}={obj.__name__!r} is defined in __main__ in a session "
+        f"{kind}={target.__name__!r} is defined in __main__ in a session "
         f"whose __main__ cannot be re-imported by spawn workers "
-        f"(typically Jupyter or a REPL). Move the object into a .py "
-        f"module that both your session and the workers can import."
+        f"(typically Jupyter or a REPL). Move it into a .py module that "
+        f"both your session and the workers can import."
     )

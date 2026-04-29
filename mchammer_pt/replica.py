@@ -15,6 +15,7 @@ to itself.
 
 from __future__ import annotations
 
+import os
 import random
 from collections.abc import Mapping
 from typing import Any
@@ -60,6 +61,11 @@ class Replica:
             (``structure``, ``calculator``, ``temperature``,
             ``random_seed``). Reserved names cannot appear here; see
             `__init__`.
+        cluster_expansion_path: path the cluster expansion was loaded
+            from, if known. Accepts ``str`` or any
+            ``os.PathLike[str]``; coerced to ``str`` for storage.
+            Auto-populated on workers spawned by ``ProcessPool``;
+            optional elsewhere.
     """
 
     def __init__(
@@ -71,8 +77,14 @@ class Replica:
         *,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._temperature = float(temperature)
+        self._cluster_expansion_path = (
+            None
+            if cluster_expansion_path is None
+            else os.fspath(cluster_expansion_path)
+        )
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -114,6 +126,25 @@ class Replica:
     def ensemble(self) -> CanonicalEnsemble:
         """The underlying mchammer ensemble."""
         return self._ensemble
+
+    @property
+    def cluster_expansion_path(self) -> str | None:
+        """Path the cluster expansion was loaded from, if known.
+
+        Auto-populated on workers spawned by ``ProcessPool`` (each
+        worker reads its CE from a path supplied at pool
+        construction). Optional on ``SerialPool`` — pass
+        ``cluster_expansion_path=`` to ``Replica`` if you want
+        factory-path observers to reload the CE fresh.
+
+        Returns ``None`` if no path was supplied. Factories whose
+        constructors take a ``ClusterSpace`` or ``ClusterExpansion``
+        should reload via
+        ``ClusterExpansion.read(replica.cluster_expansion_path)``;
+        reading from disk yields a fresh ``ClusterSpace`` independent
+        of the calculator's mutated copy.
+        """
+        return self._cluster_expansion_path
 
     def advance(self, n_steps: int) -> None:
         """Run `n_steps` canonical MC trial steps.

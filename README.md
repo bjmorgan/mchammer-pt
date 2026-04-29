@@ -31,7 +31,10 @@ paths to the colder chains.
   or a top-level factory that constructs the observer inside each
   worker — required for observers like `ClusterCountObserver` whose
   constructors take icet `ClusterSpace` objects that do not pickle
-  (`attach_observer_factory`).
+  (`attach_observer_factory`). The factory reloads the
+  `ClusterExpansion` from disk via
+  `ClusterExpansion.read(replica.cluster_expansion_path)`;
+  `ProcessPool` auto-populates the path on every worker.
 - HDF5 output bundling one `mchammer.BaseDataContainer` per replica plus
   a compact `ExchangeHistory` of per-pair swap statistics and
   replica-label trajectories.

@@ -208,3 +208,55 @@ def test_replica_rejects_reserved_ensemble_kwargs(toy_ce, toy_atoms, reserved):
             random_seed=1,
             ensemble_kwargs={reserved: "anything"},
         )
+
+
+def test_replica_cluster_expansion_path_default_is_none(toy_ce, toy_atoms):
+    """Path defaults to None when not supplied."""
+    rep = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=0)
+    assert rep.cluster_expansion_path is None
+
+
+def test_replica_cluster_expansion_path_returns_supplied_value(
+    toy_ce, toy_atoms, tmp_path
+):
+    """Supplied path round-trips through the property."""
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=0,
+        cluster_expansion_path=str(tmp_path / "my.ce"),
+    )
+    assert rep.cluster_expansion_path == str(tmp_path / "my.ce")
+
+
+def test_replica_cluster_expansion_path_not_validated_at_construction(
+    toy_ce, toy_atoms
+):
+    """Construction does not require the path to exist or be readable.
+
+    Validation is the caller's problem; Replica only stores the
+    string for later access by factory-path observers.
+    """
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=0,
+        cluster_expansion_path="/absolutely/does/not/exist.ce",
+    )
+    assert rep.cluster_expansion_path == "/absolutely/does/not/exist.ce"
+
+
+def test_replica_cluster_expansion_path_coerces_pathlike(toy_ce, toy_atoms, tmp_path):
+    """``Path`` (or any ``os.PathLike``) is coerced to ``str`` on storage."""
+    path_obj = tmp_path / "my.ce"
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=0,
+        cluster_expansion_path=path_obj,
+    )
+    assert rep.cluster_expansion_path == str(path_obj)
+    assert isinstance(rep.cluster_expansion_path, str)

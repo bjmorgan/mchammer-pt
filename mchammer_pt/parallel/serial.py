@@ -131,12 +131,23 @@ class SerialPool:
         replica as its sole argument and must return a fresh
         ``BaseObserver``. Use this for observers whose constructors take
         icet objects (``ClusterSpace``, ``ClusterExpansion``) that do not
-        pickle: the factory reaches them via
-        ``replica.ensemble.calculator.cluster_expansion``.
+        pickle. The factory should reload the CE from disk inside the
+        factory::
+
+            def make_obs(replica):
+                ce = ClusterExpansion.read(replica.cluster_expansion_path)
+                return ClusterCountObserver(
+                    ce.get_cluster_space_copy(), ..., interval=...
+                )
+
+        On ``SerialPool``, ``replica.cluster_expansion_path`` is
+        ``None`` unless you passed ``cluster_expansion_path=`` to
+        ``Replica.__init__``. ``ProcessPool`` auto-populates the path
+        on every worker.
 
         A factory written for ``SerialPool`` runs unchanged on
-        ``ProcessPool``, where it must additionally be a top-level function
-        or class method importable by fully qualified name.
+        ``ProcessPool``, where it must additionally be a top-level
+        function or class method importable by fully qualified name.
         """
         target_indices = _resolve_replicas(replicas, len(self._replicas))
         if not target_indices:

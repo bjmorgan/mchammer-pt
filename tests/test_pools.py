@@ -734,25 +734,39 @@ def test_serial_pool_attach_observer_factory_rejects_non_observer(toy_ce, toy_at
 
 
 def test_serial_pool_attach_observer_factory_with_unpicklable_construction_inputs(
-    toy_ce, toy_atoms
+    toy_ce, toy_atoms, tmp_path: Path
 ):
-    """Factory can use icet objects (ClusterSpace) that wouldn't survive pickle.
+    """Factory reloads ClusterExpansion from disk; ClusterSpace does not pickle.
 
     This pins the central use case: ClusterCountObserver requires a
-    ClusterSpace, which is not picklable. The factory pattern lets the
-    worker reach the cluster space via the replica's ensemble.
+    ClusterSpace, which is not picklable. The factory reloads a fresh CE
+    from disk via ``replica.cluster_expansion_path`` so the cluster space
+    is untouched by the calculator.
     """
+    from icet import ClusterExpansion  # type: ignore[import-untyped]
     from mchammer.observers import ClusterCountObserver  # type: ignore[import-untyped]
 
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+
     def make_cco(replica):
-        cs = replica.ensemble.calculator.cluster_expansion.get_cluster_space_copy()
+        ce = ClusterExpansion.read(replica.cluster_expansion_path)
         return ClusterCountObserver(
-            cluster_space=cs,
+            cluster_space=ce.get_cluster_space_copy(),
             structure=replica.ensemble.structure,
             interval=20,
         )
 
-    pool = _make_serial(toy_ce, toy_atoms)
+    replicas = [
+        Replica(
+            toy_ce, toy_atoms,
+            temperature=300.0 + 100 * i,
+            random_seed=i,
+            cluster_expansion_path=str(ce_path),
+        )
+        for i in range(3)
+    ]
+    pool = SerialPool(replicas)
     try:
         pool.attach_observer_factory(make_cco)
         pool.advance_all(50)
@@ -888,9 +902,19 @@ def test_observer_factory_data_matches_across_pools(
     seeds = [11, 22, 33]
     n_steps = 200
 
-    # Serial side.
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+
+    # Serial side — pass cluster_expansion_path so cluster_count_factory
+    # can reload the CE from disk rather than via the calculator.
     serial_replicas = [
-        Replica(toy_ce, toy_atoms, temperature=T, random_seed=s)
+        Replica(
+            toy_ce,
+            toy_atoms,
+            temperature=T,
+            random_seed=s,
+            cluster_expansion_path=str(ce_path),
+        )
         for T, s in zip(temperatures, seeds, strict=True)
     ]
     serial = SerialPool(serial_replicas)
@@ -902,8 +926,6 @@ def test_observer_factory_data_matches_across_pools(
         serial.shutdown()
 
     # Process side.
-    ce_path = tmp_path / "toy.ce"
-    toy_ce.write(str(ce_path))
     process = ProcessPool(
         ce_path=ce_path,
         initial_atoms=toy_atoms,
@@ -1265,6 +1287,30 @@ def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
         # with NaN in the counter column).
         counter_rows = observed.dropna(subset=["counter"])
         assert int(counter_rows["mctrial"].min()) >= 100
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_worker_replica_exposes_cluster_expansion_path(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """ProcessPool's worker passes ce_path through to Replica.
+
+    Factories running in the worker reach the path via
+    replica.cluster_expansion_path. The factory used here records it
+    into the observer's instance state, which is then recovered via
+    get_observers.
+    """
+    from tests._observer_fixtures import path_recording_factory
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_factory(path_recording_factory, replicas=[0])
+        pool.advance_all(20)
+        observers = pool.get_observers(replica_index=0)
+        recorded = observers["path_seen"].seen_path
+        assert recorded is not None
+        assert recorded.endswith("toy.ce")
     finally:
         pool.shutdown()
 
