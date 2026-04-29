@@ -21,11 +21,11 @@ following command loop:
 
 Every reply is of the form ``(status, payload)``. ``status`` is one
 of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply
-payload could not be pickled — used by ``GET_DC`` and
-``GET_OBSERVERS`` after eagerly checking; the parent translates this
-to ``TypeError``), or ``"ERR"`` (any other worker-side failure;
-parent translates to ``RuntimeError``). ``"ERR_PICKLE"`` and ``"ERR"``
-payloads are the formatted traceback from the worker's exception.
+payload could not be pickled — used by ``GET_OBSERVERS`` after
+eagerly checking; the parent translates this to ``TypeError``), or
+``"ERR"`` (any other worker-side failure; parent translates to
+``RuntimeError``). ``"ERR_PICKLE"`` and ``"ERR"`` payloads are the
+formatted traceback from the worker's exception.
 Startup failures (Replica construction) are caught with
 ``BaseException`` so the parent sees the actual exception via the
 handshake; in-loop failures use ``Exception`` so
@@ -109,13 +109,7 @@ def _worker(
                 replica.set_occupations(cmd[1])
                 conn.send(("OK", None))
             elif op == "GET_DC":
-                dc = replica.data_container()
-                try:
-                    pickle.dumps(dc)
-                except Exception:
-                    conn.send(("ERR_PICKLE", traceback.format_exc()))
-                else:
-                    conn.send(("OK", dc))
+                conn.send(("OK", replica.data_container()))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

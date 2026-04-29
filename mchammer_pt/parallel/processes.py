@@ -402,10 +402,8 @@ class ProcessPool:
 
         Raises:
             IndexError: if ``replica_index`` is out of range.
-            TypeError: if the worker's observer dict cannot be
-                round-tripped through pickle (the worker eagerly
-                checks before send and labels the failure so both
-                pools surface the same exception type).
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
             RuntimeError: if the pool is shut down, the worker
                 exited unexpectedly, or the worker reports any
                 other ERR.
