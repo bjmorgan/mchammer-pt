@@ -1,37 +1,15 @@
-"""Multiprocessing-based replica pool.
+"""Persistent-worker multiprocessing pool -- parent-side orchestration.
 
-One persistent OS process per replica. Each worker builds its own
-`Replica` on startup (since `mchammer` calculators hold C++ bindings
-that do not pickle) and enters a command loop. The parent communicates
-with workers via per-worker duplex `Pipe`s; only integer occupation
-arrays and scalar energies cross the process boundary during the run.
-
-Worker commands:
-
-- ``("ADVANCE", n_steps)``
-- ``("ENERGY",)`` -> replies ``("OK", float)`` with total CE energy
-- ``("GET_OCC",)`` -> replies ``("OK", np.ndarray)`` with occupations
-- ``("SET_OCC", occupations)`` -> overwrites state
-- ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
-- ``("ATTACH_OBS", blob)`` -> deserialises a pickled ``BaseObserver``
-  and attaches it to the replica; replies ``("OK", None)``
-- ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
-  ``cls(*args, **kwargs)`` locally and attaches it; replies ``("OK", None)``
-- ``("ATTACH_OBS_FACTORY", factory)`` -> calls ``factory(replica)``
-  locally, checks the result is a ``BaseObserver``, and attaches it;
-  replies ``("OK", None)``
-- ``("SHUTDOWN",)`` -> worker exits cleanly
-
-Every reply is of the form ``(status, payload)`` with status either
-``"OK"`` or ``"ERR"``; ``"ERR"`` payloads are the formatted traceback
-from the worker's exception.
+One OS process per replica. Workers live in spawn-mode subprocesses
+implemented in ``_worker.py``; this file contains only the parent-side
+``ProcessPool`` class and the per-worker ``Pipe``-based command/reply
+plumbing.
 """
 
 from __future__ import annotations
 
 import multiprocessing as mp
 import pickle
-import traceback
 from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
@@ -39,7 +17,6 @@ from typing import Any, Literal
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
     BaseDataContainer,
 )
@@ -50,103 +27,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 
 from ..replica import Replica
 from ._imports import _check_importable, _resolve_replicas
-
-
-def _worker(
-    conn: Connection,
-    ce_path: str,
-    atoms_dict: dict[str, Any],
-    temperature: float,
-    seed: int,
-    ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: dict[str, Any],
-) -> None:
-    """Worker entry point: build a Replica, then serve commands.
-
-    After successful Replica construction the worker sends a single
-    ("OK", None) ready-handshake back to the parent, so the parent can
-    verify startup success synchronously rather than discovering it on
-    the first ADVANCE. Any exception during startup — including
-    Replica construction — is caught and sent back as ("ERR", tb)
-    instead, and the worker exits.
-    """
-    try:
-        atoms = Atoms(
-            numbers=atoms_dict["numbers"],
-            positions=atoms_dict["positions"],
-            cell=atoms_dict["cell"],
-            pbc=atoms_dict["pbc"],
-        )
-        ce = ClusterExpansion.read(ce_path)
-        replica = Replica(
-            cluster_expansion=ce,
-            atoms=atoms,
-            temperature=temperature,
-            random_seed=seed,
-            ensemble_cls=ensemble_cls,
-            ensemble_kwargs=ensemble_kwargs,
-        )
-    except BaseException:
-        conn.send(("ERR", traceback.format_exc()))
-        conn.close()
-        return
-
-    conn.send(("OK", None))
-
-    while True:
-        try:
-            cmd = conn.recv()
-        except EOFError:
-            return
-        op = cmd[0]
-        try:
-            if op == "ADVANCE":
-                replica.advance(cmd[1])
-                conn.send(("OK", None))
-            elif op == "ENERGY":
-                conn.send(("OK", replica.current_energy()))
-            elif op == "GET_OCC":
-                conn.send(("OK", replica.current_occupations()))
-            elif op == "SET_OCC":
-                replica.set_occupations(cmd[1])
-                conn.send(("OK", None))
-            elif op == "GET_DC":
-                conn.send(("OK", replica.data_container()))
-            elif op == "ATTACH_OBS":
-                observer = pickle.loads(cmd[1])
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_CLS":
-                _, cls, args, kwargs = cmd
-                replica.attach_mchammer_observer(cls(*args, **kwargs))
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_FACTORY":
-                factory = cmd[1]
-                observer = factory(replica)
-                if not isinstance(observer, BaseObserver):
-                    raise TypeError(
-                        f"attach_observer_factory: factory returned "
-                        f"{type(observer).__name__}, not a BaseObserver"
-                    )
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "SHUTDOWN":
-                conn.send(("OK", None))
-                conn.close()
-                return
-            else:
-                conn.send(("ERR", f"unknown command: {op!r}"))
-        except Exception:
-            conn.send(("ERR", traceback.format_exc()))
-
-
-def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
-    return {
-        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
-        "positions": np.asarray(atoms.positions, dtype=np.float64),
-        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
-        "pbc": np.asarray(atoms.pbc, dtype=bool),
-    }
+from ._worker import _atoms_to_dict, _worker
 
 
 class ProcessPool:
