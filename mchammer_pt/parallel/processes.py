@@ -179,6 +179,38 @@ class ProcessPool:
         self.shutdown()
         raise RuntimeError(f"worker {op} failed: {payload}")
 
+    def _recv_or_abort_attach(
+        self,
+        conn: Connection,
+        op: str,
+        i: int,
+        remaining: list[int],
+    ) -> None:
+        """Receive an attach reply or abort the pool with full cleanup.
+
+        Three failure paths produce the same outcome — drain pending
+        replies on later workers, shut the pool down, raise a framed
+        RuntimeError:
+
+        - Worker reports ERR (factory raised, isinstance check
+          failed, etc.) — message includes the worker traceback.
+        - Pipe closes (worker died via Ctrl-C, OOM, segfault) —
+          message says the worker exited unexpectedly during attach.
+
+        After this returns the pool is guaranteed shut down and
+        further operations refuse via _check_open.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            self._drain_remaining_replies(remaining)
+            self.shutdown()
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly during attach"
+            ) from exc
+        if status != "OK":
+            self._abort_partial_attach(op, payload, remaining)
+
     def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
         """Receive a (status, payload) reply or raise a clear RuntimeError.
 
@@ -287,11 +319,9 @@ class ProcessPool:
             conn.send(("ATTACH_OBS", blob))
         for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
-            status, payload = conn.recv()
-            if status != "OK":
-                self._abort_partial_attach(
-                    "ATTACH_OBS", payload, target_indices[offset + 1:]
-                )
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS", i, target_indices[offset + 1:]
+            )
 
     def attach_observer_class(
         self,
@@ -338,11 +368,9 @@ class ProcessPool:
             conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
         for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
-            status, payload = conn.recv()
-            if status != "OK":
-                self._abort_partial_attach(
-                    "ATTACH_OBS_CLS", payload, target_indices[offset + 1:]
-                )
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
+            )
 
     def attach_observer_factory(
         self,
@@ -393,11 +421,9 @@ class ProcessPool:
             conn.send(("ATTACH_OBS_FACTORY", factory))
         for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
-            status, payload = conn.recv()
-            if status != "OK":
-                self._abort_partial_attach(
-                    "ATTACH_OBS_FACTORY", payload, target_indices[offset + 1:]
-                )
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_FACTORY", i, target_indices[offset + 1:]
+            )
 
     # Idempotent: bypasses _check_open so __exit__ and the __init__ failure
     # path can call it unconditionally.

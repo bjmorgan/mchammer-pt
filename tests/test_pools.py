@@ -969,7 +969,7 @@ def test_process_pool_attach_factory_drains_pending_replies_on_partial_failure(
 
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
-        with pytest.raises(RuntimeError, match="not a BaseObserver|attach_observer"):
+        with pytest.raises(RuntimeError, match="not a BaseObserver"):
             pool.attach_observer_factory(factory_fails_on_400k)
         # Pool poisoned; all subsequent ops refuse.
         with pytest.raises(RuntimeError, match="shut down"):
@@ -1006,7 +1006,12 @@ def test_serial_pool_attach_observer_class_discards_probe(toy_ce, toy_atoms):
 
 
 def test_serial_pool_attach_observer_dedupes_replicas(toy_ce, toy_atoms):
-    """Duplicate indices in ``replicas`` are coalesced; observer fires once."""
+    """Duplicate indices in `replicas` are coalesced; observer fires once per replica.
+
+    Also pins that only replica 0 gets the column, and that the
+    registered instance is the fresh per-replica copy (id=2), not the
+    probe (id=1).
+    """
     from tests._observer_fixtures import ConstructionCounter
 
     ConstructionCounter.n_constructions = 0
@@ -1016,6 +1021,16 @@ def test_serial_pool_attach_observer_dedupes_replicas(toy_ce, toy_atoms):
         pool.attach_observer_class(ConstructionCounter, 5, replicas=[0, 0, 0])
         # 1 dry-run + 1 per-unique-replica = 2 constructions.
         assert ConstructionCounter.n_constructions == 2
+        pool.advance_all(20)
+        dcs = pool.data_containers()
+        # Single observer registered on replica 0 — its construction_id
+        # is 2 (the per-replica fresh; the dry-run probe was id=1 and
+        # was discarded). Replicas 1 and 2 saw nothing.
+        observed = dcs[0].data["construction_counter"].dropna()
+        assert len(observed) > 0
+        assert (observed == 2).all()
+        assert "construction_counter" not in dcs[1].data.columns
+        assert "construction_counter" not in dcs[2].data.columns
     finally:
         pool.shutdown()
 
