@@ -125,18 +125,18 @@ class Replica:
     def cluster_expansion_path(self) -> str | None:
         """Path the cluster expansion was loaded from, if known.
 
-        Auto-populated on workers spawned by ``ProcessPool`` (each worker
-        reads its CE from a path supplied at pool construction).
-        Optional on ``SerialPool`` — pass ``cluster_expansion_path=`` to
-        ``Replica`` if you want factory-path observers to reload the CE
-        fresh inside the factory.
+        Auto-populated on workers spawned by ``ProcessPool`` (each
+        worker reads its CE from a path supplied at pool
+        construction). Optional on ``SerialPool`` — pass
+        ``cluster_expansion_path=`` to ``Replica`` if you want
+        factory-path observers to reload the CE fresh.
 
-        Returns ``None`` if no path was supplied. Factories that need a
-        fresh ``ClusterExpansion`` (e.g. for icet observers whose
-        constructors take a ``ClusterSpace``) should reload via
-        ``ClusterExpansion.read(replica.cluster_expansion_path)`` rather
-        than reaching into ``replica.ensemble.calculator.cluster_expansion``,
-        which is mutated by the calculator during runs.
+        Returns ``None`` if no path was supplied. Factories whose
+        constructors take a ``ClusterSpace`` or ``ClusterExpansion``
+        should reload via
+        ``ClusterExpansion.read(replica.cluster_expansion_path)``;
+        this guarantees an unmutated ``ClusterSpace`` regardless of
+        how long the run has been advancing.
         """
         return self._cluster_expansion_path
 

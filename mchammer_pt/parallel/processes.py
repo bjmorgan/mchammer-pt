@@ -62,11 +62,7 @@ class ProcessPool:
       CE from disk via
       ``ClusterExpansion.read(replica.cluster_expansion_path)``
       (``ProcessPool`` auto-populates ``cluster_expansion_path`` on
-      every worker). Do **not** reach for
-      ``replica.ensemble.calculator.cluster_expansion``: the
-      calculator mutates it during runs, and observers that store a
-      reference will see wrong-length cluster vectors at observation
-      time.
+      every worker).
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -447,13 +443,8 @@ class ProcessPool:
                 )
 
         ``ProcessPool`` auto-populates ``replica.cluster_expansion_path``
-        on every worker from the ``ce_path`` supplied at pool construction.
-
-        Do **not** reach for
-        ``replica.ensemble.calculator.cluster_expansion``: the
-        calculator mutates it during runs, and observers that store a
-        reference will see wrong-length cluster vectors at observation
-        time.
+        on every worker from the ``ce_path`` supplied at pool
+        construction.
 
         ``factory`` must be a top-level function or class method
         importable by fully qualified name; lambdas, locally-defined
