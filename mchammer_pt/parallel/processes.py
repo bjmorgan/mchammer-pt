@@ -390,10 +390,15 @@ class ProcessPool:
                 (e.g. an attached observer is not picklable).
         """
         self._check_open()
-        [i] = _resolve_replicas([replica_index], len(self._workers))
-        _, conn = self._workers[i]
+        n = len(self._workers)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        _, conn = self._workers[replica_index]
         conn.send(("GET_OBSERVERS",))
-        return self._recv_or_raise(conn, "GET_OBSERVERS", i)
+        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
 
     def attach_observer_factory(
         self,

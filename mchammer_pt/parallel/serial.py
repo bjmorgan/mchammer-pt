@@ -160,17 +160,22 @@ class SerialPool:
 
         Raises:
             IndexError: if ``replica_index`` is out of range.
-            TypeError: if any attached observer is not picklable.
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
         """
-        [i] = _resolve_replicas([replica_index], len(self._replicas))
-        live = self._replicas[i].ensemble.observers
+        n = len(self._replicas)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        live = self._replicas[replica_index].ensemble.observers
         try:
             return pickle.loads(pickle.dumps(live))
         except Exception as exc:
             raise TypeError(
-                f"observer dict for replica {i} is not picklable "
-                f"({exc}); check observer attributes for "
-                f"non-picklable references"
+                f"observer dict for replica {replica_index} could not be "
+                f"round-tripped through pickle ({exc})"
             ) from exc
 
     def data_containers(self) -> list[BaseDataContainer]:

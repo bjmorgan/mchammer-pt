@@ -150,5 +150,8 @@ class ObservablePool(ReplicaPool, Protocol):
         Keyed by observer tag; values are independent copies via
         pickle round-trip so mutations on the returned objects do
         not affect the pool's running state.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
         """
         ...

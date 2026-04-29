@@ -1089,6 +1089,31 @@ def test_serial_pool_get_observers_round_trip(toy_ce, toy_atoms):
         pool.shutdown()
 
 
+def test_serial_pool_get_observers_returns_dict_keyed_by_tag(toy_ce, toy_atoms):
+    """Multiple observers on one replica round-trip as a tag-keyed dict.
+
+    Pins the dict[str, BaseObserver] return-type contract directly.
+    A regression that flattened the result, returned only the first
+    observer, or keyed on something other than the observer's tag
+    would slip past the single-observer round-trip test.
+    """
+    from tests._observer_fixtures import StatefulCounter, TaggedObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.attach_observer_class(
+            TaggedObserver, 10, label="x", replicas=[0]
+        )
+        pool.advance_all(20)
+        observers = pool.get_observers(replica_index=0)
+        assert set(observers.keys()) == {"counter", "tagged"}
+        assert observers["counter"].n_calls > 0
+        assert observers["tagged"].label == "x"
+    finally:
+        pool.shutdown()
+
+
 def test_serial_pool_get_observers_returns_independent_snapshot(toy_ce, toy_atoms):
     """Mutating the returned observer does not affect the pool's running state."""
     from tests._observer_fixtures import StatefulCounter
@@ -1133,14 +1158,14 @@ def test_serial_pool_get_observers_unpicklable_raises_clearly(toy_ce, toy_atoms)
         # it only gains the lambda after its first get_observable call.
         pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
         pool.advance_all(20)  # observer fires, attribute mutates.
-        with pytest.raises(TypeError, match="not picklable"):
+        with pytest.raises(TypeError, match="could not be round-tripped"):
             pool.get_observers(replica_index=0)
     finally:
         pool.shutdown()
 
 
 def test_serial_pool_get_observers_out_of_range_raises(toy_ce, toy_atoms):
-    """Out-of-range replica index raises IndexError eagerly via _resolve_replicas."""
+    """Out-of-range replica index raises IndexError eagerly."""
     pool = _make_serial(toy_ce, toy_atoms)
     try:
         with pytest.raises(IndexError, match="out of range"):
