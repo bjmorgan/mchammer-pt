@@ -684,8 +684,6 @@ def test_observer_data_matches_across_pools(
         pd.testing.assert_frame_equal(
             s_dc.data, p_dc.data, check_exact=False, rtol=1e-12
         )
-
-
 def test_serial_pool_attach_observer_factory_constructs_per_replica(toy_ce, toy_atoms):
     """attach_observer_factory calls the factory once per replica with that replica."""
     from tests._observer_fixtures import StatefulCounter
@@ -816,14 +814,23 @@ def test_process_pool_attach_observer_factory_rejects_function_local_callable(
 def test_process_pool_attach_observer_factory_rejects_non_observer(
     toy_ce, toy_atoms, tmp_path: Path
 ):
-    """A factory that returns a non-BaseObserver surfaces the error from the worker."""
+    """A factory that returns a non-BaseObserver shuts the pool down.
+
+    The worker-side error surfaces as RuntimeError; the pool is then shut
+    down so subsequent operations raise via _check_open rather than
+    silently operating in a partially-attached state.
+    """
     from tests._observer_fixtures import factory_returning_non_observer
 
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
         with pytest.raises(RuntimeError, match="not a BaseObserver"):
             pool.attach_observer_factory(factory_returning_non_observer)
+        # Pool is now shut down. Any subsequent op raises.
+        with pytest.raises(RuntimeError, match="shut down"):
+            pool.advance_all(5)
     finally:
+        # shutdown() is idempotent and safe after the failure path.
         pool.shutdown()
 
 
@@ -906,3 +913,31 @@ def test_observer_factory_data_matches_across_pools(
         )
 
 
+def test_process_pool_attach_observer_failure_poisons_pool(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A worker-side attach failure shuts the pool down so no further ops.
+
+    Pre-fix the docstring promised 'the run should abort' but nothing
+    enforced it — a user calling ``advance_all`` after a partial-attach
+    failure would silently get data containers with mismatched observer
+    columns. Now the pool is shut down by the failure path itself, and
+    subsequent calls raise via ``_check_open``.
+    """
+    from tests._observer_fixtures import factory_returning_non_observer
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        # factory_returning_non_observer raises TypeError inside each
+        # worker's ATTACH_OBS_FACTORY handler — surfaces from the parent
+        # as RuntimeError. Attach is the failure-path test bed because
+        # there is no parent-side eager check that catches a bad return
+        # type for the factory variant.
+        with pytest.raises(RuntimeError, match="not a BaseObserver"):
+            pool.attach_observer_factory(factory_returning_non_observer)
+        # Pool should now be shut down. Any subsequent op raises.
+        with pytest.raises(RuntimeError, match="shut down"):
+            pool.advance_all(5)
+    finally:
+        # shutdown() is idempotent and safe even after the failure path.
+        pool.shutdown()

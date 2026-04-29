@@ -136,7 +136,7 @@ def _worker(
                 return
             else:
                 conn.send(("ERR", f"unknown command: {op!r}"))
-        except BaseException:
+        except Exception:
             conn.send(("ERR", traceback.format_exc()))
 
 
@@ -263,6 +263,15 @@ class ProcessPool:
         if not self._workers:
             raise RuntimeError("pool is shut down")
 
+    def _drain_remaining_replies(self, indices: list[int]) -> None:
+        """Read pending replies on the given worker connections, ignoring contents."""
+        for i in indices:
+            _, conn = self._workers[i]
+            try:
+                conn.recv()
+            except (EOFError, BrokenPipeError):
+                pass
+
     def __len__(self) -> int:
         self._check_open()
         return len(self._workers)
@@ -356,8 +365,9 @@ class ProcessPool:
         pickle round-trip in the worker. The parent eagerly validates
         picklability before contacting any worker. Failure semantics:
         the parent's ``pickle.dumps`` raising leaves all workers
-        untouched; a worker raising during ``pickle.loads`` leaves the
-        pool partially-attached and the run should abort.
+        untouched; a worker raising during ``pickle.loads`` shuts the
+        pool down, ensuring subsequent operations raise via
+        ``_check_open``.
         """
         self._check_open()
         target_indices = (
@@ -374,13 +384,19 @@ class ProcessPool:
                 f"observer of type {type(observer).__name__} is not "
                 f"picklable ({exc}); use attach_observer_class instead"
             ) from exc
+        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS", blob))
-        for i in target_indices:
+        for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
+                # Partial-attach state is unrecoverable: mchammer has no detach,
+                # so we shut down the pool and refuse further operations.
+                # Subsequent calls raise via _check_open.
+                self._drain_remaining_replies(target_indices[offset + 1:])
+                self.shutdown()
                 raise RuntimeError(f"worker ATTACH_OBS failed: {payload}")
 
     def attach_observer_class(
@@ -425,13 +441,19 @@ class ProcessPool:
                 f"{type(probe).__name__}, not a BaseObserver"
             )
         del probe
+        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
-        for i in target_indices:
+        for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
+                # Partial-attach state is unrecoverable: mchammer has no detach,
+                # so we shut down the pool and refuse further operations.
+                # Subsequent calls raise via _check_open.
+                self._drain_remaining_replies(target_indices[offset + 1:])
+                self.shutdown()
                 raise RuntimeError(f"worker ATTACH_OBS_CLS failed: {payload}")
 
     def attach_observer_factory(
@@ -461,8 +483,9 @@ class ProcessPool:
         worker instead. Construction errors inside the worker (the
         factory raising, or returning a non-``BaseObserver``) surface
         via the standard worker-error path as ``RuntimeError`` with
-        the worker traceback. The pool is partially-attached on a
-        worker-side construction failure and the run should abort.
+        the worker traceback. On a worker-side construction failure the
+        pool shuts down, ensuring subsequent operations raise via
+        ``_check_open``.
         """
         self._check_open()
         target_indices = (
@@ -481,13 +504,19 @@ class ProcessPool:
                 f"{getattr(factory, '__name__', repr(factory))!r} "
                 f"is not picklable ({exc})"
             ) from exc
+        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS_FACTORY", factory))
-        for i in target_indices:
+        for offset, i in enumerate(target_indices):
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
+                # Partial-attach state is unrecoverable: mchammer has no detach,
+                # so we shut down the pool and refuse further operations.
+                # Subsequent calls raise via _check_open.
+                self._drain_remaining_replies(target_indices[offset + 1:])
+                self.shutdown()
                 raise RuntimeError(f"worker ATTACH_OBS_FACTORY failed: {payload}")
 
     def shutdown(self) -> None:
