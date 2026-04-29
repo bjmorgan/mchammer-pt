@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-trip so mutations on the returned objects do not affect
   the pool's running state. Mid-run retrieval is supported.
   Implemented on both `SerialPool` and `ProcessPool`.
+- `Replica.cluster_expansion_path: str | None` keyword-only
+  constructor argument and read-only property. Auto-populated on
+  every worker spawned by `ProcessPool` from the pool's `ce_path`;
+  optional on `SerialPool`. Lets factory-path observers reload a
+  fresh `ClusterExpansion` via
+  `ClusterExpansion.read(replica.cluster_expansion_path)` without
+  hardcoding the path.
+
+### Fixed
+
+- `_check_importable` (the spawn-import guard for `ensemble_cls`,
+  observer classes, and observer factories) now accepts callable
+  instances of user-defined classes. Previously it required the
+  argument itself to expose `__qualname__`, which functions and
+  classes have but instances do not; users had to monkey-patch
+  `__qualname__` onto the instance to make `attach_observer_factory`
+  work. The check now falls through to `type(obj).__qualname__`,
+  which is what `pickle` walks anyway.
+- `attach_observer_factory` docstrings on both pools previously
+  recommended reaching for `replica.ensemble.calculator.cluster_expansion`
+  to obtain a `ClusterSpace`. The calculator mutates that
+  `ClusterSpace` during runs, so observers built from it produced
+  wrong-length cluster vectors at observation time. Docstrings now
+  point at `ClusterExpansion.read(replica.cluster_expansion_path)`,
+  which always yields an unmutated copy.
 
 ## [0.3.0] - 2026-04-29
 
