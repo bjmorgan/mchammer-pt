@@ -1129,13 +1129,9 @@ def test_serial_pool_get_observers_unpicklable_raises_clearly(toy_ce, toy_atoms)
 
     pool = _make_serial(toy_ce, toy_atoms)
     try:
-        # Use the factory path so the class itself doesn't need to pickle
-        # at attach time; the observer only gains non-picklable state
-        # after its first get_observable call.
-        pool.attach_observer_factory(
-            lambda replica: LambdaAccumulatingObs(interval=5),
-            replicas=[0],
-        )
+        # LambdaAccumulatingObs is picklable at attach time (junk=None);
+        # it only gains the lambda after its first get_observable call.
+        pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
         pool.advance_all(20)  # observer fires, attribute mutates.
         with pytest.raises(TypeError, match="not picklable"):
             pool.get_observers(replica_index=0)
@@ -1149,6 +1145,18 @@ def test_serial_pool_get_observers_out_of_range_raises(toy_ce, toy_atoms):
     try:
         with pytest.raises(IndexError, match="out of range"):
             pool.get_observers(replica_index=5)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_empty_returns_empty_dict(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A worker with no attached observers returns {} via the round trip."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        observers = pool.get_observers(replica_index=0)
+        assert observers == {}
     finally:
         pool.shutdown()
 
