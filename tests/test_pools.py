@@ -1072,6 +1072,85 @@ def test_process_pool_attach_observer_class_empty_replicas_no_worker_contact(
         pool.shutdown()
 
 
+def test_serial_pool_get_observers_round_trip(toy_ce, toy_atoms):
+    """attach -> advance -> get_observers returns the live observer's state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        observers = pool.get_observers(replica_index=0)
+        assert "counter" in observers
+        assert observers["counter"].n_calls > 0
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_returns_independent_snapshot(toy_ce, toy_atoms):
+    """Mutating the returned observer does not affect the pool's running state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        snapshot_a = pool.get_observers(replica_index=0)["counter"]
+        n_a = snapshot_a.n_calls
+        # Mutate on the parent side.
+        snapshot_a.n_calls = 999
+        # Advance further; the pool's live observer should be unaffected.
+        pool.advance_all(50)
+        snapshot_b = pool.get_observers(replica_index=0)["counter"]
+        assert snapshot_b.n_calls > n_a
+        assert snapshot_b.n_calls < 999
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_empty_returns_empty_dict(toy_ce, toy_atoms):
+    """A replica with no attached observers returns {}."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        observers = pool.get_observers(replica_index=0)
+        assert observers == {}
+        # Caller's KeyError, not a special pool error.
+        with pytest.raises(KeyError):
+            _ = observers["nope"]
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_unpicklable_raises_clearly(toy_ce, toy_atoms):
+    """An attached observer with non-picklable state surfaces TypeError on retrieval."""
+    from tests._observer_fixtures import LambdaAccumulatingObs
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        # Use the factory path so the class itself doesn't need to pickle
+        # at attach time; the observer only gains non-picklable state
+        # after its first get_observable call.
+        pool.attach_observer_factory(
+            lambda replica: LambdaAccumulatingObs(interval=5),
+            replicas=[0],
+        )
+        pool.advance_all(20)  # observer fires, attribute mutates.
+        with pytest.raises(TypeError, match="not picklable"):
+            pool.get_observers(replica_index=0)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_out_of_range_raises(toy_ce, toy_atoms):
+    """Out-of-range replica index raises IndexError eagerly via _resolve_replicas."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(IndexError, match="out of range"):
+            pool.get_observers(replica_index=5)
+    finally:
+        pool.shutdown()
+
+
 def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
     """Observer attached mid-run only fires on subsequent advances.
 
