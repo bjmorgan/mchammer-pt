@@ -15,6 +15,8 @@ following command loop:
   ``cls(*args, **kwargs)`` and attaches; replies ``("OK", None)``
 - ``("ATTACH_OBS_FACTORY", factory)`` -> constructs ``factory(replica)``
   and attaches; replies ``("OK", None)``
+- ``("GET_OBSERVERS",)`` -> replies ``("OK", dict[str, BaseObserver])``
+  with the replica's currently-attached observers (pickled on send)
 - ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
 
 Every reply is of the form ``(status, payload)`` with status either
@@ -121,6 +123,8 @@ def _worker(
                     )
                 replica.attach_mchammer_observer(observer)
                 conn.send(("OK", None))
+            elif op == "GET_OBSERVERS":
+                conn.send(("OK", replica.ensemble.observers))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
                 conn.close()
