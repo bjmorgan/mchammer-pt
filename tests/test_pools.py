@@ -1234,3 +1234,53 @@ def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
         assert int(counter_rows["mctrial"].min()) >= 100
     finally:
         pool.shutdown()
+
+
+def test_get_observers_matches_across_pools(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Same setup + same observer should produce equivalent get_observers
+    output on SerialPool and ProcessPool.
+
+    Pins that worker-side instance state (n_calls on StatefulCounter)
+    is captured identically by both implementations.
+    """
+    from tests._observer_fixtures import StatefulCounter
+
+    temperatures = [300.0, 400.0, 500.0]
+    seeds = [11, 22, 33]
+    n_steps = 200
+
+    # Serial side.
+    serial_replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=s)
+        for T, s in zip(temperatures, seeds, strict=True)
+    ]
+    serial = SerialPool(serial_replicas)
+    try:
+        serial.attach_observer(StatefulCounter(interval=20))
+        serial.advance_all(n_steps)
+        serial_obs = [serial.get_observers(r) for r in range(3)]
+    finally:
+        serial.shutdown()
+
+    # Process side.
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    process = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=temperatures,
+        seeds=seeds,
+    )
+    try:
+        process.attach_observer(StatefulCounter(interval=20))
+        process.advance_all(n_steps)
+        process_obs = [process.get_observers(r) for r in range(3)]
+    finally:
+        process.shutdown()
+
+    # Same set of tags, same n_calls per replica.
+    for s, p in zip(serial_obs, process_obs, strict=True):
+        assert set(s.keys()) == set(p.keys()) == {"counter"}
+        assert s["counter"].n_calls == p["counter"].n_calls
