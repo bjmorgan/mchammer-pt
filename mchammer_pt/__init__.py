@@ -14,7 +14,7 @@ from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
 from .replica import Replica
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "BaseParallelTempering",
