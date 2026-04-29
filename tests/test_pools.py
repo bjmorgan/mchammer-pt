@@ -152,6 +152,18 @@ def test_both_pools_advance_actually_progresses_state(
         pool.shutdown()
 
 
+def test_serial_pool_attach_observer_rejects_out_of_range_replicas(toy_ce, toy_atoms):
+    """Out-of-range replica index raises IndexError eagerly."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(IndexError, match="out of range"):
+            pool.attach_observer(StatefulCounter(interval=10), replicas=[5])
+    finally:
+        pool.shutdown()
+
+
 def test_serial_pool_attach_observer_fires(toy_ce, toy_atoms):
     from tests._observer_fixtures import StatefulCounter
 
@@ -397,9 +409,7 @@ def test_serial_pool_attach_observer_gives_independent_copies(toy_ce, toy_atoms)
         per_replica_calls = [
             int(dc.data["counter"].iloc[-1]) for dc in dcs
         ]
-        # Every replica saw at least one observation, and the counters
-        # are not strictly increasing across replicas (which would
-        # indicate a single shared object).
+        # Each replica recorded at least one observation in its own data container.
         assert all(c >= 1 for c in per_replica_calls)
     finally:
         pool.shutdown()

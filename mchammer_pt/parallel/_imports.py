@@ -11,8 +11,40 @@ the failure surface as a deep multiprocessing ``PicklingError`` or an
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Sequence
+from typing import Any, Literal
+
+
+def _resolve_replicas(
+    replicas: Sequence[int] | Literal["all"],
+    n_replicas: int,
+) -> list[int]:
+    """Convert and range-check ``replicas`` into a list of indices.
+
+    Args:
+        replicas: either the string ``"all"`` or a sequence of integer
+            indices into the pool's replica list.
+        n_replicas: total number of replicas in the pool.
+
+    Returns:
+        The selected indices as a list, in the order the caller
+        supplied. Duplicates are *not* removed (passing ``[0, 0]``
+        attaches twice to replica 0; mchammer's own duplicate-attach
+        behaviour surfaces). An empty list is returned for an empty
+        input sequence; callers short-circuit on that.
+
+    Raises:
+        IndexError: if any index falls outside ``range(n_replicas)``.
+    """
+    if replicas == "all":
+        return list(range(n_replicas))
+    out = [int(i) for i in replicas]
+    for i in out:
+        if not 0 <= i < n_replicas:
+            raise IndexError(
+                f"replica index {i} out of range for pool of size {n_replicas}"
+            )
+    return out
 
 
 def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:

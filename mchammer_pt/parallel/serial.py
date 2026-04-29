@@ -15,6 +15,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from ..replica import Replica
+from ._imports import _resolve_replicas
 
 
 class SerialPool:
@@ -73,16 +74,12 @@ class SerialPool:
         picklable, raises ``TypeError`` immediately and points at
         ``attach_observer_class`` as the escape hatch.
         """
-        target_indices = (
-            range(len(self._replicas))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
         if not target_indices:
             return
         try:
             blob = pickle.dumps(observer)
-        except Exception as exc:  # pickle.PicklingError or TypeError
+        except Exception as exc:
             raise TypeError(
                 f"observer of type {type(observer).__name__} is not "
                 f"picklable ({exc}); use attach_observer_class instead"
@@ -105,15 +102,11 @@ class SerialPool:
         arguments and the ``BaseObserver`` return type before any
         replica is touched.
 
-        The constructor fires ``1 + N`` times for ``N`` selected
-        replicas (one dry-run plus one per replica). Constructors must
-        therefore be free of externally-visible side effects.
+        The constructor must be free of externally-visible side effects:
+        it fires once in the parent (the dry-run) plus once per selected
+        replica.
         """
-        target_indices = (
-            range(len(self._replicas))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
         if not target_indices:
             return
         probe = cls(*args, **kwargs)
@@ -134,26 +127,18 @@ class SerialPool:
     ) -> None:
         """Attach an observer constructed locally per replica.
 
-        ``factory(replica)`` is called once per selected replica with
-        that replica as its sole argument and must return a fresh
-        ``BaseObserver``. The factory can reach any worker-local
-        state via the replica (notably
-        ``replica.ensemble.calculator.cluster_expansion``)
-        — useful for observers whose constructors take icet objects
-        (``ClusterSpace``, ``ClusterExpansion``) that do not pickle and
-        therefore cannot travel via ``attach_observer_class``.
+        ``factory(replica)`` is called once per selected replica with that
+        replica as its sole argument and must return a fresh
+        ``BaseObserver``. Use this for observers whose constructors take
+        icet objects (``ClusterSpace``, ``ClusterExpansion``) that do not
+        pickle: the factory reaches them via
+        ``replica.ensemble.calculator.cluster_expansion``.
 
-        On ``ProcessPool``, the factory must be a top-level function
-        or class method importable by fully qualified name. ``SerialPool``
-        runs in-process and is permissive about this, but writing
-        portable factories means they will work unchanged when the
-        pool type is swapped.
+        A factory written for ``SerialPool`` runs unchanged on
+        ``ProcessPool``, where it must additionally be a top-level function
+        or class method importable by fully qualified name.
         """
-        target_indices = (
-            range(len(self._replicas))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
         if not target_indices:
             return
         for i in target_indices:
@@ -169,5 +154,4 @@ class SerialPool:
         return [r.data_container() for r in self._replicas]
 
     def shutdown(self) -> None:
-        # Nothing to release: the serial pool holds no external resources.
         return None

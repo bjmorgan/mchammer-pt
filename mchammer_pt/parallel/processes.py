@@ -49,7 +49,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from ..replica import Replica
-from ._imports import _check_importable
+from ._imports import _check_importable, _resolve_replicas
 
 
 def _worker(
@@ -117,7 +117,7 @@ def _worker(
                 replica.attach_mchammer_observer(observer)
                 conn.send(("OK", None))
             elif op == "ATTACH_OBS_CLS":
-                cls, args, kwargs = cmd[1], cmd[2], cmd[3]
+                _, cls, args, kwargs = cmd
                 replica.attach_mchammer_observer(cls(*args, **kwargs))
                 conn.send(("OK", None))
             elif op == "ATTACH_OBS_FACTORY":
@@ -370,11 +370,7 @@ class ProcessPool:
         ``_check_open``.
         """
         self._check_open()
-        target_indices = (
-            range(len(self._workers))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._workers))
         if not target_indices:
             return
         try:
@@ -384,7 +380,6 @@ class ProcessPool:
                 f"observer of type {type(observer).__name__} is not "
                 f"picklable ({exc}); use attach_observer_class instead"
             ) from exc
-        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS", blob))
@@ -412,18 +407,16 @@ class ProcessPool:
         Each selected worker constructs its own ``cls(*args, **kwargs)``
         locally. Multiprocessing pickles ``cls`` by fully qualified name
         — the same constraint as ``ensemble_cls``. Eager parent-side
-        checks: importability of ``cls``, picklability of
-        ``(args, kwargs)``, and a dry-run construction that asserts the
-        result is a ``BaseObserver``. The constructor therefore fires
-        ``1 + N`` times for ``N`` selected workers; it must be free of
-        externally-visible side effects.
+        checks: importability of ``cls``, picklability of ``(args, kwargs)``,
+        and a dry-run construction that asserts the result is a
+        ``BaseObserver``.
+
+        The constructor must be free of externally-visible side effects:
+        the dry-run runs in the parent's address space (not in any worker),
+        and is followed by one construction per selected worker.
         """
         self._check_open()
-        target_indices = (
-            range(len(self._workers))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._workers))
         if not target_indices:
             return
         _check_importable(cls, kind="observer class")
@@ -441,7 +434,6 @@ class ProcessPool:
                 f"{type(probe).__name__}, not a BaseObserver"
             )
         del probe
-        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
@@ -488,11 +480,7 @@ class ProcessPool:
         ``_check_open``.
         """
         self._check_open()
-        target_indices = (
-            range(len(self._workers))
-            if replicas == "all"
-            else [int(i) for i in replicas]
-        )
+        target_indices = _resolve_replicas(replicas, len(self._workers))
         if not target_indices:
             return
         _check_importable(factory, kind="observer factory")
@@ -504,7 +492,6 @@ class ProcessPool:
                 f"{getattr(factory, '__name__', repr(factory))!r} "
                 f"is not picklable ({exc})"
             ) from exc
-        target_indices = list(target_indices)
         for i in target_indices:
             _, conn = self._workers[i]
             conn.send(("ATTACH_OBS_FACTORY", factory))
@@ -519,6 +506,8 @@ class ProcessPool:
                 self.shutdown()
                 raise RuntimeError(f"worker ATTACH_OBS_FACTORY failed: {payload}")
 
+    # Idempotent: bypasses _check_open so __exit__ and the __init__ failure
+    # path can call it unconditionally.
     def shutdown(self) -> None:
         for _, conn in self._workers:
             try:
