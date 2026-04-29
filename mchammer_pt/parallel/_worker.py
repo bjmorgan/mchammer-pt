@@ -124,6 +124,9 @@ def _worker(
                 replica.attach_mchammer_observer(observer)
                 conn.send(("OK", None))
             elif op == "GET_OBSERVERS":
+                # Pickling the live observer dict is safe because the
+                # worker is single-threaded and idle here; a future
+                # refactor adding background work would need to copy.
                 conn.send(("OK", replica.ensemble.observers))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))

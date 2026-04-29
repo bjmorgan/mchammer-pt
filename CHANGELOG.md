@@ -14,8 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot dict (keyed by observer tag) of the observers attached
   to a single replica; values are independent copies via `pickle`
   round-trip so mutations on the returned objects do not affect
-  the pool's running state. Mid-run retrieval is supported (the
-  worker is idle in its command loop between `advance_all` calls).
+  the pool's running state. Mid-run retrieval is supported.
   Implemented on both `SerialPool` and `ProcessPool`.
 
 ## [0.3.0] - 2026-04-29
