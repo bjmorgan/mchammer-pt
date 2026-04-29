@@ -83,6 +83,7 @@ def _worker(
             random_seed=seed,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=ce_path,
         )
     except BaseException:
         conn.send(("ERR", traceback.format_exc()))

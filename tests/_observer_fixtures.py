@@ -164,3 +164,27 @@ def factory_fails_on_400k(replica: Replica) -> BaseObserver:
     if replica.temperature == 400.0:
         return "intentional failure"  # type: ignore[return-value]
     return StatefulCounter(interval=10)
+
+
+class PathSeen(BaseObserver):
+    """Observer that records the cluster_expansion_path it was given.
+
+    Used to pin that ProcessPool's worker populates
+    ``Replica.cluster_expansion_path`` from ``ce_path``.
+    """
+
+    def __init__(self, interval: int, seen_path: str | None) -> None:
+        super().__init__(interval=interval, return_type=int, tag="path_seen")
+        self.seen_path = seen_path
+
+    def get_observable(self, structure: Any) -> int:
+        return 0
+
+
+def path_recording_factory(replica: Replica) -> BaseObserver:
+    """Factory that captures replica.cluster_expansion_path into the observer.
+
+    The observer's instance state is then retrievable end-of-run via
+    pool.get_observers(...).
+    """
+    return PathSeen(interval=10, seen_path=replica.cluster_expansion_path)

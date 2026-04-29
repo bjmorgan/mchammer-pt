@@ -1269,6 +1269,30 @@ def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
         pool.shutdown()
 
 
+def test_process_pool_worker_replica_exposes_cluster_expansion_path(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """ProcessPool's worker passes ce_path through to Replica.
+
+    Factories running in the worker reach the path via
+    replica.cluster_expansion_path. The factory used here records it
+    into the observer's instance state, which is then recovered via
+    get_observers.
+    """
+    from tests._observer_fixtures import path_recording_factory
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_factory(path_recording_factory, replicas=[0])
+        pool.advance_all(20)
+        observers = pool.get_observers(replica_index=0)
+        recorded = observers["path_seen"].seen_path
+        assert recorded is not None
+        assert recorded.endswith("toy.ce")
+    finally:
+        pool.shutdown()
+
+
 def test_get_observers_matches_across_pools(
     toy_ce, toy_atoms, tmp_path: Path
 ):

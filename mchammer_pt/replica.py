@@ -60,6 +60,10 @@ class Replica:
             (``structure``, ``calculator``, ``temperature``,
             ``random_seed``). Reserved names cannot appear here; see
             `__init__`.
+        cluster_expansion_path: path the cluster expansion was loaded
+            from, if known. Auto-populated on workers spawned by
+            ``ProcessPool``; optional elsewhere. Not validated at
+            construction — the path need not exist at this point.
     """
 
     def __init__(
@@ -71,8 +75,10 @@ class Replica:
         *,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        cluster_expansion_path: str | None = None,
     ) -> None:
         self._temperature = float(temperature)
+        self._cluster_expansion_path = cluster_expansion_path
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -114,6 +120,25 @@ class Replica:
     def ensemble(self) -> CanonicalEnsemble:
         """The underlying mchammer ensemble."""
         return self._ensemble
+
+    @property
+    def cluster_expansion_path(self) -> str | None:
+        """Path the cluster expansion was loaded from, if known.
+
+        Auto-populated on workers spawned by ``ProcessPool`` (each worker
+        reads its CE from a path supplied at pool construction).
+        Optional on ``SerialPool`` — pass ``cluster_expansion_path=`` to
+        ``Replica`` if you want factory-path observers to reload the CE
+        fresh inside the factory.
+
+        Returns ``None`` if no path was supplied. Factories that need a
+        fresh ``ClusterExpansion`` (e.g. for icet observers whose
+        constructors take a ``ClusterSpace``) should reload via
+        ``ClusterExpansion.read(replica.cluster_expansion_path)`` rather
+        than reaching into ``replica.ensemble.calculator.cluster_expansion``,
+        which is mutated by the calculator during runs.
+        """
+        return self._cluster_expansion_path
 
     def advance(self, n_steps: int) -> None:
         """Run `n_steps` canonical MC trial steps.
