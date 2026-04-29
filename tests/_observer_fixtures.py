@@ -135,14 +135,18 @@ def stateful_counter_factory(replica: Replica) -> BaseObserver:
 def cluster_count_factory(replica: Replica) -> BaseObserver:
     """Factory using icet objects only available inside the worker.
 
-    The cluster-space and structure references come from the worker's
-    own Replica; neither needs to pickle.
+    Loads a fresh ``ClusterExpansion`` from
+    ``replica.cluster_expansion_path`` so the cluster space is
+    untouched by the calculator. The structure reference comes from
+    the live ensemble (``replica.ensemble.structure``) — that's
+    safe; only the cluster space gets mutated.
     """
+    from icet import ClusterExpansion  # type: ignore[import-untyped]
     from mchammer.observers import ClusterCountObserver  # type: ignore[import-untyped]
 
-    cs = replica.ensemble.calculator.cluster_expansion.get_cluster_space_copy()
+    ce = ClusterExpansion.read(replica.cluster_expansion_path)
     return ClusterCountObserver(
-        cluster_space=cs,
+        cluster_space=ce.get_cluster_space_copy(),
         structure=replica.ensemble.structure,
         interval=20,
     )

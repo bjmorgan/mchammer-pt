@@ -58,8 +58,15 @@ class ProcessPool:
     - ``attach_observer_factory(factory)`` — for observers whose
       constructor takes icet objects (``ClusterSpace``,
       ``ClusterExpansion``) that do not pickle. The factory runs
-      inside each worker with that worker's ``Replica`` and reaches
-      icet objects via ``replica.ensemble.calculator.cluster_expansion``.
+      inside each worker with that worker's ``Replica``; reload the
+      CE from disk via
+      ``ClusterExpansion.read(replica.cluster_expansion_path)``
+      (``ProcessPool`` auto-populates ``cluster_expansion_path`` on
+      every worker). Do **not** reach for
+      ``replica.ensemble.calculator.cluster_expansion``: the
+      calculator mutates it during runs, and observers that store a
+      reference will see wrong-length cluster vectors at observation
+      time.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -430,9 +437,23 @@ class ProcessPool:
         Each selected worker calls ``factory(replica)`` locally and
         attaches the returned ``BaseObserver``. Use this for observers
         whose constructors take icet objects (``ClusterSpace``,
-        ``ClusterExpansion``) that do not pickle: the worker reaches
-        them via ``replica.ensemble.calculator.cluster_expansion``,
-        and they never cross the process boundary.
+        ``ClusterExpansion``) that do not pickle. The factory should
+        reload the CE from disk inside the worker::
+
+            def make_obs(replica):
+                ce = ClusterExpansion.read(replica.cluster_expansion_path)
+                return ClusterCountObserver(
+                    ce.get_cluster_space_copy(), ..., interval=...
+                )
+
+        ``ProcessPool`` auto-populates ``replica.cluster_expansion_path``
+        on every worker from the ``ce_path`` supplied at pool construction.
+
+        Do **not** reach for
+        ``replica.ensemble.calculator.cluster_expansion``: the
+        calculator mutates it during runs, and observers that store a
+        reference will see wrong-length cluster vectors at observation
+        time.
 
         ``factory`` must be a top-level function or class method
         importable by fully qualified name; lambdas, locally-defined

@@ -140,7 +140,11 @@ class ObservablePool(ReplicaPool, Protocol):
         Required for observers whose constructors take icet objects
         (`ClusterSpace`, `ClusterExpansion`) that do not pickle and
         therefore cannot travel via `attach_observer` or
-        `attach_observer_class`.
+        `attach_observer_class`. The factory should reload the CE from
+        disk via ``ClusterExpansion.read(replica.cluster_expansion_path)``
+        rather than reaching into
+        ``replica.ensemble.calculator.cluster_expansion``, which is
+        mutated by the calculator during runs.
         """
         ...
 
