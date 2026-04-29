@@ -953,12 +953,38 @@ def test_process_pool_attach_observer_failure_poisons_pool(
         pool.shutdown()
 
 
-def test_serial_pool_attach_observer_class_discards_probe(toy_ce, toy_atoms):
-    """Dry-run probe is constructed for validation then discarded.
+def test_process_pool_attach_factory_drains_pending_replies_on_partial_failure(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Mixed-success attach: drain consumes succeeded workers' replies before SHUTDOWN.
 
-    A regression that reuses the probe instead of constructing fresh
-    per-replica instances would either share state across replicas or
-    cause replica 0's observer to fire twice (probe + fresh instance).
+    With three workers at [300, 400, 500], the factory fails on
+    replica 1 (400 K). Workers 0 and 2 produce OK replies; worker 1
+    produces ERR. The parent receives worker 0's OK, hits worker 1's
+    ERR, and must drain worker 2's queued OK before sending SHUTDOWN
+    -- otherwise the SHUTDOWN handshake would race against the unread
+    attach reply.
+    """
+    from tests._observer_fixtures import factory_fails_on_400k
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="not a BaseObserver|attach_observer"):
+            pool.attach_observer_factory(factory_fails_on_400k)
+        # Pool poisoned; all subsequent ops refuse.
+        with pytest.raises(RuntimeError, match="shut down"):
+            pool.advance_all(5)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_class_discards_probe(toy_ce, toy_atoms):
+    """Dry-run probe is constructed for validation, then discarded.
+
+    The probe gets construction_id=1; the per-replica fresh instance
+    gets id=2. The observed values record construction_id, so a probe
+    that was wrongly registered would write 1s to the data container
+    instead of 2s.
     """
     from tests._observer_fixtures import ConstructionCounter
 
@@ -966,17 +992,30 @@ def test_serial_pool_attach_observer_class_discards_probe(toy_ce, toy_atoms):
     pool = _make_serial(toy_ce, toy_atoms)
     try:
         pool.attach_observer_class(ConstructionCounter, 5, replicas=[0])
-        # 1 dry-run probe + 1 per-replica = 2 constructions.
         assert ConstructionCounter.n_constructions == 2
         pool.advance_all(20)
-        # Replica 0 saw observations starting from n_calls=1 (the probe
-        # would have been at 0 before discard); the registered observer
-        # is the second instance, fresh from the per-replica construction.
-        # Verifying the data container has rows is enough; if the probe
-        # had been registered, we'd see two columns or doubled call counts.
         dcs = pool.data_containers()
-        assert "construction_counter" in dcs[0].data.columns
-        assert len(dcs[0].data) > 0
+        # Every recorded value is the registered observer's
+        # construction_id. The probe (id=1) was discarded; the
+        # registered observer is the fresh per-replica instance (id=2).
+        observed = dcs[0].data["construction_counter"].dropna()
+        assert len(observed) > 0
+        assert (observed == 2).all()
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_dedupes_replicas(toy_ce, toy_atoms):
+    """Duplicate indices in ``replicas`` are coalesced; observer fires once."""
+    from tests._observer_fixtures import ConstructionCounter
+
+    ConstructionCounter.n_constructions = 0
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        # Pass replica 0 three times; should attach once, not three times.
+        pool.attach_observer_class(ConstructionCounter, 5, replicas=[0, 0, 0])
+        # 1 dry-run + 1 per-unique-replica = 2 constructions.
+        assert ConstructionCounter.n_constructions == 2
     finally:
         pool.shutdown()
 

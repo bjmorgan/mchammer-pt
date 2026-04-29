@@ -66,11 +66,14 @@ class BadInitObserver(BaseObserver):
 
 
 class ConstructionCounter(BaseObserver):
-    """Observer that records each instance's construction in a class counter.
+    """Observer whose every construction is recorded.
 
-    Used to pin that ``attach_observer_class`` constructs ``1 + N`` times
-    (one dry-run probe + one per selected replica) and that the probe
-    is discarded rather than reused.
+    Class-level ``n_constructions`` increments on each ``__init__``;
+    each instance stores its own ``construction_id`` (1, 2, 3, ...).
+    Used to pin that ``attach_observer_class`` constructs ``1 + N``
+    times (one dry-run probe + one per selected replica) and that
+    the *probe* (id=1) is discarded -- only later-id instances should
+    be registered on replicas.
     """
 
     n_constructions = 0
@@ -78,11 +81,14 @@ class ConstructionCounter(BaseObserver):
     def __init__(self, interval: int, tag: str = "construction_counter") -> None:
         super().__init__(interval=interval, return_type=int, tag=tag)
         ConstructionCounter.n_constructions += 1
+        self.construction_id = ConstructionCounter.n_constructions
         self.n_calls = 0
 
     def get_observable(self, structure: Any) -> int:
         self.n_calls += 1
-        return self.n_calls
+        # Encode this instance's construction_id in the observed value
+        # so a registered probe (id=1) shows up clearly in the data.
+        return self.construction_id
 
 
 class NotAnObserver:
@@ -125,3 +131,16 @@ def cluster_count_factory(replica: Replica) -> BaseObserver:
 def factory_returning_non_observer(replica: Replica) -> object:
     """Factory whose return type is wrong; pins the isinstance check."""
     return "not an observer"
+
+
+def factory_fails_on_400k(replica: Replica) -> BaseObserver:
+    """Factory that fails only on the 400 K replica.
+
+    Used to exercise the mixed-success drain path: with workers at
+    [300, 400, 500], worker 0 returns OK, worker 1 raises a TypeError
+    (caught by the outer try/except and reported as ERR), and worker
+    2 has an OK queued that the parent must drain before SHUTDOWN.
+    """
+    if replica.temperature == 400.0:
+        return "intentional failure"  # type: ignore[return-value]
+    return StatefulCounter(interval=10)

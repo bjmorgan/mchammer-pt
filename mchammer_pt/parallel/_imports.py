@@ -28,9 +28,8 @@ def _resolve_replicas(
 
     Returns:
         The selected indices as a list, in the order the caller
-        supplied. Duplicates are *not* removed (passing ``[0, 0]``
-        attaches twice to replica 0; mchammer's own duplicate-attach
-        behaviour surfaces). An empty list is returned for an empty
+        supplied, with duplicates removed (passing ``[0, 0]`` is
+        equivalent to ``[0]``). An empty list is returned for an empty
         input sequence; callers short-circuit on that.
 
     Raises:
@@ -44,7 +43,7 @@ def _resolve_replicas(
             raise IndexError(
                 f"replica index {i} out of range for pool of size {n_replicas}"
             )
-    return out
+    return list(dict.fromkeys(out))
 
 
 def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:
