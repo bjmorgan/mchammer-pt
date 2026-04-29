@@ -246,3 +246,17 @@ def test_replica_cluster_expansion_path_not_validated_at_construction(
         cluster_expansion_path="/absolutely/does/not/exist.ce",
     )
     assert rep.cluster_expansion_path == "/absolutely/does/not/exist.ce"
+
+
+def test_replica_cluster_expansion_path_coerces_pathlike(toy_ce, toy_atoms, tmp_path):
+    """``Path`` (or any ``os.PathLike``) is coerced to ``str`` on storage."""
+    path_obj = tmp_path / "my.ce"
+    rep = Replica(
+        toy_ce,
+        toy_atoms,
+        temperature=300.0,
+        random_seed=0,
+        cluster_expansion_path=path_obj,
+    )
+    assert rep.cluster_expansion_path == str(path_obj)
+    assert isinstance(rep.cluster_expansion_path, str)

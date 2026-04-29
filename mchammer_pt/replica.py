@@ -15,6 +15,7 @@ to itself.
 
 from __future__ import annotations
 
+import os
 import random
 from collections.abc import Mapping
 from typing import Any
@@ -61,9 +62,10 @@ class Replica:
             ``random_seed``). Reserved names cannot appear here; see
             `__init__`.
         cluster_expansion_path: path the cluster expansion was loaded
-            from, if known. Auto-populated on workers spawned by
-            ``ProcessPool``; optional elsewhere. Not validated at
-            construction — the path need not exist at this point.
+            from, if known. Accepts ``str`` or any
+            ``os.PathLike[str]``; coerced to ``str`` for storage.
+            Auto-populated on workers spawned by ``ProcessPool``;
+            optional elsewhere.
     """
 
     def __init__(
@@ -75,10 +77,14 @@ class Replica:
         *,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
-        cluster_expansion_path: str | None = None,
+        cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._temperature = float(temperature)
-        self._cluster_expansion_path = cluster_expansion_path
+        self._cluster_expansion_path = (
+            None
+            if cluster_expansion_path is None
+            else os.fspath(cluster_expansion_path)
+        )
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -135,8 +141,8 @@ class Replica:
         constructors take a ``ClusterSpace`` or ``ClusterExpansion``
         should reload via
         ``ClusterExpansion.read(replica.cluster_expansion_path)``;
-        this guarantees an unmutated ``ClusterSpace`` regardless of
-        how long the run has been advancing.
+        reading from disk yields a fresh ``ClusterSpace`` independent
+        of the calculator's mutated copy.
         """
         return self._cluster_expansion_path
 

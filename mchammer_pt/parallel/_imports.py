@@ -81,8 +81,8 @@ def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:
     if "<locals>" in target.__qualname__:
         raise ValueError(
             f"{kind}={target.__qualname__!r} is defined inside a function, "
-            f"so spawn workers cannot re-import it. Move the class to "
-            f"module top level (or to a method of a top-level class)."
+            f"so spawn workers cannot re-import it. Move it to module "
+            f"top level (or make it a method of a top-level class)."
         )
     if target.__module__ != "__main__":
         return
@@ -93,6 +93,6 @@ def _check_importable(obj: type | Callable[..., Any], *, kind: str) -> None:
     raise ValueError(
         f"{kind}={target.__name__!r} is defined in __main__ in a session "
         f"whose __main__ cannot be re-imported by spawn workers "
-        f"(typically Jupyter or a REPL). Move the class into a .py "
-        f"module that both your session and the workers can import."
+        f"(typically Jupyter or a REPL). Move it into a .py module that "
+        f"both your session and the workers can import."
     )
