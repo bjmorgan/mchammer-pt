@@ -33,7 +33,6 @@ import traceback
 from multiprocessing.connection import Connection
 from typing import Any
 
-import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
@@ -42,15 +41,6 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from ..replica import Replica
-
-
-def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
-    return {
-        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
-        "positions": np.asarray(atoms.positions, dtype=np.float64),
-        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
-        "pbc": np.asarray(atoms.pbc, dtype=bool),
-    }
 
 
 def _worker(

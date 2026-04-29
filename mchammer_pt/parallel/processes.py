@@ -13,7 +13,7 @@ import pickle
 from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 import numpy as np
 from ase import Atoms
@@ -27,7 +27,16 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 
 from ..replica import Replica
 from ._imports import _check_importable, _resolve_replicas
-from ._worker import _atoms_to_dict, _worker
+from ._worker import _worker
+
+
+def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
+    return {
+        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
+        "positions": np.asarray(atoms.positions, dtype=np.float64),
+        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
+        "pbc": np.asarray(atoms.pbc, dtype=bool),
+    }
 
 
 class ProcessPool:
@@ -153,6 +162,40 @@ class ProcessPool:
             except (EOFError, BrokenPipeError):
                 pass
 
+    def _abort_partial_attach(
+        self,
+        op: str,
+        payload: str,
+        remaining: list[int],
+    ) -> NoReturn:
+        """Shut the pool down after a worker reports ERR during attach.
+
+        Partial-attach state is unrecoverable — mchammer has no detach
+        API — so the pool is shut down and further operations refuse
+        via _check_open. The drain step prevents the SHUTDOWN handshake
+        from racing against unread attach replies.
+        """
+        self._drain_remaining_replies(remaining)
+        self.shutdown()
+        raise RuntimeError(f"worker {op} failed: {payload}")
+
+    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
+        """Receive a (status, payload) reply or raise a clear RuntimeError.
+
+        Translates worker-side ERR replies and pipe-closed EOFError
+        (worker died, e.g. via KeyboardInterrupt) into a single
+        framed exception with the op name and replica index.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly"
+            ) from exc
+        if status != "OK":
+            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
+        return payload
+
     def __len__(self) -> int:
         self._check_open()
         return len(self._workers)
@@ -166,10 +209,8 @@ class ProcessPool:
         self._check_open()
         for _, conn in self._workers:
             conn.send(("ADVANCE", int(n_steps)))
-        for _, conn in self._workers:
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker ADVANCE failed: {payload}")
+        for i, (_, conn) in enumerate(self._workers):
+            self._recv_or_raise(conn, "ADVANCE", i)
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
@@ -177,29 +218,20 @@ class ProcessPool:
             conn.send(("ENERGY",))
         result = np.empty(len(self._workers), dtype=np.float64)
         for i, (_, conn) in enumerate(self._workers):
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker ENERGY failed: {payload}")
-            result[i] = float(payload)
+            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
         return result
 
     def current_energy(self, i: int) -> float:
         self._check_open()
         _, conn = self._workers[i]
         conn.send(("ENERGY",))
-        status, payload = conn.recv()
-        if status != "OK":
-            raise RuntimeError(f"worker ENERGY failed: {payload}")
-        return float(payload)
+        return float(self._recv_or_raise(conn, "ENERGY", i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
         _, conn = self._workers[i]
         conn.send(("GET_OCC",))
-        status, payload = conn.recv()
-        if status != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {payload}")
-        return np.asarray(payload)
+        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
@@ -208,31 +240,20 @@ class ProcessPool:
         _, conn_j = self._workers[j]
         conn_i.send(("GET_OCC",))
         conn_j.send(("GET_OCC",))
-        status_i, occ_i = conn_i.recv()
-        status_j, occ_j = conn_j.recv()
-        if status_i != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {occ_i}")
-        if status_j != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {occ_j}")
+        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
+        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
         conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
         conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-        status_i, payload_i = conn_i.recv()
-        status_j, payload_j = conn_j.recv()
-        if status_i != "OK":
-            raise RuntimeError(f"worker SET_OCC failed: {payload_i}")
-        if status_j != "OK":
-            raise RuntimeError(f"worker SET_OCC failed: {payload_j}")
+        self._recv_or_raise(conn_i, "SET_OCC", i)
+        self._recv_or_raise(conn_j, "SET_OCC", j)
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
         for _, conn in self._workers:
             conn.send(("GET_DC",))
         containers: list[BaseDataContainer] = []
-        for _, conn in self._workers:
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker GET_DC failed: {payload}")
-            containers.append(payload)
+        for i, (_, conn) in enumerate(self._workers):
+            containers.append(self._recv_or_raise(conn, "GET_DC", i))
         return containers
 
     def attach_observer(
@@ -268,12 +289,9 @@ class ProcessPool:
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
-                # Partial-attach state is unrecoverable: mchammer has no detach,
-                # so we shut down the pool and refuse further operations.
-                # Subsequent calls raise via _check_open.
-                self._drain_remaining_replies(target_indices[offset + 1:])
-                self.shutdown()
-                raise RuntimeError(f"worker ATTACH_OBS failed: {payload}")
+                self._abort_partial_attach(
+                    "ATTACH_OBS", payload, target_indices[offset + 1:]
+                )
 
     def attach_observer_class(
         self,
@@ -322,12 +340,9 @@ class ProcessPool:
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
-                # Partial-attach state is unrecoverable: mchammer has no detach,
-                # so we shut down the pool and refuse further operations.
-                # Subsequent calls raise via _check_open.
-                self._drain_remaining_replies(target_indices[offset + 1:])
-                self.shutdown()
-                raise RuntimeError(f"worker ATTACH_OBS_CLS failed: {payload}")
+                self._abort_partial_attach(
+                    "ATTACH_OBS_CLS", payload, target_indices[offset + 1:]
+                )
 
     def attach_observer_factory(
         self,
@@ -380,12 +395,9 @@ class ProcessPool:
             _, conn = self._workers[i]
             status, payload = conn.recv()
             if status != "OK":
-                # Partial-attach state is unrecoverable: mchammer has no detach,
-                # so we shut down the pool and refuse further operations.
-                # Subsequent calls raise via _check_open.
-                self._drain_remaining_replies(target_indices[offset + 1:])
-                self.shutdown()
-                raise RuntimeError(f"worker ATTACH_OBS_FACTORY failed: {payload}")
+                self._abort_partial_attach(
+                    "ATTACH_OBS_FACTORY", payload, target_indices[offset + 1:]
+                )
 
     # Idempotent: bypasses _check_open so __exit__ and the __init__ failure
     # path can call it unconditionally.
