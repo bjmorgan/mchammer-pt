@@ -951,3 +951,95 @@ def test_process_pool_attach_observer_failure_poisons_pool(
     finally:
         # shutdown() is idempotent and safe even after the failure path.
         pool.shutdown()
+
+
+def test_serial_pool_attach_observer_class_discards_probe(toy_ce, toy_atoms):
+    """Dry-run probe is constructed for validation then discarded.
+
+    A regression that reuses the probe instead of constructing fresh
+    per-replica instances would either share state across replicas or
+    cause replica 0's observer to fire twice (probe + fresh instance).
+    """
+    from tests._observer_fixtures import ConstructionCounter
+
+    ConstructionCounter.n_constructions = 0
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer_class(ConstructionCounter, 5, replicas=[0])
+        # 1 dry-run probe + 1 per-replica = 2 constructions.
+        assert ConstructionCounter.n_constructions == 2
+        pool.advance_all(20)
+        # Replica 0 saw observations starting from n_calls=1 (the probe
+        # would have been at 0 before discard); the registered observer
+        # is the second instance, fresh from the per-replica construction.
+        # Verifying the data container has rows is enough; if the probe
+        # had been registered, we'd see two columns or doubled call counts.
+        dcs = pool.data_containers()
+        assert "construction_counter" in dcs[0].data.columns
+        assert len(dcs[0].data) > 0
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_attach_observer_class_empty_replicas_no_construction(
+    toy_ce, toy_atoms
+):
+    """Empty replicas=[] is a no-op: no constructor calls, no validation."""
+    from tests._observer_fixtures import ConstructionCounter
+
+    ConstructionCounter.n_constructions = 0
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
+        assert ConstructionCounter.n_constructions == 0
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_attach_observer_class_empty_replicas_no_worker_contact(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Empty replicas=[] short-circuits before any worker is contacted.
+
+    The class-level counter fires only in the parent's dry-run. If the
+    empty short-circuit guard works, the parent never reaches dry-run,
+    so n_constructions stays 0. Workers are untouched; basic ops still work.
+    """
+    from tests._observer_fixtures import ConstructionCounter
+
+    ConstructionCounter.n_constructions = 0
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
+        assert ConstructionCounter.n_constructions == 0
+        # Workers untouched; basic ops still work.
+        pool.advance_all(5)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
+    """Observer attached mid-run only fires on subsequent advances.
+
+    Parity with ``test_process_pool_mid_run_attach``. The data
+    container's ``mctrial`` column records the step number of each
+    observation. After advancing 100 steps and then attaching with
+    interval=10, every recorded observation must have mctrial >= 100.
+    """
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.advance_all(100)  # No observer attached during this run.
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(100)  # Observer fires here.
+        dcs = pool.data_containers()
+        observed = dcs[0].data
+        assert "counter" in observed.columns
+        # Filter to rows where the counter actually fired (mchammer
+        # writes a row at mctrial=0 from its native energy observer
+        # with NaN in the counter column).
+        counter_rows = observed.dropna(subset=["counter"])
+        assert int(counter_rows["mctrial"].min()) >= 100
+    finally:
+        pool.shutdown()

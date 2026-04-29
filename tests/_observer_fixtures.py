@@ -65,6 +65,26 @@ class BadInitObserver(BaseObserver):
         return 0
 
 
+class ConstructionCounter(BaseObserver):
+    """Observer that records each instance's construction in a class counter.
+
+    Used to pin that ``attach_observer_class`` constructs ``1 + N`` times
+    (one dry-run probe + one per selected replica) and that the probe
+    is discarded rather than reused.
+    """
+
+    n_constructions = 0
+
+    def __init__(self, interval: int, tag: str = "construction_counter") -> None:
+        super().__init__(interval=interval, return_type=int, tag=tag)
+        ConstructionCounter.n_constructions += 1
+        self.n_calls = 0
+
+    def get_observable(self, structure: Any) -> int:
+        self.n_calls += 1
+        return self.n_calls
+
+
 class NotAnObserver:
     """A class that is *not* a BaseObserver subclass.
 
