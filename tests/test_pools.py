@@ -521,6 +521,8 @@ def test_process_pool_public_methods_raise_after_shutdown(
     with pytest.raises(RuntimeError, match="shut down"):
         from tests._observer_fixtures import factory_returning_non_observer
         pool.attach_observer_factory(factory_returning_non_observer)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.get_observers(replica_index=0)
 
 
 def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
@@ -1147,6 +1149,62 @@ def test_serial_pool_get_observers_out_of_range_raises(toy_ce, toy_atoms):
     try:
         with pytest.raises(IndexError, match="out of range"):
             pool.get_observers(replica_index=5)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_unpicklable_in_worker_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """If a worker's observer becomes non-picklable mid-run, get_observers
+    surfaces a framed RuntimeError carrying the worker's traceback."""
+    from tests._observer_fixtures import LambdaAccumulatingObs
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
+        pool.advance_all(20)  # Observer fires; stashes a lambda.
+        with pytest.raises(RuntimeError, match="GET_OBSERVERS"):
+            pool.get_observers(replica_index=0)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_out_of_range_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Out-of-range replica index raises IndexError eagerly."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(IndexError, match="out of range"):
+            pool.get_observers(replica_index=99)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_after_shutdown_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """get_observers after shutdown raises RuntimeError via _check_open."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool.shutdown()
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.get_observers(replica_index=0)
+
+
+def test_process_pool_get_observers_round_trip(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """attach -> advance -> get_observers returns the worker's observer state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        observers = pool.get_observers(replica_index=0)
+        assert "counter" in observers
+        assert observers["counter"].n_calls > 0
     finally:
         pool.shutdown()
 

@@ -372,6 +372,29 @@ class ProcessPool:
                 conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
             )
 
+    def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
+        """Return a snapshot of the observers attached to one worker.
+
+        The returned dict is keyed by observer tag. Values are
+        independent copies — the worker pickles its observer dict
+        on send and the parent unpickles, so mutations on the
+        returned objects do not affect the worker's running state.
+
+        Args:
+            replica_index: zero-based index of the replica to query.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
+            RuntimeError: if the pool is shut down, the worker
+                exited unexpectedly, or the worker reports ERR
+                (e.g. an attached observer is not picklable).
+        """
+        self._check_open()
+        [i] = _resolve_replicas([replica_index], len(self._workers))
+        _, conn = self._workers[i]
+        conn.send(("GET_OBSERVERS",))
+        return self._recv_or_raise(conn, "GET_OBSERVERS", i)
+
     def attach_observer_factory(
         self,
         factory: Callable[[Replica], BaseObserver],

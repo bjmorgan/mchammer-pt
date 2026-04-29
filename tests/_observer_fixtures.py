@@ -106,8 +106,10 @@ class LambdaAccumulatingObs(BaseObserver):
     """Observer that stashes a lambda on its first call.
 
     Picklable before ``get_observable`` runs; non-picklable afterwards.
-    Used to test that ``get_observers`` raises ``TypeError`` when the
-    live observer dict cannot be serialised.
+    Used to pin that ``get_observers`` surfaces the resulting pickle
+    failure cleanly: ``TypeError`` from ``SerialPool`` (parent does
+    the pickle directly) and a framed ``RuntimeError`` from
+    ``ProcessPool`` (worker raises, parent wraps).
     """
 
     def __init__(self, interval: int) -> None:
