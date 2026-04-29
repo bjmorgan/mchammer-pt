@@ -102,6 +102,26 @@ class NotAnObserver:
         self.interval = interval
 
 
+class LambdaAccumulatingObs(BaseObserver):
+    """Observer that stashes a lambda on its first call.
+
+    Picklable before ``get_observable`` runs; non-picklable afterwards.
+    Used to pin that ``get_observers`` surfaces the resulting pickle
+    failure as ``TypeError`` on both ``SerialPool`` (parent-side
+    pickle) and ``ProcessPool`` (worker eagerly checks and labels
+    the failure as ``ERR_PICKLE``; parent translates to
+    ``TypeError``).
+    """
+
+    def __init__(self, interval: int) -> None:
+        super().__init__(interval=interval, return_type=int, tag="stash")
+        self.junk: Any = None
+
+    def get_observable(self, structure: Any) -> int:
+        self.junk = lambda x: x  # noqa: E731
+        return 0
+
+
 def stateful_counter_factory(replica: Replica) -> BaseObserver:
     """Factory used by ProcessPool factory-path tests.
 

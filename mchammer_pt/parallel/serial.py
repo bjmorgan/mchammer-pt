@@ -150,6 +150,34 @@ class SerialPool:
                 )
             self._replicas[i].attach_mchammer_observer(observer)
 
+    def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
+        """Return a snapshot of the observers attached to one replica.
+
+        The returned dict is keyed by observer tag. Values are
+        independent copies via ``pickle`` round-trip — mutations on
+        the returned observers do not affect the pool's running
+        state.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
+        """
+        n = len(self._replicas)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        live = self._replicas[replica_index].ensemble.observers
+        try:
+            return pickle.loads(pickle.dumps(live))
+        except Exception as exc:
+            raise TypeError(
+                f"observer dict for replica {replica_index} could not be "
+                f"round-tripped through pickle ({exc})"
+            ) from exc
+
     def data_containers(self) -> list[BaseDataContainer]:
         return [r.data_container() for r in self._replicas]
 

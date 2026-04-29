@@ -212,11 +212,23 @@ class ProcessPool:
             self._abort_partial_attach(op, payload, remaining)
 
     def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
-        """Receive a (status, payload) reply or raise a clear RuntimeError.
+        """Receive a (status, payload) reply or raise a clear exception.
 
-        Translates worker-side ERR replies and pipe-closed EOFError
-        (worker died, e.g. via KeyboardInterrupt) into a single
-        framed exception with the op name and replica index.
+        Three reply shapes are recognised:
+
+        - ``("OK", payload)`` — return ``payload``.
+        - ``("ERR_PICKLE", traceback)`` — the worker's reply payload
+          could not be pickled (e.g. an attached observer accumulated
+          a non-picklable attribute). Raise ``TypeError`` so callers
+          see the same exception type as the parent-side eager pickle
+          checks on the attach paths.
+        - ``("ERR", traceback)`` — any other worker-side failure.
+          Raise ``RuntimeError`` carrying the worker traceback.
+
+        A pipe-closed ``EOFError`` (worker died, e.g. via
+        ``KeyboardInterrupt``) is translated into a framed
+        ``RuntimeError`` so the parent never sees a bare
+        ``EOFError`` from the recv path.
         """
         try:
             status, payload = conn.recv()
@@ -224,6 +236,11 @@ class ProcessPool:
             raise RuntimeError(
                 f"worker {op} (replica i={i}) exited unexpectedly"
             ) from exc
+        if status == "ERR_PICKLE":
+            raise TypeError(
+                f"reply from worker {op} (replica i={i}) could not be "
+                f"round-tripped through pickle: {payload}"
+            )
         if status != "OK":
             raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
         return payload
@@ -371,6 +388,36 @@ class ProcessPool:
             self._recv_or_abort_attach(
                 conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
             )
+
+    def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
+        """Return a snapshot of the observers attached to one worker.
+
+        The returned dict is keyed by observer tag. Values are
+        independent copies — the worker pickles its observer dict
+        on send and the parent unpickles, so mutations on the
+        returned objects do not affect the worker's running state.
+
+        Args:
+            replica_index: zero-based index of the replica to query.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
+            RuntimeError: if the pool is shut down, the worker
+                exited unexpectedly, or the worker reports any
+                other ERR.
+        """
+        self._check_open()
+        n = len(self._workers)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        _, conn = self._workers[replica_index]
+        conn.send(("GET_OBSERVERS",))
+        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
 
     def attach_observer_factory(
         self,

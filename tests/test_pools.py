@@ -521,6 +521,8 @@ def test_process_pool_public_methods_raise_after_shutdown(
     with pytest.raises(RuntimeError, match="shut down"):
         from tests._observer_fixtures import factory_returning_non_observer
         pool.attach_observer_factory(factory_returning_non_observer)
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.get_observers(replica_index=0)
 
 
 def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
@@ -1072,6 +1074,174 @@ def test_process_pool_attach_observer_class_empty_replicas_no_worker_contact(
         pool.shutdown()
 
 
+def test_serial_pool_get_observers_round_trip(toy_ce, toy_atoms):
+    """attach -> advance -> get_observers returns the live observer's state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        observers = pool.get_observers(replica_index=0)
+        assert "counter" in observers
+        assert observers["counter"].n_calls > 0
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_returns_dict_keyed_by_tag(toy_ce, toy_atoms):
+    """Multiple observers on one replica round-trip as a tag-keyed dict.
+
+    Pins the dict[str, BaseObserver] return-type contract directly.
+    A regression that flattened the result, returned only the first
+    observer, or keyed on something other than the observer's tag
+    would slip past the single-observer round-trip test.
+    """
+    from tests._observer_fixtures import StatefulCounter, TaggedObserver
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.attach_observer_class(
+            TaggedObserver, 10, label="x", replicas=[0]
+        )
+        pool.advance_all(20)
+        observers = pool.get_observers(replica_index=0)
+        assert set(observers.keys()) == {"counter", "tagged"}
+        assert observers["counter"].n_calls > 0
+        assert observers["tagged"].label == "x"
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_returns_independent_snapshot(toy_ce, toy_atoms):
+    """Mutating the returned observer does not affect the pool's running state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        snapshot_a = pool.get_observers(replica_index=0)["counter"]
+        n_a = snapshot_a.n_calls
+        # Mutate on the parent side.
+        snapshot_a.n_calls = 999
+        # Advance further; the pool's live observer should be unaffected.
+        pool.advance_all(50)
+        snapshot_b = pool.get_observers(replica_index=0)["counter"]
+        assert snapshot_b.n_calls > n_a
+        assert snapshot_b.n_calls < 999
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_empty_returns_empty_dict(toy_ce, toy_atoms):
+    """A replica with no attached observers returns {}."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        observers = pool.get_observers(replica_index=0)
+        assert observers == {}
+        # Caller's KeyError, not a special pool error.
+        with pytest.raises(KeyError):
+            _ = observers["nope"]
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_unpicklable_raises_clearly(toy_ce, toy_atoms):
+    """An attached observer with non-picklable state surfaces TypeError on retrieval."""
+    from tests._observer_fixtures import LambdaAccumulatingObs
+
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        # LambdaAccumulatingObs is picklable at attach time (junk=None);
+        # it only gains the lambda after its first get_observable call.
+        pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
+        pool.advance_all(20)  # observer fires, attribute mutates.
+        with pytest.raises(TypeError, match="could not be round-tripped"):
+            pool.get_observers(replica_index=0)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_pool_get_observers_out_of_range_raises(toy_ce, toy_atoms):
+    """Out-of-range replica index raises IndexError eagerly."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        with pytest.raises(IndexError, match="out of range"):
+            pool.get_observers(replica_index=5)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_empty_returns_empty_dict(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """A worker with no attached observers returns {} via the round trip."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        observers = pool.get_observers(replica_index=0)
+        assert observers == {}
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_unpicklable_in_worker_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """If a worker's observer becomes non-picklable mid-run, get_observers
+    raises TypeError (same as SerialPool)."""
+    from tests._observer_fixtures import LambdaAccumulatingObs
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
+        pool.advance_all(20)  # Observer fires; stashes a lambda.
+        with pytest.raises(TypeError, match="could not be round-tripped"):
+            pool.get_observers(replica_index=0)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_out_of_range_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Out-of-range replica index raises IndexError eagerly."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        with pytest.raises(IndexError, match="out of range"):
+            pool.get_observers(replica_index=99)
+    finally:
+        pool.shutdown()
+
+
+def test_process_pool_get_observers_after_shutdown_raises(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """get_observers after shutdown raises RuntimeError via _check_open."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool.shutdown()
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.get_observers(replica_index=0)
+
+
+def test_process_pool_get_observers_round_trip(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """attach -> advance -> get_observers returns the worker's observer state."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
+        pool.advance_all(50)
+        observers = pool.get_observers(replica_index=0)
+        assert "counter" in observers
+        assert observers["counter"].n_calls > 0
+    finally:
+        pool.shutdown()
+
+
 def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
     """Observer attached mid-run only fires on subsequent advances.
 
@@ -1097,3 +1267,53 @@ def test_serial_pool_mid_run_attach(toy_ce, toy_atoms):
         assert int(counter_rows["mctrial"].min()) >= 100
     finally:
         pool.shutdown()
+
+
+def test_get_observers_matches_across_pools(
+    toy_ce, toy_atoms, tmp_path: Path
+):
+    """Same setup + same observer should produce equivalent get_observers
+    output on SerialPool and ProcessPool.
+
+    Pins that worker-side instance state (n_calls on StatefulCounter)
+    is captured identically by both implementations.
+    """
+    from tests._observer_fixtures import StatefulCounter
+
+    temperatures = [300.0, 400.0, 500.0]
+    seeds = [11, 22, 33]
+    n_steps = 200
+
+    # Serial side.
+    serial_replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=s)
+        for T, s in zip(temperatures, seeds, strict=True)
+    ]
+    serial = SerialPool(serial_replicas)
+    try:
+        serial.attach_observer(StatefulCounter(interval=20))
+        serial.advance_all(n_steps)
+        serial_obs = [serial.get_observers(r) for r in range(3)]
+    finally:
+        serial.shutdown()
+
+    # Process side.
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    process = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=temperatures,
+        seeds=seeds,
+    )
+    try:
+        process.attach_observer(StatefulCounter(interval=20))
+        process.advance_all(n_steps)
+        process_obs = [process.get_observers(r) for r in range(3)]
+    finally:
+        process.shutdown()
+
+    # Same set of tags, same n_calls per replica.
+    for s, p in zip(serial_obs, process_obs, strict=True):
+        assert set(s.keys()) == set(p.keys()) == {"counter"}
+        assert s["counter"].n_calls == p["counter"].n_calls
