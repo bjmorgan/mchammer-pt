@@ -107,9 +107,10 @@ class LambdaAccumulatingObs(BaseObserver):
 
     Picklable before ``get_observable`` runs; non-picklable afterwards.
     Used to pin that ``get_observers`` surfaces the resulting pickle
-    failure cleanly: ``TypeError`` from ``SerialPool`` (parent does
-    the pickle directly) and a framed ``RuntimeError`` from
-    ``ProcessPool`` (worker raises, parent wraps).
+    failure as ``TypeError`` on both ``SerialPool`` (parent-side
+    pickle) and ``ProcessPool`` (worker eagerly checks and labels
+    the failure as ``ERR_PICKLE``; parent translates to
+    ``TypeError``).
     """
 
     def __init__(self, interval: int) -> None:

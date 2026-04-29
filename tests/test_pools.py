@@ -1190,14 +1190,14 @@ def test_process_pool_get_observers_unpicklable_in_worker_raises(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """If a worker's observer becomes non-picklable mid-run, get_observers
-    surfaces a framed RuntimeError carrying the worker's traceback."""
+    raises TypeError (same as SerialPool)."""
     from tests._observer_fixtures import LambdaAccumulatingObs
 
     pool = _make_process(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer(LambdaAccumulatingObs(interval=5), replicas=[0])
         pool.advance_all(20)  # Observer fires; stashes a lambda.
-        with pytest.raises(RuntimeError, match="GET_OBSERVERS"):
+        with pytest.raises(TypeError, match="could not be round-tripped"):
             pool.get_observers(replica_index=0)
     finally:
         pool.shutdown()

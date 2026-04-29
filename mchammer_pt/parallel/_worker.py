@@ -19,11 +19,16 @@ following command loop:
   with the replica's currently-attached observers (pickled on send)
 - ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
 
-Every reply is of the form ``(status, payload)`` with status either
-``"OK"`` or ``"ERR"``; ``"ERR"`` payloads are the formatted traceback
-from the worker's exception. Startup failures (Replica construction)
-are caught with ``BaseException`` so the parent sees the actual
-exception via the handshake; in-loop failures use ``Exception`` so
+Every reply is of the form ``(status, payload)``. ``status`` is one
+of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply
+payload could not be pickled — used by ``GET_DC`` and
+``GET_OBSERVERS`` after eagerly checking; the parent translates this
+to ``TypeError``), or ``"ERR"`` (any other worker-side failure;
+parent translates to ``RuntimeError``). ``"ERR_PICKLE"`` and ``"ERR"``
+payloads are the formatted traceback from the worker's exception.
+Startup failures (Replica construction) are caught with
+``BaseException`` so the parent sees the actual exception via the
+handshake; in-loop failures use ``Exception`` so
 ``KeyboardInterrupt`` propagates and exits the worker rather than
 being absorbed.
 """
@@ -104,7 +109,13 @@ def _worker(
                 replica.set_occupations(cmd[1])
                 conn.send(("OK", None))
             elif op == "GET_DC":
-                conn.send(("OK", replica.data_container()))
+                dc = replica.data_container()
+                try:
+                    pickle.dumps(dc)
+                except Exception:
+                    conn.send(("ERR_PICKLE", traceback.format_exc()))
+                else:
+                    conn.send(("OK", dc))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)
@@ -127,7 +138,13 @@ def _worker(
                 # Pickling the live observer dict is safe because the
                 # worker is single-threaded and idle here; a future
                 # refactor adding background work would need to copy.
-                conn.send(("OK", replica.ensemble.observers))
+                observers = replica.ensemble.observers
+                try:
+                    pickle.dumps(observers)
+                except Exception:
+                    conn.send(("ERR_PICKLE", traceback.format_exc()))
+                else:
+                    conn.send(("OK", observers))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
                 conn.close()

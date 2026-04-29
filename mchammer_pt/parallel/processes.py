@@ -212,11 +212,23 @@ class ProcessPool:
             self._abort_partial_attach(op, payload, remaining)
 
     def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
-        """Receive a (status, payload) reply or raise a clear RuntimeError.
+        """Receive a (status, payload) reply or raise a clear exception.
 
-        Translates worker-side ERR replies and pipe-closed EOFError
-        (worker died, e.g. via KeyboardInterrupt) into a single
-        framed exception with the op name and replica index.
+        Three reply shapes are recognised:
+
+        - ``("OK", payload)`` — return ``payload``.
+        - ``("ERR_PICKLE", traceback)`` — the worker's reply payload
+          could not be pickled (e.g. an attached observer accumulated
+          a non-picklable attribute). Raise ``TypeError`` so callers
+          see the same exception type as the parent-side eager pickle
+          checks on the attach paths.
+        - ``("ERR", traceback)`` — any other worker-side failure.
+          Raise ``RuntimeError`` carrying the worker traceback.
+
+        A pipe-closed ``EOFError`` (worker died, e.g. via
+        ``KeyboardInterrupt``) is translated into a framed
+        ``RuntimeError`` so the parent never sees a bare
+        ``EOFError`` from the recv path.
         """
         try:
             status, payload = conn.recv()
@@ -224,6 +236,11 @@ class ProcessPool:
             raise RuntimeError(
                 f"worker {op} (replica i={i}) exited unexpectedly"
             ) from exc
+        if status == "ERR_PICKLE":
+            raise TypeError(
+                f"reply from worker {op} (replica i={i}) could not be "
+                f"round-tripped through pickle: {payload}"
+            )
         if status != "OK":
             raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
         return payload
@@ -385,9 +402,13 @@ class ProcessPool:
 
         Raises:
             IndexError: if ``replica_index`` is out of range.
+            TypeError: if the worker's observer dict cannot be
+                round-tripped through pickle (the worker eagerly
+                checks before send and labels the failure so both
+                pools surface the same exception type).
             RuntimeError: if the pool is shut down, the worker
-                exited unexpectedly, or the worker reports ERR
-                (e.g. an attached observer is not picklable).
+                exited unexpectedly, or the worker reports any
+                other ERR.
         """
         self._check_open()
         n = len(self._workers)
