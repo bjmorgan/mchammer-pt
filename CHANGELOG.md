@@ -43,6 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProcessPool` raises `RuntimeError("pool is shut down")` from
   every public method called after `shutdown()`. Previously these
   silently no-opped or raised an opaque `IndexError`.
+- `ProcessPool` shuts itself down and refuses subsequent operations
+  if a worker reports ERR (or its pipe closes) mid-`attach_observer*`.
+  Pre-fix the contract was a docstring promise that "the run should
+  abort"; now the failure path is the mechanism — pending replies
+  on later workers are drained, the pool transitions to shut-down
+  state, and the user gets a framed `RuntimeError` carrying the
+  worker-side cause. Subsequent calls refuse via the shutdown
+  guard.
+- Replica selection in every `attach_observer*` call eagerly rejects
+  out-of-range indices with `IndexError`, and silently dedupes
+  repeated indices (`replicas=[0, 0]` is equivalent to
+  `replicas=[0]`).
 
 ### Internal
 
