@@ -14,8 +14,11 @@ interpreters) satisfy only `ReplicaPool`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Literal, Protocol, runtime_checkable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..replica import Replica
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
@@ -99,15 +102,44 @@ class ObservablePool(ReplicaPool, Protocol):
 
     Separate protocol because not every pool implementation can carry
     observer instances across its execution boundary. Pool implementations
-    that support observer forwarding implement this protocol; those that
-    don't satisfy only `ReplicaPool` and force the user to use a different
-    pool type to attach observers.
+    that support observer forwarding implement this protocol; a future pool
+    type that does not would satisfy only `ReplicaPool` and require the user
+    to choose a different pool type to attach observers.
     """
 
     def attach_observer(
         self,
         observer: BaseObserver,
-        indices: Sequence[int] | Literal["all"] = "all",
+        replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:
         """Attach an mchammer observer to selected replicas."""
+        ...
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer per selected replica.
+
+        Escape hatch for observers whose instances do not pickle.
+        """
+        ...
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[Replica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed locally per replica.
+
+        Required for observers whose constructors take icet objects
+        (`ClusterSpace`, `ClusterExpansion`) that do not pickle and
+        therefore cannot travel via `attach_observer` or
+        `attach_observer_class`.
+        """
         ...

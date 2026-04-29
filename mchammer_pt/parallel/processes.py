@@ -1,160 +1,33 @@
-"""Multiprocessing-based replica pool.
+"""Persistent-worker multiprocessing pool -- parent-side orchestration.
 
-One persistent OS process per replica. Each worker builds its own
-`Replica` on startup (since `mchammer` calculators hold C++ bindings
-that do not pickle) and enters a command loop. The parent communicates
-with workers via per-worker duplex `Pipe`s; only integer occupation
-arrays and scalar energies cross the process boundary during the run.
-
-Worker commands:
-
-- ``("ADVANCE", n_steps)``
-- ``("ENERGY",)`` -> replies ``("OK", float)`` with total CE energy
-- ``("GET_OCC",)`` -> replies ``("OK", np.ndarray)`` with occupations
-- ``("SET_OCC", occupations)`` -> overwrites state
-- ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
-- ``("SHUTDOWN",)`` -> worker exits cleanly
-
-Every reply is of the form ``(status, payload)`` with status either
-``"OK"`` or ``"ERR"``; ``"ERR"`` payloads are the formatted traceback
-from the worker's exception.
+One OS process per replica. Workers live in spawn-mode subprocesses
+implemented in ``_worker.py``; this file contains only the parent-side
+``ProcessPool`` class and the per-worker ``Pipe``-based command/reply
+plumbing.
 """
 
 from __future__ import annotations
 
 import multiprocessing as mp
-import sys
-import traceback
-from collections.abc import Mapping, Sequence
+import pickle
+from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NoReturn
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
     BaseDataContainer,
 )
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+    BaseObserver,
+)
 
 from ..replica import Replica
-
-
-def _worker(
-    conn: Connection,
-    ce_path: str,
-    atoms_dict: dict[str, Any],
-    temperature: float,
-    seed: int,
-    ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: dict[str, Any],
-) -> None:
-    """Worker entry point: build a Replica, then serve commands.
-
-    After successful Replica construction the worker sends a single
-    ("OK", None) ready-handshake back to the parent, so the parent can
-    verify startup success synchronously rather than discovering it on
-    the first ADVANCE. Any exception during startup — including
-    Replica construction — is caught and sent back as ("ERR", tb)
-    instead, and the worker exits.
-    """
-    try:
-        atoms = Atoms(
-            numbers=atoms_dict["numbers"],
-            positions=atoms_dict["positions"],
-            cell=atoms_dict["cell"],
-            pbc=atoms_dict["pbc"],
-        )
-        ce = ClusterExpansion.read(ce_path)
-        replica = Replica(
-            cluster_expansion=ce,
-            atoms=atoms,
-            temperature=temperature,
-            random_seed=seed,
-            ensemble_cls=ensemble_cls,
-            ensemble_kwargs=ensemble_kwargs,
-        )
-    except BaseException:
-        conn.send(("ERR", traceback.format_exc()))
-        conn.close()
-        return
-
-    conn.send(("OK", None))
-
-    while True:
-        try:
-            cmd = conn.recv()
-        except EOFError:
-            return
-        op = cmd[0]
-        try:
-            if op == "ADVANCE":
-                replica.advance(cmd[1])
-                conn.send(("OK", None))
-            elif op == "ENERGY":
-                conn.send(("OK", replica.current_energy()))
-            elif op == "GET_OCC":
-                conn.send(("OK", replica.current_occupations()))
-            elif op == "SET_OCC":
-                replica.set_occupations(cmd[1])
-                conn.send(("OK", None))
-            elif op == "GET_DC":
-                conn.send(("OK", replica.data_container()))
-            elif op == "SHUTDOWN":
-                conn.send(("OK", None))
-                conn.close()
-                return
-            else:
-                conn.send(("ERR", f"unknown command: {op!r}"))
-        except BaseException:
-            conn.send(("ERR", traceback.format_exc()))
-
-
-def _check_ensemble_cls_importable(ensemble_cls: type) -> None:
-    """Reject ``ensemble_cls`` definitions spawn workers cannot re-import.
-
-    Spawn workers pickle ``ensemble_cls`` by fully qualified name and
-    re-import it on the other side of the process boundary. Two
-    definition sites break that contract:
-
-    1. **Interactive ``__main__``.** A class defined in a Jupyter cell
-       or REPL has ``__module__ == "__main__"``, but
-       ``sys.modules["__main__"]`` has no importable ``__file__``. Top-
-       level classes in ``python script.py`` are fine (the worker re-
-       runs the script as ``__main__``); the discriminator is whether
-       ``__main__.__file__`` ends in ``.py``.
-    2. **Function-local class.** A class defined inside a function has
-       ``"<locals>"`` in its ``__qualname__``. Pickle cannot walk into
-       a function's local scope to recover the class.
-
-    Letting either through produces a deep ``PicklingError`` from the
-    multiprocessing internals at parent ``process.start()``, or the
-    worker exiting before ``_worker`` runs and the parent's
-    ``recv()`` raising ``EOFError`` — neither error mentions
-    ``ensemble_cls``. The preflight raises a clear ``ValueError`` up-
-    front instead.
-    """
-    if "<locals>" in ensemble_cls.__qualname__:
-        raise ValueError(
-            f"ensemble_cls={ensemble_cls.__qualname__!r} is defined "
-            f"inside a function, so spawn workers cannot re-import it. "
-            f"Move the class to module top level (or to a method of a "
-            f"top-level class)."
-        )
-    if ensemble_cls.__module__ != "__main__":
-        return
-    main_module = sys.modules.get("__main__")
-    main_file = getattr(main_module, "__file__", None)
-    if main_file is not None and main_file.endswith(".py"):
-        return
-    raise ValueError(
-        f"ensemble_cls={ensemble_cls.__name__!r} is defined in __main__ "
-        f"in a session whose __main__ cannot be re-imported by spawn "
-        f"workers (typically Jupyter or a REPL). Move the class into a "
-        f".py module that both your session and the workers can import, "
-        f"e.g. ``my_moves.py``, and pass it as ``my_moves.MyEnsemble``."
-    )
+from ._imports import _check_importable, _resolve_replicas
+from ._worker import _worker
 
 
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
@@ -169,10 +42,24 @@ def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
 class ProcessPool:
     """Persistent-worker multiprocessing pool.
 
-    One OS process per replica. Satisfies `ReplicaPool`. Does NOT
-    implement `ObservablePool` because `mchammer.BaseObserver`
-    instances do not pickle reliably across the spawn boundary; for
-    observer support use `SerialPool`.
+    One OS process per replica. Satisfies `ObservablePool`: observers
+    can be attached via three paths, each suited to a different kind
+    of observer:
+
+    - ``attach_observer(observer)`` — for observers that pickle as
+      whole instances (most stock `mchammer` observers without icet
+      construction inputs, and most user observers built from basic
+      types). Each worker receives its own deserialised copy via a
+      pickle round-trip.
+    - ``attach_observer_class(cls, /, *args, **kwargs)`` — for
+      observers whose constructor arguments are picklable but whose
+      constructed instance is awkward to ship. Each worker constructs
+      its own ``cls(*args, **kwargs)`` locally.
+    - ``attach_observer_factory(factory)`` — for observers whose
+      constructor takes icet objects (``ClusterSpace``,
+      ``ClusterExpansion``) that do not pickle. The factory runs
+      inside each worker with that worker's ``Replica`` and reaches
+      icet objects via ``replica.ensemble.calculator.cluster_expansion``.
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
@@ -180,16 +67,18 @@ class ProcessPool:
             independent copy.
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
-        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
-            every worker's Replica. Spawn workers re-import the class
-            by fully qualified name, so it must live in an importable
-            module: top-level classes in a ``python script.py``
-            invocation work (the worker re-runs the script as
-            ``__main__``); classes defined in a Jupyter cell or REPL
-            do not. Move such classes to a ``.py`` module file. The
-            interactive-``__main__`` case is rejected up-front in
-            ``__init__`` rather than producing a deep multiprocessing
-            traceback.
+        ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used
+            by every worker's Replica. Spawn workers re-import the
+            class by fully qualified name, so it must live in an
+            importable module: top-level classes in a
+            ``python script.py`` invocation work (the worker re-runs
+            the script as ``__main__``); classes defined in a Jupyter
+            cell or REPL do not. Move such classes to a ``.py``
+            module file. The interactive-``__main__`` case is
+            rejected up-front in ``__init__`` rather than producing a
+            deep multiprocessing traceback. The same constraint
+            applies to the class argument of ``attach_observer_class``
+            and the callable argument of ``attach_observer_factory``.
         ensemble_kwargs: extra keyword arguments forwarded to
             ``ensemble_cls(...)``. All values must be picklable.
             Cannot include the four kwargs reserved by `Replica`
@@ -208,7 +97,7 @@ class ProcessPool:
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
-        _check_ensemble_cls_importable(ensemble_cls)
+        _check_importable(ensemble_cls, kind="ensemble_cls")
         temperatures_list = list(temperatures)
         seeds_list = list(seeds)
         if len(temperatures_list) != len(seeds_list):
@@ -260,80 +149,284 @@ class ProcessPool:
             self.shutdown()
             raise
 
+    def _check_open(self) -> None:
+        if not self._workers:
+            raise RuntimeError("pool is shut down")
+
+    def _drain_remaining_replies(self, indices: list[int]) -> None:
+        """Read pending replies on the given worker connections, ignoring contents."""
+        for i in indices:
+            _, conn = self._workers[i]
+            try:
+                conn.recv()
+            except (EOFError, BrokenPipeError):
+                pass
+
+    def _abort_partial_attach(
+        self,
+        op: str,
+        payload: str,
+        remaining: list[int],
+    ) -> NoReturn:
+        """Shut the pool down after a worker reports ERR during attach.
+
+        Partial-attach state is unrecoverable — mchammer has no detach
+        API — so the pool is shut down and further operations refuse
+        via _check_open. The drain step prevents the SHUTDOWN handshake
+        from racing against unread attach replies.
+        """
+        self._drain_remaining_replies(remaining)
+        self.shutdown()
+        raise RuntimeError(f"worker {op} failed: {payload}")
+
+    def _recv_or_abort_attach(
+        self,
+        conn: Connection,
+        op: str,
+        i: int,
+        remaining: list[int],
+    ) -> None:
+        """Receive an attach reply or abort the pool with full cleanup.
+
+        Three failure paths produce the same outcome — drain pending
+        replies on later workers, shut the pool down, raise a framed
+        RuntimeError:
+
+        - Worker reports ERR (factory raised, isinstance check
+          failed, etc.) — message includes the worker traceback.
+        - Pipe closes (worker died via Ctrl-C, OOM, segfault) —
+          message says the worker exited unexpectedly during attach.
+
+        After this returns the pool is guaranteed shut down and
+        further operations refuse via _check_open.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            self._drain_remaining_replies(remaining)
+            self.shutdown()
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly during attach"
+            ) from exc
+        if status != "OK":
+            self._abort_partial_attach(op, payload, remaining)
+
+    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
+        """Receive a (status, payload) reply or raise a clear RuntimeError.
+
+        Translates worker-side ERR replies and pipe-closed EOFError
+        (worker died, e.g. via KeyboardInterrupt) into a single
+        framed exception with the op name and replica index.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly"
+            ) from exc
+        if status != "OK":
+            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
+        return payload
+
     def __len__(self) -> int:
+        self._check_open()
         return len(self._workers)
 
     @property
     def temperatures(self) -> list[float]:
+        self._check_open()
         return list(self._temperatures)
 
     def advance_all(self, n_steps: int) -> None:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("ADVANCE", int(n_steps)))
-        for _, conn in self._workers:
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker ADVANCE failed: {payload}")
+        for i, (_, conn) in enumerate(self._workers):
+            self._recv_or_raise(conn, "ADVANCE", i)
 
     def current_energies(self) -> np.ndarray:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("ENERGY",))
         result = np.empty(len(self._workers), dtype=np.float64)
         for i, (_, conn) in enumerate(self._workers):
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker ENERGY failed: {payload}")
-            result[i] = float(payload)
+            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
         return result
 
     def current_energy(self, i: int) -> float:
+        self._check_open()
         _, conn = self._workers[i]
         conn.send(("ENERGY",))
-        status, payload = conn.recv()
-        if status != "OK":
-            raise RuntimeError(f"worker ENERGY failed: {payload}")
-        return float(payload)
+        return float(self._recv_or_raise(conn, "ENERGY", i))
 
     def current_occupations(self, i: int) -> np.ndarray:
+        self._check_open()
         _, conn = self._workers[i]
         conn.send(("GET_OCC",))
-        status, payload = conn.recv()
-        if status != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {payload}")
-        return np.asarray(payload)
+        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
 
     def swap_configurations(self, i: int, j: int) -> None:
+        self._check_open()
         # Interleaved send/recv to halve round-trip latency.
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
         conn_i.send(("GET_OCC",))
         conn_j.send(("GET_OCC",))
-        status_i, occ_i = conn_i.recv()
-        status_j, occ_j = conn_j.recv()
-        if status_i != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {occ_i}")
-        if status_j != "OK":
-            raise RuntimeError(f"worker GET_OCC failed: {occ_j}")
+        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
+        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
         conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
         conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-        status_i, payload_i = conn_i.recv()
-        status_j, payload_j = conn_j.recv()
-        if status_i != "OK":
-            raise RuntimeError(f"worker SET_OCC failed: {payload_i}")
-        if status_j != "OK":
-            raise RuntimeError(f"worker SET_OCC failed: {payload_j}")
+        self._recv_or_raise(conn_i, "SET_OCC", i)
+        self._recv_or_raise(conn_j, "SET_OCC", j)
 
     def data_containers(self) -> list[BaseDataContainer]:
+        self._check_open()
         for _, conn in self._workers:
             conn.send(("GET_DC",))
         containers: list[BaseDataContainer] = []
-        for _, conn in self._workers:
-            status, payload = conn.recv()
-            if status != "OK":
-                raise RuntimeError(f"worker GET_DC failed: {payload}")
-            containers.append(payload)
+        for i, (_, conn) in enumerate(self._workers):
+            containers.append(self._recv_or_raise(conn, "GET_DC", i))
         return containers
 
+    def attach_observer(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an mchammer observer to selected workers.
+
+        Each selected worker receives its own deserialised copy via a
+        pickle round-trip in the worker. The parent eagerly validates
+        picklability before contacting any worker. Failure semantics:
+        the parent's ``pickle.dumps`` raising leaves all workers
+        untouched; a worker raising during ``pickle.loads`` shuts the
+        pool down, ensuring subsequent operations raise via
+        ``_check_open``.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS", blob))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS", i, target_indices[offset + 1:]
+            )
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to selected workers.
+
+        Each selected worker constructs its own ``cls(*args, **kwargs)``
+        locally. Multiprocessing pickles ``cls`` by fully qualified name
+        — the same constraint as ``ensemble_cls``. Eager parent-side
+        checks: importability of ``cls``, picklability of ``(args, kwargs)``,
+        and a dry-run construction that asserts the result is a
+        ``BaseObserver``.
+
+        The constructor must be free of externally-visible side effects:
+        the dry-run runs in the parent's address space (not in any worker),
+        and is followed by one construction per selected worker.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        _check_importable(cls, kind="observer class")
+        try:
+            pickle.dumps((args, kwargs))
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_class: args/kwargs for "
+                f"{cls.__name__} are not picklable ({exc})"
+            ) from exc
+        probe = cls(*args, **kwargs)
+        if not isinstance(probe, BaseObserver):
+            raise TypeError(
+                f"attach_observer_class: {cls.__name__}(...) returned "
+                f"{type(probe).__name__}, not a BaseObserver"
+            )
+        del probe
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
+            )
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[Replica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed inside each worker.
+
+        Each selected worker calls ``factory(replica)`` locally and
+        attaches the returned ``BaseObserver``. Use this for observers
+        whose constructors take icet objects (``ClusterSpace``,
+        ``ClusterExpansion``) that do not pickle: the worker reaches
+        them via ``replica.ensemble.calculator.cluster_expansion``,
+        and they never cross the process boundary.
+
+        ``factory`` must be a top-level function or class method
+        importable by fully qualified name; lambdas, locally-defined
+        functions, and callables defined in interactive ``__main__``
+        do not survive pickling and are rejected up-front.
+
+        Eager parent-side checks: importability of ``factory`` and
+        picklability of ``factory``. Unlike `attach_observer_class`,
+        there is no parent-side dry-run because the parent has no
+        `Replica` instances — construction failures surface from the
+        worker instead. Construction errors inside the worker (the
+        factory raising, or returning a non-``BaseObserver``) surface
+        via the standard worker-error path as ``RuntimeError`` with
+        the worker traceback. On a worker-side construction failure the
+        pool shuts down, ensuring subsequent operations raise via
+        ``_check_open``.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        _check_importable(factory, kind="observer factory")
+        try:
+            pickle.dumps(factory)
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_factory: factory "
+                f"{getattr(factory, '__name__', repr(factory))!r} "
+                f"is not picklable ({exc})"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_FACTORY", factory))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_FACTORY", i, target_indices[offset + 1:]
+            )
+
+    # Idempotent: bypasses _check_open so __exit__ and the __init__ failure
+    # path can call it unconditionally.
     def shutdown(self) -> None:
         for _, conn in self._workers:
             try:
