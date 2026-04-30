@@ -289,7 +289,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             cluster_expansion.write(str(ce_path))
             pool = ProcessPool(
                 ce_path=ce_path,
-                initial_atoms=atoms,  # type: ignore[arg-type]  # Task 4
+                initial_atoms=atoms,
                 temperatures=temperatures_list,
                 seeds=replica_seeds,
                 ensemble_cls=ensemble_cls,

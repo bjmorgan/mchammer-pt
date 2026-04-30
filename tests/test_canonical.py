@@ -432,3 +432,39 @@ def test_single_atoms_still_works_after_dispatch(toy_ce, toy_atoms):
         pt.pool.current_occupations(0),
         pt.pool.current_occupations(1),
     )
+
+
+def test_process_pool_per_temperature_atoms(toy_ce, toy_atoms):
+    """process_pool() with a sequence of Atoms seeds each worker distinctly."""
+    atoms_a = toy_atoms.copy()
+    atoms_b = toy_atoms.copy()
+    rng = np.random.default_rng(999)
+    symbols_b = np.array(atoms_b.get_chemical_symbols())
+    rng.shuffle(symbols_b)
+    atoms_b.set_chemical_symbols(symbols_b.tolist())
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=[atoms_a, atoms_b],
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+    ) as pt:
+        np.testing.assert_array_equal(
+            pt.pool.current_occupations(0), atoms_a.numbers,
+        )
+        np.testing.assert_array_equal(
+            pt.pool.current_occupations(1), atoms_b.numbers,
+        )
+
+
+def test_process_pool_per_temperature_atoms_length_mismatch(toy_ce, toy_atoms):
+    """Length mismatch between atoms list and temperatures raises ValueError."""
+    with pytest.raises(ValueError, match="atoms has 2.*temperatures has 3"):
+        CanonicalParallelTempering.process_pool(
+            cluster_expansion=toy_ce,
+            atoms=[toy_atoms, toy_atoms],
+            temperatures=[300.0, 600.0, 1200.0],
+            block_size=10,
+            random_seed=0,
+        )
