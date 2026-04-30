@@ -209,3 +209,55 @@ def test_read_hdf5_rejects_file_missing_required_exchange_datasets(tmp_path: Pat
         KeyError, match="missing required dataset 'exchanges/replica_labels_per_cycle'"
     ):
         read_hdf5(path)
+
+
+def test_concatenate_two_histories():
+    """Two histories concatenate with correct shape and summed swap counts."""
+    h1 = _make_history(n_cycles=4, n_replicas=3)
+    h2 = _make_history(n_cycles=6, n_replicas=3)
+    h2.swap_attempted[:] = 20
+    h2.swap_accepted[:] = 8
+
+    combined = ExchangeHistory.concatenate(h1, h2)
+
+    # h1 has 5 rows (4+1), h2 has 7 rows (6+1); drop row 0 from h2 -> 5+6=11
+    assert combined.energies_per_cycle.shape == (11, 3)
+    assert combined.replica_labels_per_cycle.shape == (11, 3)
+    np.testing.assert_array_equal(combined.swap_attempted, [30, 30])
+    np.testing.assert_array_equal(combined.swap_accepted, [13, 13])
+
+
+def test_concatenate_drops_duplicate_snapshot_row():
+    """Row 0 of the second history is dropped (it duplicates the first's last row)."""
+    h1 = ExchangeHistory.empty(n_cycles=2, n_replicas=2)
+    h1.energies_per_cycle[:] = [[1, 2], [3, 4], [5, 6]]
+    h2 = ExchangeHistory.empty(n_cycles=2, n_replicas=2)
+    h2.energies_per_cycle[:] = [[5, 6], [7, 8], [9, 10]]
+
+    combined = ExchangeHistory.concatenate(h1, h2)
+
+    expected = np.array([[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]])
+    np.testing.assert_array_equal(combined.energies_per_cycle, expected)
+
+
+def test_concatenate_single_history():
+    """A single history returns an equivalent copy."""
+    h = _make_history(n_cycles=3, n_replicas=2)
+    combined = ExchangeHistory.concatenate(h)
+
+    np.testing.assert_array_equal(combined.energies_per_cycle, h.energies_per_cycle)
+    np.testing.assert_array_equal(combined.swap_attempted, h.swap_attempted)
+    # Must be a copy, not the same object.
+    assert combined.energies_per_cycle is not h.energies_per_cycle
+
+
+def test_concatenate_replica_count_mismatch_raises():
+    h1 = _make_history(n_cycles=2, n_replicas=2)
+    h2 = _make_history(n_cycles=2, n_replicas=3)
+    with pytest.raises(ValueError, match="replica"):
+        ExchangeHistory.concatenate(h1, h2)
+
+
+def test_concatenate_no_arguments_raises():
+    with pytest.raises(ValueError, match="at least one"):
+        ExchangeHistory.concatenate()

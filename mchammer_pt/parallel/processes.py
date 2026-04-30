@@ -66,8 +66,10 @@ class ProcessPool:
 
     Args:
         ce_path: path to a CE file readable by ``ClusterExpansion.read``.
-        initial_atoms: starting structure; each worker receives an
-            independent copy.
+        initial_atoms: starting structure, either a single ``Atoms``
+            (each worker receives a copy) or a sequence of ``Atoms``
+            (one per temperature, length-validated against
+            ``temperatures``).
         temperatures: one temperature per replica.
         seeds: one random seed per replica.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used
@@ -93,7 +95,7 @@ class ProcessPool:
     def __init__(
         self,
         ce_path: Path | str,
-        initial_atoms: Atoms,
+        initial_atoms: Atoms | Sequence[Atoms],
         temperatures: Sequence[float],
         seeds: Sequence[int],
         *,
@@ -107,7 +109,16 @@ class ProcessPool:
             raise ValueError("temperatures and seeds must be the same length")
         self._temperatures: list[float] = [float(T) for T in temperatures_list]
         self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
-        atoms_dict = _atoms_to_dict(initial_atoms)
+        if isinstance(initial_atoms, Atoms):
+            atoms_dicts = [_atoms_to_dict(initial_atoms)] * len(temperatures_list)
+        else:
+            atoms_list = list(initial_atoms)
+            if len(atoms_list) != len(temperatures_list):
+                raise ValueError(
+                    f"initial_atoms has {len(atoms_list)} entries but "
+                    f"temperatures has {len(temperatures_list)}"
+                )
+            atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
@@ -119,14 +130,16 @@ class ProcessPool:
         # workers in ``self._workers`` that ``shutdown()`` then joins.
         ctx = mp.get_context("spawn")
         try:
-            for T, seed in zip(self._temperatures, seeds_list, strict=True):
+            for T, seed, ad in zip(
+                self._temperatures, seeds_list, atoms_dicts, strict=True
+            ):
                 parent_conn, child_conn = ctx.Pipe(duplex=True)
                 process = ctx.Process(
                     target=_worker,
                     args=(
                         child_conn,
                         str(ce_path),
-                        atoms_dict,
+                        ad,
                         T,
                         int(seed),
                         ensemble_cls,

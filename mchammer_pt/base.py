@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
+from ase import Atoms
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
@@ -36,6 +37,9 @@ class BaseParallelTempering(ABC):
             `attach_observer` raises `TypeError`.
         block_size: MC trial steps per replica per cycle.
         random_seed: master seed for the exchange-proposal RNG.
+        template_atoms: reference structure whose cell, positions, and
+            pbc are used by `final_configurations` to reconstruct
+            full ``Atoms`` objects from occupation vectors.
     """
 
     def __init__(
@@ -43,6 +47,8 @@ class BaseParallelTempering(ABC):
         pool: ReplicaPool,
         block_size: int,
         random_seed: int,
+        *,
+        template_atoms: Atoms,
     ) -> None:
         if len(pool) < 2:
             raise ValueError("parallel tempering requires at least 2 replicas")
@@ -52,6 +58,7 @@ class BaseParallelTempering(ABC):
         self._callbacks: list[ExchangeCallback] = []
         self._replica_labels = np.arange(len(pool), dtype=np.int64)
         self._history: ExchangeHistory | None = None
+        self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
 
     # --- public API ----
 
@@ -86,6 +93,21 @@ class BaseParallelTempering(ABC):
     @property
     def replica_labels(self) -> np.ndarray:
         return self._replica_labels.copy()
+
+    def final_configurations(self) -> list[Atoms]:
+        """The current Atoms at each temperature position.
+
+        Returns one ``Atoms`` per temperature, in ladder order. Each
+        ``Atoms`` has the same cell, positions, and pbc as the starting
+        structure; only the site occupations (atomic numbers) reflect
+        the current state.
+        """
+        configs: list[Atoms] = []
+        for i in range(len(self._pool)):
+            a: Atoms = self._template_atoms.copy()  # type: ignore[no-untyped-call]
+            a.numbers = self._pool.current_occupations(i)
+            configs.append(a)
+        return configs
 
     def attach_callback(self, callback: ExchangeCallback) -> None:
         self._callbacks.append(callback)

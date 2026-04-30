@@ -120,6 +120,51 @@ class ExchangeHistory:
             swap_accepted=np.zeros(n_replicas - 1, dtype=np.int64),
         )
 
+    @classmethod
+    def concatenate(cls, *histories: ExchangeHistory) -> ExchangeHistory:
+        """Concatenate sequential histories from successive runs.
+
+        Stacks ``energies_per_cycle`` and ``replica_labels_per_cycle``
+        along the cycle axis, dropping the pre-run snapshot (row 0)
+        from every history after the first. Sums ``swap_attempted``
+        and ``swap_accepted`` element-wise.
+
+        All histories must come from runs on the same temperature
+        ladder. This method validates replica count but cannot check
+        temperature agreement (temperatures are not stored on
+        ``ExchangeHistory``).
+
+        Raises:
+            ValueError: if no histories are provided, or if replica
+                counts differ across histories.
+        """
+        if not histories:
+            raise ValueError("concatenate requires at least one history")
+        n_replicas = histories[0].energies_per_cycle.shape[1]
+        for i, h in enumerate(histories):
+            if h.energies_per_cycle.shape[1] != n_replicas:
+                raise ValueError(
+                    f"history {i} has {h.energies_per_cycle.shape[1]} "
+                    f"replicas but history 0 has {n_replicas}"
+                )
+        energy_parts = [histories[0].energies_per_cycle] + [
+            h.energies_per_cycle[1:] for h in histories[1:]
+        ]
+        label_parts = [histories[0].replica_labels_per_cycle] + [
+            h.replica_labels_per_cycle[1:] for h in histories[1:]
+        ]
+        swap_attempted = np.zeros_like(histories[0].swap_attempted)
+        swap_accepted = np.zeros_like(histories[0].swap_accepted)
+        for h in histories:
+            swap_attempted = swap_attempted + h.swap_attempted
+            swap_accepted = swap_accepted + h.swap_accepted
+        return cls(
+            energies_per_cycle=np.concatenate(energy_parts, axis=0),
+            replica_labels_per_cycle=np.concatenate(label_parts, axis=0),
+            swap_attempted=swap_attempted,
+            swap_accepted=swap_accepted,
+        )
+
 
 def write_hdf5(
     path: Path | str,

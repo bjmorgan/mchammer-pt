@@ -35,7 +35,8 @@ def _pool(toy_ce, toy_atoms) -> SerialPool:
 def test_base_is_abstract(toy_ce, toy_atoms):
     with pytest.raises(TypeError):
         BaseParallelTempering(
-            pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0
+            pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0,
+            template_atoms=toy_atoms,
         )
 
 
@@ -44,6 +45,7 @@ def test_run_records_energies(toy_ce, toy_atoms):
         pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
+        template_atoms=toy_atoms,
     )
     pt.run(n_cycles=4)
     assert pt.history is not None
@@ -56,6 +58,7 @@ def test_always_reject_preserves_replica_label_order(toy_ce, toy_atoms):
         pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
+        template_atoms=toy_atoms,
     )
     pt.run(n_cycles=4)
     # Labels never permute when every exchange rejects.
@@ -71,6 +74,7 @@ def test_always_accept_permutes_replica_labels(toy_ce, toy_atoms):
         pool=_pool(toy_ce, toy_atoms),
         block_size=50,
         random_seed=0,
+        template_atoms=toy_atoms,
     )
     pt.run(n_cycles=6)
     labels = pt.history.replica_labels_per_cycle
@@ -111,7 +115,9 @@ def test_accepted_exchange_actually_swaps_configurations(toy_ce, toy_atoms):
             snapshot["pre_0"] = pool.current_occupations(0).copy()
             snapshot["pre_1"] = pool.current_occupations(1).copy()
 
-    pt = _AlwaysAcceptPT(pool=pool, block_size=1, random_seed=0)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=1, random_seed=0, template_atoms=toy_atoms,
+    )
     pt.attach_callback(_PreSwapSnapshot())
     pt.run(n_cycles=1)
     # Callback snapshotted post-advance, pre-swap; pool now holds
@@ -135,7 +141,9 @@ def test_attach_observer_routes_to_specified_replicas(toy_ce, toy_atoms):
         for i in range(3)
     ]
     pool = SerialPool(replicas)
-    pt = _AlwaysRejectPT(pool=pool, block_size=20, random_seed=0)
+    pt = _AlwaysRejectPT(
+        pool=pool, block_size=20, random_seed=0, template_atoms=toy_atoms,
+    )
 
     # Attach a counter to replicas 1 and 2 only; replica 0 gets nothing.
     pt.attach_observer(StatefulCounter(interval=5, tag="counter"), replicas=[1, 2])
@@ -160,6 +168,7 @@ def test_callbacks_fire_per_exchange(toy_ce, toy_atoms):
         pool=_pool(toy_ce, toy_atoms),
         block_size=10,
         random_seed=0,
+        template_atoms=toy_atoms,
     )
     pt.attach_callback(_Recorder())
     pt.run(n_cycles=4)
@@ -176,7 +185,10 @@ def test_non_finite_log_ratio_raises_with_diagnostic_context(toy_ce, toy_atoms):
         def _log_prob_ratio(self, i: int, j: int) -> float:
             return float("nan")
 
-    pt = _NaNPT(pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0)
+    pt = _NaNPT(
+        pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0,
+        template_atoms=toy_atoms,
+    )
     with pytest.raises(RuntimeError, match="Non-finite log-probability ratio"):
         pt.run(n_cycles=2)
 
@@ -199,7 +211,9 @@ def test_run_assigns_history_when_initial_snapshot_raises(toy_ce, toy_atoms):
         for i in range(3)
     ]
     pool = _BoomPool(replicas)
-    pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
     with pytest.raises(RuntimeError, match="pre-loop pool failure"):
         pt.run(n_cycles=3)
     assert pt.history is not None
@@ -216,7 +230,10 @@ def test_run_assigns_history_on_mid_run_exception(toy_ce, toy_atoms):
             if cycle >= 1:
                 raise ValueError("intentional mid-run failure")
 
-    pt = _AlwaysAcceptPT(pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0)
+    pt = _AlwaysAcceptPT(
+        pool=_pool(toy_ce, toy_atoms), block_size=10, random_seed=0,
+        template_atoms=toy_atoms,
+    )
     pt.attach_callback(_BlowUp())
     with pytest.raises(ValueError, match="intentional mid-run failure"):
         pt.run(n_cycles=5)
@@ -240,7 +257,9 @@ def test_orchestrator_context_manager_shuts_down_pool(toy_ce, toy_atoms, tmp_pat
         temperatures=[300.0, 400.0],
         seeds=[0, 1],
     )
-    pt = _AlwaysAcceptPT(pool=pool, block_size=10, random_seed=0)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
     with pt:
         pt.run(n_cycles=1)
     assert not pool._workers, "pool workers not cleared on context exit"
@@ -252,7 +271,9 @@ def test_orchestrator_context_manager_shuts_down_pool(toy_ce, toy_atoms, tmp_pat
         temperatures=[300.0, 400.0],
         seeds=[0, 1],
     )
-    pt2 = _AlwaysAcceptPT(pool=pool2, block_size=10, random_seed=0)
+    pt2 = _AlwaysAcceptPT(
+        pool=pool2, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
     with pytest.raises(RuntimeError, match="deliberate"):
         with pt2:
             raise RuntimeError("deliberate")
@@ -321,6 +342,64 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
             return 0
 
     pool = _NotObservablePool()
-    pt = _AlwaysRejectPT(pool=pool, block_size=20, random_seed=0)
+    pt = _AlwaysRejectPT(
+        pool=pool, block_size=20, random_seed=0, template_atoms=toy_atoms,
+    )
     with pytest.raises(TypeError, match="ObservablePool"):
         pt.attach_observer(_DummyObs())
+
+
+def test_final_configurations_returns_current_occupations(toy_ce, toy_atoms):
+    """Each returned Atoms has the current occupations from its replica."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=50, random_seed=0, template_atoms=toy_atoms,
+    )
+    pt.run(n_cycles=4)
+    configs = pt.final_configurations()
+    assert len(configs) == 3
+    for i, atoms in enumerate(configs):
+        np.testing.assert_array_equal(
+            atoms.numbers, pool.current_occupations(i)
+        )
+
+
+def test_final_configurations_returns_independent_copies(toy_ce, toy_atoms):
+    """Mutating a returned Atoms does not affect the pool."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=50, random_seed=0, template_atoms=toy_atoms,
+    )
+    pt.run(n_cycles=2)
+    configs = pt.final_configurations()
+    original_occ = pool.current_occupations(0).copy()
+    configs[0].numbers[:] = 0  # mutate
+    np.testing.assert_array_equal(pool.current_occupations(0), original_occ)
+
+
+def test_final_configurations_preserves_cell_and_positions(toy_ce, toy_atoms):
+    """Returned Atoms have the template's cell, positions, and pbc."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
+    pt.run(n_cycles=1)
+    configs = pt.final_configurations()
+    for atoms in configs:
+        np.testing.assert_array_equal(atoms.cell.array, toy_atoms.cell.array)
+        np.testing.assert_array_equal(atoms.positions, toy_atoms.positions)
+        np.testing.assert_array_equal(atoms.pbc, toy_atoms.pbc)
+
+
+def test_final_configurations_before_run(toy_ce, toy_atoms):
+    """final_configurations() returns initial occupations before any run."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
+    configs = pt.final_configurations()
+    assert len(configs) == 3
+    for i, atoms in enumerate(configs):
+        np.testing.assert_array_equal(
+            atoms.numbers, pool.current_occupations(i)
+        )
