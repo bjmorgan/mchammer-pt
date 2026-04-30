@@ -379,3 +379,56 @@ def test_process_pool_factory_forwards_ensemble_cls(toy_ce, toy_atoms):
         # `tag`) and the factory would have raised in __init__.
         history = pt.run(n_cycles=2)
     assert history.energies_per_cycle.shape == (3, 2)
+
+
+def test_per_temperature_atoms_constructs_distinct_replicas(toy_ce, toy_atoms):
+    """A sequence of Atoms seeds each replica with its specific config."""
+    # Create a second config by shuffling the species.
+    atoms_a = toy_atoms.copy()
+    atoms_b = toy_atoms.copy()
+    rng = np.random.default_rng(999)
+    symbols_b = np.array(atoms_b.get_chemical_symbols())
+    rng.shuffle(symbols_b)
+    atoms_b.set_chemical_symbols(symbols_b.tolist())
+
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=[atoms_a, atoms_b],
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+    )
+    # Each replica's initial occupations should match its specific atoms.
+    np.testing.assert_array_equal(
+        pt.pool.current_occupations(0), atoms_a.numbers,
+    )
+    np.testing.assert_array_equal(
+        pt.pool.current_occupations(1), atoms_b.numbers,
+    )
+
+
+def test_per_temperature_atoms_length_mismatch_raises(toy_ce, toy_atoms):
+    with pytest.raises(ValueError, match="atoms has 2.*temperatures has 3"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=[toy_atoms, toy_atoms],
+            temperatures=[300.0, 600.0, 1200.0],
+            block_size=10,
+            random_seed=0,
+        )
+
+
+def test_single_atoms_still_works_after_dispatch(toy_ce, toy_atoms):
+    """The existing single-Atoms path is not regressed by the dispatch."""
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=10,
+        random_seed=0,
+    )
+    # All replicas start from the same config.
+    np.testing.assert_array_equal(
+        pt.pool.current_occupations(0),
+        pt.pool.current_occupations(1),
+    )

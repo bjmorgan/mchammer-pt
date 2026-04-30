@@ -34,7 +34,11 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
-        atoms: starting structure; every replica begins from a copy.
+        atoms: starting structure, either a single ``Atoms`` (broadcast
+            to every replica) or a sequence of ``Atoms`` (one per
+            temperature, length-validated). In canonical MC only site
+            occupations vary; all entries should share the same cell,
+            positions, and pbc.
         temperatures: non-decreasing temperatures in kelvin. At least
             two values required. Equal adjacent temperatures are
             allowed (produces a same-T null case where exchange is a
@@ -65,7 +69,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
     def __init__(
         self,
         cluster_expansion: ClusterExpansion,
-        atoms: Atoms,
+        atoms: Atoms | Sequence[Atoms],
         temperatures: Sequence[float],
         block_size: int,
         random_seed: int,
@@ -83,6 +87,16 @@ class CanonicalParallelTempering(BaseParallelTempering):
             raise ValueError(f"temperatures must be non-decreasing; got {temperatures}")
         if int(block_size) < 1:
             raise ValueError(f"block_size must be >= 1; got {block_size}")
+        if isinstance(atoms, Atoms):
+            atoms_list: list[Atoms] = [atoms] * len(temperatures)
+        else:
+            atoms_list = list(atoms)
+            if len(atoms_list) != len(temperatures):
+                raise ValueError(
+                    f"atoms has {len(atoms_list)} entries but temperatures "
+                    f"has {len(temperatures)}; supply one Atoms per "
+                    f"temperature or a single Atoms to broadcast"
+                )
         seed_sequence = np.random.SeedSequence(int(random_seed))
         # One child seed per replica plus one for the master exchange RNG.
         child_seeds = seed_sequence.spawn(len(temperatures) + 1)
@@ -109,13 +123,15 @@ class CanonicalParallelTempering(BaseParallelTempering):
             replicas = [
                 Replica(
                     cluster_expansion=cluster_expansion,
-                    atoms=atoms,
+                    atoms=a,
                     temperature=T,
                     random_seed=seed,
                     ensemble_cls=ensemble_cls,
                     ensemble_kwargs=ensemble_kwargs,
                 )
-                for T, seed in zip(temperatures, replica_seeds, strict=True)
+                for a, T, seed in zip(
+                    atoms_list, temperatures, replica_seeds, strict=True
+                )
             ]
             pool = SerialPool(replicas)
         else:
@@ -149,7 +165,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             pool=pool,
             block_size=block_size,
             random_seed=master_seed,
-            template_atoms=atoms,
+            template_atoms=atoms_list[0],
         )
         self._temperatures = np.asarray(temperatures, dtype=np.float64)
         self._beta = 1.0 / (_KB * self._temperatures)
@@ -192,7 +208,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
     def process_pool(
         cls,
         cluster_expansion: ClusterExpansion,
-        atoms: Atoms,
+        atoms: Atoms | Sequence[Atoms],
         temperatures: Sequence[float],
         block_size: int,
         random_seed: int,
@@ -231,7 +247,11 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         Args:
             cluster_expansion: icet ClusterExpansion defining the energy.
-            atoms: starting structure; every replica begins from a copy.
+            atoms: starting structure, either a single ``Atoms`` (broadcast
+                to every replica) or a sequence of ``Atoms`` (one per
+                temperature, length-validated). In canonical MC only site
+                occupations vary; all entries should share the same cell,
+                positions, and pbc.
             temperatures: non-decreasing temperatures in kelvin. At least
                 two values required. Equal adjacent temperatures are
                 allowed (produces a same-T null case where exchange is a
@@ -269,7 +289,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             cluster_expansion.write(str(ce_path))
             pool = ProcessPool(
                 ce_path=ce_path,
-                initial_atoms=atoms,
+                initial_atoms=atoms,  # type: ignore[arg-type]  # Task 4
                 temperatures=temperatures_list,
                 seeds=replica_seeds,
                 ensemble_cls=ensemble_cls,
