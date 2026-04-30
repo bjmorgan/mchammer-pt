@@ -149,6 +149,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
             pool=pool,
             block_size=block_size,
             random_seed=master_seed,
+            template_atoms=atoms,
         )
         self._temperatures = np.asarray(temperatures, dtype=np.float64)
         self._beta = 1.0 / (_KB * self._temperatures)
