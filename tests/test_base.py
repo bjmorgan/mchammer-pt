@@ -389,3 +389,17 @@ def test_final_configurations_preserves_cell_and_positions(toy_ce, toy_atoms):
         np.testing.assert_array_equal(atoms.cell.array, toy_atoms.cell.array)
         np.testing.assert_array_equal(atoms.positions, toy_atoms.positions)
         np.testing.assert_array_equal(atoms.pbc, toy_atoms.pbc)
+
+
+def test_final_configurations_before_run(toy_ce, toy_atoms):
+    """final_configurations() returns initial occupations before any run."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysAcceptPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
+    configs = pt.final_configurations()
+    assert len(configs) == 3
+    for i, atoms in enumerate(configs):
+        np.testing.assert_array_equal(
+            atoms.numbers, pool.current_occupations(i)
+        )

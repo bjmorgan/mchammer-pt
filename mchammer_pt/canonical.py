@@ -97,6 +97,18 @@ class CanonicalParallelTempering(BaseParallelTempering):
                     f"has {len(temperatures)}; supply one Atoms per "
                     f"temperature or a single Atoms to broadcast"
                 )
+            ref = atoms_list[0]
+            for i, a in enumerate(atoms_list[1:], 1):
+                if not (
+                    np.array_equal(a.cell.array, ref.cell.array)
+                    and np.array_equal(a.positions, ref.positions)
+                    and np.array_equal(a.pbc, ref.pbc)
+                ):
+                    raise ValueError(
+                        f"atoms[{i}] has different cell/positions/pbc "
+                        f"than atoms[0]; canonical MC requires identical "
+                        f"lattice geometry across replicas"
+                    )
         seed_sequence = np.random.SeedSequence(int(random_seed))
         # One child seed per replica plus one for the master exchange RNG.
         child_seeds = seed_sequence.spawn(len(temperatures) + 1)

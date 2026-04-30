@@ -468,3 +468,18 @@ def test_process_pool_per_temperature_atoms_length_mismatch(toy_ce, toy_atoms):
             block_size=10,
             random_seed=0,
         )
+
+
+def test_per_temperature_atoms_geometry_mismatch_raises(toy_ce, toy_atoms):
+    """Atoms with different cell/positions/pbc are rejected."""
+    atoms_a = toy_atoms.copy()
+    atoms_b = toy_atoms.copy()
+    atoms_b.cell *= 1.1  # different cell
+    with pytest.raises(ValueError, match="different cell/positions/pbc"):
+        CanonicalParallelTempering(
+            cluster_expansion=toy_ce,
+            atoms=[atoms_a, atoms_b],
+            temperatures=[300.0, 600.0],
+            block_size=10,
+            random_seed=0,
+        )
