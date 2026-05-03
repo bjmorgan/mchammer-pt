@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-30
+
+### Added
+
+- `CanonicalParallelTempering` and `ProcessPool` accept `atoms` /
+  `initial_atoms` as a single `Atoms` (broadcast to every replica,
+  the existing behaviour) or a `Sequence[Atoms]` (one per
+  temperature, length-validated). Geometry consistency
+  (cell/positions/pbc) is validated at construction time.
+  Closes #4.
+- `BaseParallelTempering.final_configurations() -> list[Atoms]`
+  — the current structure at each temperature position,
+  reconstructed from a stored template and per-replica occupation
+  vectors. Enables seeding a follow-up run from a completed run's
+  equilibrated configurations.
+- `ExchangeHistory.concatenate(*histories)` — combine sequential
+  histories for multi-segment diagnostics. Stacks energies and
+  replica labels along the cycle axis (dropping the pre-run
+  snapshot from all but the first history), sums swap counts
+  element-wise. Validates replica-count consistency.
+
 ## [0.4.0] - 2026-04-29
 
 ### Added
