@@ -42,6 +42,9 @@ paths to the colder chains.
   as pure functions over the run output.
 - `ExchangeCallback` protocol for PT-level events (with `ExchangePrinter`
   and `SwapRateTracker` built-ins).
+- `CycleCallback` protocol for per-cycle hooks, with `ProgressPrinter`
+  built-in for periodic stderr progress lines on long runs (cycle,
+  percent, elapsed, ETA, swap-acceptance rates).
 - `mchammer_pt.testing.assert_boltzmann_sampling` — public utility for
   pinning the empirical stationary distribution of a custom
   `CanonicalEnsemble` subclass against an analytic Boltzmann fixture.
@@ -76,6 +79,11 @@ pt = CanonicalParallelTempering(
     random_seed=0,
     data_container_file="pt.h5",
 )
+
+# Optional: live progress on stderr for long runs.
+from mchammer_pt import ProgressPrinter
+pt.attach_cycle_callback(ProgressPrinter(interval=100))
+
 pt.run(n_cycles=200)
 
 # Diagnostics.

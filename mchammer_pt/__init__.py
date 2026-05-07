@@ -1,7 +1,13 @@
 """mchammer-pt: parallel tempering for mchammer canonical Monte Carlo."""
 
 from .base import BaseParallelTempering
-from .callbacks import ExchangeCallback, ExchangePrinter, SwapRateTracker
+from .callbacks import (
+    CycleCallback,
+    ExchangeCallback,
+    ExchangePrinter,
+    ProgressPrinter,
+    SwapRateTracker,
+)
 from .canonical import CanonicalParallelTempering
 from .diagnostics import (
     energy_autocorrelation_time,
@@ -19,11 +25,13 @@ __version__ = "0.5.0"
 __all__ = [
     "BaseParallelTempering",
     "CanonicalParallelTempering",
+    "CycleCallback",
     "ExchangeCallback",
     "ExchangeHistory",
     "ExchangePrinter",
     "ObservablePool",
     "ProcessPool",
+    "ProgressPrinter",
     "Replica",
     "ReplicaPool",
     "SerialPool",
