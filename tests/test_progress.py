@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from mchammer_pt.base import BaseParallelTempering
-from mchammer_pt.callbacks import CycleCallback, ProgressPrinter
+from mchammer_pt.callbacks import CycleCallback, ProgressPrinter, _format_duration
 from mchammer_pt.parallel.serial import SerialPool
 from mchammer_pt.replica import Replica
 
@@ -144,3 +144,31 @@ def test_progress_printer_rejects_non_positive_interval():
         ProgressPrinter(interval=0)
     with pytest.raises(ValueError):
         ProgressPrinter(interval=-1)
+
+
+def test_format_duration_does_not_roll_over_to_days():
+    """`_format_duration` keeps hours unbounded so the output shape is
+    stable across multi-day runs."""
+    assert _format_duration(0) == "0:00:00"
+    assert _format_duration(59) == "0:00:59"
+    assert _format_duration(60) == "0:01:00"
+    assert _format_duration(3600) == "1:00:00"
+    assert _format_duration(86400) == "24:00:00"
+    assert _format_duration(90061) == "25:01:01"
+    assert _format_duration(7 * 86400) == "168:00:00"
+
+
+def test_progress_printer_emits_single_line_for_wide_ladders(toy_ce, toy_atoms):
+    """The acc block must not wrap onto a second line, even for wide ladders."""
+    buf = io.StringIO()
+    printer = ProgressPrinter(interval=1, show_swap_rates=True, file=buf)
+    pt = _pt(toy_ce, toy_atoms, n_replicas=20)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=2)
+
+    lines = buf.getvalue().splitlines()
+    # Two cycles with interval=1 means two emissions; if the acc block
+    # wraps, splitlines() will return more than two entries.
+    assert len(lines) == 2, buf.getvalue()
+    for line in lines:
+        assert _LINE_RE.match(line) is not None, line

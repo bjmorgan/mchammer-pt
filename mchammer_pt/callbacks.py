@@ -134,8 +134,16 @@ class CycleCallback(Protocol):
 
 
 def _format_duration(seconds: float) -> str:
-    """Format a non-negative duration in seconds as ``H:MM:SS``."""
-    return str(datetime.timedelta(seconds=int(seconds)))
+    """Format a non-negative duration in seconds as ``H:MM:SS``.
+
+    Hours are unbounded — a 30-hour duration formats as ``30:00:00``,
+    not ``1 day, 6:00:00``. This keeps the output a fixed shape for
+    grep/awk pipelines on long SLURM job files.
+    """
+    total = int(seconds)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
 class ProgressPrinter:
@@ -214,7 +222,11 @@ class ProgressPrinter:
                     np.nan,
                 )
             rate_str = np.array2string(
-                rates, precision=2, suppress_small=True, separator=" "
+                rates,
+                precision=2,
+                suppress_small=True,
+                separator=" ",
+                max_line_width=10**9,
             )
             line += f"  acc {rate_str}"
         print(line, file=self._file, flush=True)
