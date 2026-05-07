@@ -111,6 +111,11 @@ class BaseParallelTempering(ABC):
         return configs
 
     def attach_callback(self, callback: ExchangeCallback) -> None:
+        """Register an exchange-event callback.
+
+        Multiple exchange callbacks compose; they are invoked in
+        registration order on each proposed exchange.
+        """
         self._callbacks.append(callback)
 
     def attach_cycle_callback(self, callback: CycleCallback) -> None:

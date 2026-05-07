@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import io
-import re
-import time
-
-import pytest
+import numpy as np
 
 from mchammer_pt.base import BaseParallelTempering
-from mchammer_pt.callbacks import CycleCallback, ProgressPrinter
+from mchammer_pt.callbacks import CycleCallback
 from mchammer_pt.parallel.serial import SerialPool
 from mchammer_pt.replica import Replica
 
@@ -40,11 +36,23 @@ def test_cycle_callback_fires_once_per_cycle_in_order(toy_ce, toy_atoms):
 
     class _Recorder:
         def __init__(self) -> None:
-            self.calls: list[tuple[int, int, int]] = []
+            self.calls: list[tuple[int, int, int, bool]] = []
 
         def on_cycle_end(self, cycle, n_cycles, history) -> None:
+            # Pin that the cycle's history rows have been written
+            # before the callback fires: row ``cycle + 1`` should be
+            # populated (the empty history initialises to zero, so a
+            # non-zero row is evidence of a write).
+            row_written = bool(
+                np.any(history.energies_per_cycle[cycle + 1] != 0.0)
+            )
             self.calls.append(
-                (cycle, n_cycles, int(history.swap_attempted.sum()))
+                (
+                    cycle,
+                    n_cycles,
+                    int(history.swap_attempted.sum()),
+                    row_written,
+                )
             )
 
     rec = _Recorder()
@@ -55,10 +63,15 @@ def test_cycle_callback_fires_once_per_cycle_in_order(toy_ce, toy_atoms):
     cycles = [c[0] for c in rec.calls]
     n_cycles_seen = [c[1] for c in rec.calls]
     swap_sums = [c[2] for c in rec.calls]
+    row_written_flags = [c[3] for c in rec.calls]
 
     assert cycles == [0, 1, 2, 3, 4]
     assert n_cycles_seen == [5, 5, 5, 5, 5]
     assert swap_sums == sorted(swap_sums)  # monotonically non-decreasing
+    assert all(row_written_flags), (
+        "callback fired before history.energies_per_cycle was written "
+        "for that cycle"
+    )
     # The recorder satisfies the protocol structurally:
     cb: CycleCallback = rec
     del cb

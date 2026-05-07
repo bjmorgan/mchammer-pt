@@ -126,12 +126,17 @@ class CycleCallback(Protocol):
         self,
         cycle: int,
         n_cycles: int,
-        history: "ExchangeHistory",
+        history: ExchangeHistory,
     ) -> None: ...
 
 
 class ProgressPrinter:
     """Placeholder — replaced in Task 2."""
 
-    def on_cycle_end(self, cycle: int, n_cycles: int, history) -> None:
+    def on_cycle_end(
+        self,
+        cycle: int,
+        n_cycles: int,
+        history: ExchangeHistory,
+    ) -> None:
         return None
