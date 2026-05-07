@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import sys
 import time
 
 import numpy as np
@@ -145,6 +146,18 @@ def test_progress_printer_rejects_non_positive_interval():
         ProgressPrinter(interval=0)
     with pytest.raises(ValueError):
         ProgressPrinter(interval=-1)
+
+
+def test_progress_printer_defaults_to_stderr(toy_ce, toy_atoms, monkeypatch):
+    """`ProgressPrinter()` with no `file=` writes to `sys.stderr`."""
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", buf)
+    printer = ProgressPrinter(interval=1, show_swap_rates=False)
+    pt = _pt(toy_ce, toy_atoms)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=2)
+
+    assert "cycle " in buf.getvalue()
 
 
 def test_format_duration_does_not_roll_over_to_days():

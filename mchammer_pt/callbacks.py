@@ -1,17 +1,14 @@
 """PT-level exchange and per-cycle callbacks.
 
-An exchange proposal is a two-replica, cycle-granularity event
-carrying a log-probability ratio and an acceptance flag. This module
-defines the `ExchangeCallback` protocol for handlers of that event,
-plus two built-ins: `SwapRateTracker` (per-pair attempt and accept
-counts) and `ExchangePrinter` (stdout trace on a configurable
-cadence).
+`ExchangeCallback` fires per exchange proposal — a two-replica,
+cycle-granularity event with a log-probability ratio and an
+acceptance flag. Built-ins: `SwapRateTracker` (per-pair
+attempt/accept counters) and `ExchangePrinter` (stdout trace on a
+configurable cadence).
 
-A PT cycle is one round of "advance all replicas + propose the
-cycle's exchanges + record history rows". `CycleCallback` is the
-protocol for handlers fired once per cycle, after that cycle's
-history rows are written. `ProgressPrinter` is the standard built-in
-implementation, emitting periodic progress lines on stderr.
+`CycleCallback` fires once per PT cycle, after that cycle's history
+rows are written. Built-in: `ProgressPrinter` (periodic progress
+lines on stderr for long runs).
 """
 
 from __future__ import annotations
@@ -136,9 +133,7 @@ class CycleCallback(Protocol):
 def _format_duration(seconds: float) -> str:
     """Format a non-negative duration in seconds as ``H:MM:SS``.
 
-    Hours are unbounded — a 30-hour duration formats as ``30:00:00``,
-    not ``1 day, 6:00:00``. This keeps the output a fixed shape for
-    grep/awk pipelines on long SLURM job files.
+    Hours are unbounded: ``30:00:00`` rather than ``1 day, 6:00:00``.
     """
     total = int(seconds)
     hours, rem = divmod(total, 3600)
@@ -162,9 +157,7 @@ class ProgressPrinter:
             always emits regardless of the modulus.
         show_swap_rates: include cumulative per-pair acceptance rates
             in each line. Defaults to ``True``.
-        file: stream to write to. Defaults to ``sys.stderr``, resolved
-            at construction time so monkeypatched ``sys.stderr`` is
-            picked up.
+        file: stream to write to. Defaults to ``sys.stderr``.
 
     Reusing one `ProgressPrinter` across multiple ``pt.run(...)``
     calls is safe: the elapsed/ETA clock resets at the start of each
@@ -215,12 +208,11 @@ class ProgressPrinter:
             f"ETA {_format_duration(eta)}"
         )
         if self._show_swap_rates:
-            with np.errstate(invalid="ignore", divide="ignore"):
-                rates = np.where(
-                    history.swap_attempted > 0,
-                    history.swap_accepted / np.maximum(history.swap_attempted, 1),
-                    np.nan,
-                )
+            rates = np.where(
+                history.swap_attempted > 0,
+                history.swap_accepted / np.maximum(history.swap_attempted, 1),
+                np.nan,
+            )
             rate_str = np.array2string(
                 rates,
                 precision=2,
