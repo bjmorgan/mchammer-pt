@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 
 import numpy as np
 import pytest
@@ -172,3 +173,50 @@ def test_progress_printer_emits_single_line_for_wide_ladders(toy_ce, toy_atoms):
     assert len(lines) == 2, buf.getvalue()
     for line in lines:
         assert _LINE_RE.match(line) is not None, line
+
+
+def test_progress_printer_resets_clock_across_runs(
+    toy_ce, toy_atoms, monkeypatch
+):
+    """ProgressPrinter's elapsed/ETA clock starts fresh on each pt.run() call.
+
+    Reusing one printer across multiple short runs must not accumulate
+    elapsed time across runs.
+    """
+    # Two runs of n_cycles=2 with interval=1 means each on_cycle_end call
+    # both sets/reads the clock as appropriate. Per cycle:
+    #   cycle == 0: monotonic() called twice (set start, then for elapsed)
+    #   cycle != 0: monotonic() called once (for elapsed)
+    # So each run uses 3 monotonic() calls.
+    fake_times = iter([
+        # Run 1: simulated wall-clock 0s -> 100s.
+        0.0, 50.0, 100.0,
+        # Run 2: simulated wall-clock 1000s start; elapsed within the run
+        # should be tiny (0s and 1s), not 1000s.
+        1000.0, 1000.0, 1001.0,
+    ])
+    monkeypatch.setattr(time, "monotonic", lambda: next(fake_times))
+
+    buf = io.StringIO()
+    printer = ProgressPrinter(interval=1, show_swap_rates=False, file=buf)
+    pt = _pt(toy_ce, toy_atoms)
+    pt.attach_cycle_callback(printer)
+
+    pt.run(n_cycles=2)
+    pt.run(n_cycles=2)
+
+    lines = buf.getvalue().splitlines()
+    assert len(lines) == 4
+
+    def _elapsed_seconds(line: str) -> int:
+        h, m, s = re.search(
+            r"elapsed (\d+):(\d{2}):(\d{2})", line
+        ).groups()
+        return int(h) * 3600 + int(m) * 60 + int(s)
+
+    # Run 1's two emissions: elapsed 50s, then 100s.
+    assert _elapsed_seconds(lines[0]) == 50
+    assert _elapsed_seconds(lines[1]) == 100
+    # Run 2's two emissions: elapsed 0s, then 1s — clock was reset.
+    assert _elapsed_seconds(lines[2]) == 0
+    assert _elapsed_seconds(lines[3]) == 1
