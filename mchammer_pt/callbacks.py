@@ -1,4 +1,4 @@
-"""PT-level exchange callbacks.
+"""PT-level exchange and per-cycle callbacks.
 
 An exchange proposal is a two-replica, cycle-granularity event
 carrying a log-probability ratio and an acceptance flag. This module
@@ -6,13 +6,22 @@ defines the `ExchangeCallback` protocol for handlers of that event,
 plus two built-ins: `SwapRateTracker` (per-pair attempt and accept
 counts) and `ExchangePrinter` (stdout trace on a configurable
 cadence).
+
+A PT cycle is one round of "advance all replicas + propose the
+cycle's exchanges + record history rows". `CycleCallback` is the
+protocol for handlers fired once per cycle, after that cycle's
+history rows are written. `ProgressPrinter` is the standard built-in
+implementation, emitting periodic progress lines on stderr.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .history import ExchangeHistory
 
 
 class ExchangeCallback(Protocol):
@@ -99,3 +108,30 @@ class ExchangePrinter:
             f"[cycle {cycle:6d}] pair {pair_index:3d}  "
             f"log_r = {log_prob_ratio:+.3f}  {verdict}"
         )
+
+
+class CycleCallback(Protocol):
+    """Protocol for callables invoked at the end of each PT cycle.
+
+    Fires after `advance_all`, exchange proposals, and the cycle's
+    history rows have all been written. The callback can therefore
+    read fresh per-cycle state from `history` (energies, replica
+    labels, swap counters) for the cycle that just finished.
+
+    Implementations receive one call per cycle with `cycle` 0-indexed
+    in ``[0, n_cycles)``. Return values are ignored.
+    """
+
+    def on_cycle_end(
+        self,
+        cycle: int,
+        n_cycles: int,
+        history: "ExchangeHistory",
+    ) -> None: ...
+
+
+class ProgressPrinter:
+    """Placeholder — replaced in Task 2."""
+
+    def on_cycle_end(self, cycle: int, n_cycles: int, history) -> None:
+        return None
