@@ -403,3 +403,41 @@ def test_final_configurations_before_run(toy_ce, toy_atoms):
         np.testing.assert_array_equal(
             atoms.numbers, pool.current_occupations(i)
         )
+
+
+def test_attach_cycle_callback_fires_once_per_cycle(toy_ce, toy_atoms):
+    """The orchestrator fires every attached cycle callback once per cycle."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysRejectPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
+    calls: list[tuple[int, int]] = []
+
+    class _Recorder:
+        def on_cycle_end(self, cycle: int, n_cycles: int) -> None:
+            calls.append((cycle, n_cycles))
+
+    pt.attach_cycle_callback(_Recorder())
+    pt.run(n_cycles=4)
+    assert calls == [(0, 4), (1, 4), (2, 4), (3, 4)]
+
+
+def test_attach_cycle_callback_supports_multiple_callbacks(toy_ce, toy_atoms):
+    """Multiple cycle callbacks all fire, in attach order."""
+    pool = _pool(toy_ce, toy_atoms)
+    pt = _AlwaysRejectPT(
+        pool=pool, block_size=10, random_seed=0, template_atoms=toy_atoms,
+    )
+    order: list[str] = []
+
+    class _Tag:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        def on_cycle_end(self, cycle: int, n_cycles: int) -> None:
+            order.append(self._label)
+
+    pt.attach_cycle_callback(_Tag("a"))
+    pt.attach_cycle_callback(_Tag("b"))
+    pt.run(n_cycles=2)
+    assert order == ["a", "b", "a", "b"]

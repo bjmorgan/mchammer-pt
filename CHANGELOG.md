@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CycleCallback` protocol and `BaseParallelTempering.attach_cycle_callback`
+  — a per-cycle hook fired after the cycle's energies and replica
+  labels have been recorded. Distinct from the existing per-exchange
+  `ExchangeCallback`; useful for progress reporting, periodic
+  checkpointing, or other cycle-granularity work.
+- `ProgressPrinter` — built-in `CycleCallback` that writes
+  `[cycle N/M] X.X%  elapsed ...  ETA ...` lines to stderr at a
+  configurable cadence. The default cadence auto-tunes to roughly
+  100 lines of output total over the run; the final cycle is always
+  printed. Stream defaults to `sys.stderr` so progress does not
+  contaminate stdout.
+
 ## [0.5.0] - 2026-04-30
 
 ### Added

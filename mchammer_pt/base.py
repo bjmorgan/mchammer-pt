@@ -21,7 +21,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
 
-from .callbacks import ExchangeCallback
+from .callbacks import CycleCallback, ExchangeCallback
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
 from .parallel.backend import ObservablePool, ReplicaPool
@@ -56,6 +56,7 @@ class BaseParallelTempering(ABC):
         self._block_size = int(block_size)
         self._rng = np.random.default_rng(int(random_seed))
         self._callbacks: list[ExchangeCallback] = []
+        self._cycle_callbacks: list[CycleCallback] = []
         self._replica_labels = np.arange(len(pool), dtype=np.int64)
         self._history: ExchangeHistory | None = None
         self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
@@ -112,6 +113,15 @@ class BaseParallelTempering(ABC):
     def attach_callback(self, callback: ExchangeCallback) -> None:
         self._callbacks.append(callback)
 
+    def attach_cycle_callback(self, callback: CycleCallback) -> None:
+        """Attach a `CycleCallback` invoked at the end of each cycle.
+
+        The callback fires after the cycle's energies and replica
+        labels have been recorded into history. Use to drive progress
+        reporting, periodic checkpointing, or other per-cycle work.
+        """
+        self._cycle_callbacks.append(callback)
+
     def attach_observer(
         self,
         observer: BaseObserver,
@@ -156,6 +166,8 @@ class BaseParallelTempering(ABC):
                     self._try_exchange(int(pair), int(pair) + 1, c, history)
                 history.energies_per_cycle[c + 1] = self._pool.current_energies()
                 history.replica_labels_per_cycle[c + 1] = self._replica_labels
+                for cycle_callback in self._cycle_callbacks:
+                    cycle_callback.on_cycle_end(cycle=c, n_cycles=n_cycles)
         finally:
             self._history = history
         return history
