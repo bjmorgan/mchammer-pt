@@ -16,7 +16,10 @@ implementation, emitting periodic progress lines on stderr.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+import datetime
+import sys
+import time
+from typing import TYPE_CHECKING, Protocol, TextIO
 
 import numpy as np
 
@@ -130,8 +133,49 @@ class CycleCallback(Protocol):
     ) -> None: ...
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a non-negative duration in seconds as ``H:MM:SS``."""
+    return str(datetime.timedelta(seconds=int(seconds)))
+
+
 class ProgressPrinter:
-    """Placeholder — replaced in Task 2."""
+    """Periodic per-cycle progress lines on stderr.
+
+    A built-in `CycleCallback` for monitoring long PT runs in
+    non-interactive environments (SLURM job files, ``nohup``, output
+    redirection). Emits one append-only line every ``interval``
+    cycles plus one at the final cycle, with a wall-clock timestamp,
+    completion fraction, elapsed and ETA, and (optionally) cumulative
+    per-pair swap-acceptance rates.
+
+    Args:
+        interval: emit a line every ``interval`` completed cycles.
+            Must be ``>= 1``. The final cycle of every ``run()``
+            always emits regardless of the modulus.
+        show_swap_rates: include cumulative per-pair acceptance rates
+            in each line. Defaults to ``True``.
+        file: stream to write to. Defaults to ``sys.stderr``, resolved
+            at construction time so monkeypatched ``sys.stderr`` is
+            picked up.
+
+    Reusing one `ProgressPrinter` across multiple ``pt.run(...)``
+    calls is safe: the elapsed/ETA clock resets at the start of each
+    run.
+    """
+
+    def __init__(
+        self,
+        interval: int = 100,
+        *,
+        show_swap_rates: bool = True,
+        file: TextIO | None = None,
+    ) -> None:
+        if int(interval) < 1:
+            raise ValueError(f"interval must be >= 1, got {interval!r}")
+        self._interval = int(interval)
+        self._show_swap_rates = bool(show_swap_rates)
+        self._file: TextIO = sys.stderr if file is None else file
+        self._start: float | None = None
 
     def on_cycle_end(
         self,
@@ -139,4 +183,38 @@ class ProgressPrinter:
         n_cycles: int,
         history: ExchangeHistory,
     ) -> None:
-        return None
+        if cycle == 0:
+            self._start = time.monotonic()
+        is_interval_emission = (cycle + 1) % self._interval == 0
+        is_final_emission = cycle == n_cycles - 1
+        if not (is_interval_emission or is_final_emission):
+            return
+        assert self._start is not None  # cycle == 0 always sets it first
+        elapsed = time.monotonic() - self._start
+        cycles_done = cycle + 1
+        fraction = cycles_done / n_cycles
+        eta = (
+            elapsed * (n_cycles / cycles_done - 1)
+            if cycles_done < n_cycles
+            else 0.0
+        )
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = (
+            f"[PT {timestamp}] "
+            f"cycle {cycles_done}/{n_cycles}  "
+            f"{100.0 * fraction:.1f}%  "
+            f"elapsed {_format_duration(elapsed)}  "
+            f"ETA {_format_duration(eta)}"
+        )
+        if self._show_swap_rates:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                rates = np.where(
+                    history.swap_attempted > 0,
+                    history.swap_accepted / np.maximum(history.swap_attempted, 1),
+                    np.nan,
+                )
+            rate_str = np.array2string(
+                rates, precision=2, suppress_small=True, separator=" "
+            )
+            line += f"  acc {rate_str}"
+        print(line, file=self._file, flush=True)

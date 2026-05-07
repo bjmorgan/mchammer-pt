@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import re
+
 import numpy as np
+import pytest
 
 from mchammer_pt.base import BaseParallelTempering
-from mchammer_pt.callbacks import CycleCallback
+from mchammer_pt.callbacks import CycleCallback, ProgressPrinter
 from mchammer_pt.parallel.serial import SerialPool
 from mchammer_pt.replica import Replica
 
@@ -75,3 +79,68 @@ def test_cycle_callback_fires_once_per_cycle_in_order(toy_ce, toy_atoms):
     # The recorder satisfies the protocol structurally:
     cb: CycleCallback = rec
     del cb
+
+
+def _line_cycles(buf: io.StringIO) -> list[int]:
+    """Extract the 1-indexed cycle counter from each emitted line."""
+    return [
+        int(re.search(r"cycle (\d+)/", line).group(1))
+        for line in buf.getvalue().splitlines()
+    ]
+
+
+def test_progress_printer_emits_at_interval_and_final_cycle(toy_ce, toy_atoms):
+    """ProgressPrinter emits at every `interval`-th cycle plus the final cycle."""
+    buf = io.StringIO()
+    printer = ProgressPrinter(interval=3, show_swap_rates=False, file=buf)
+    pt = _pt(toy_ce, toy_atoms)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=10)
+
+    assert _line_cycles(buf) == [3, 6, 9, 10]
+
+
+_LINE_RE = re.compile(
+    r"^\[PT \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] "
+    r"cycle (\d+)/(\d+)  "
+    r"(\d+\.\d)%  "
+    r"elapsed (\d+:\d{2}:\d{2})  "
+    r"ETA (\d+:\d{2}:\d{2})"
+    r"(?:  acc \[[^\]]+\])?$"
+)
+
+
+def test_progress_printer_line_format_with_swap_rates(toy_ce, toy_atoms):
+    """Each line carries timestamp, cycle, percent, elapsed, ETA, and acc block."""
+    buf = io.StringIO()
+    printer = ProgressPrinter(interval=2, show_swap_rates=True, file=buf)
+    pt = _pt(toy_ce, toy_atoms)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=4)
+
+    lines = buf.getvalue().splitlines()
+    assert lines, buf.getvalue()
+    for line in lines:
+        m = _LINE_RE.match(line)
+        assert m is not None, f"line did not match expected format: {line!r}"
+        assert "acc [" in line
+
+
+def test_progress_printer_line_format_without_swap_rates(toy_ce, toy_atoms):
+    """When show_swap_rates=False, the acc block is dropped."""
+    buf = io.StringIO()
+    printer = ProgressPrinter(interval=2, show_swap_rates=False, file=buf)
+    pt = _pt(toy_ce, toy_atoms)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=4)
+
+    for line in buf.getvalue().splitlines():
+        assert _LINE_RE.match(line) is not None, line
+        assert "acc [" not in line
+
+
+def test_progress_printer_rejects_non_positive_interval():
+    with pytest.raises(ValueError):
+        ProgressPrinter(interval=0)
+    with pytest.raises(ValueError):
+        ProgressPrinter(interval=-1)
