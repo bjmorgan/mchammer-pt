@@ -14,7 +14,11 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
-from .checkpoint import _compute_ce_identity, _compute_ensemble_kwargs_hash
+from .checkpoint import (
+    _compute_ce_identity,
+    _compute_ensemble_kwargs_hash,
+    _write_checkpoint,
+)
 from .history import ExchangeHistory
 from .parallel.backend import ReplicaPool
 from .parallel.processes import ProcessPool
@@ -52,10 +56,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
             If None (the default), a `SerialPool` is constructed from
             ``cluster_expansion``, ``atoms``, ``temperatures``, and the
             spawned per-replica seeds.
-        data_container_file: optional path; if given, `run` writes an
-            HDF5 bundle of the `ExchangeHistory`, each replica's
-            `mchammer.BaseDataContainer`, and run metadata to this path
-            on completion.
+        data_container_file: optional path; if given, `run` writes a
+            full checkpoint to this path on completion (the
+            `ExchangeHistory`, each replica's
+            `mchammer.BaseDataContainer`, run metadata, identity hashes,
+            and orchestrator-level state). Files written this way are
+            valid resume sources for
+            `CanonicalParallelTempering.resume`.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
             every replica when this orchestrator constructs the default
             pool. Rejected when ``pool`` is supplied directly. Pinned to
@@ -212,8 +219,6 @@ class CanonicalParallelTempering(BaseParallelTempering):
         `RuntimeError` otherwise — the per-replica data containers
         do not populate `_last_state` until a run completes.
         """
-        from .checkpoint import _write_checkpoint
-
         _write_checkpoint(self, path)
 
     def _log_prob_ratio(self, i: int, j: int) -> float:
@@ -234,8 +239,6 @@ class CanonicalParallelTempering(BaseParallelTempering):
         """
         history = super().run(n_cycles=n_cycles)
         if self._data_container_file is not None:
-            from .checkpoint import _write_checkpoint
-
             _write_checkpoint(self, Path(self._data_container_file))
         return history
 
@@ -295,10 +298,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
             random_seed: master seed; each replica's MC RNG and the
                 orchestrator's exchange-proposal RNG are deterministically
                 spawned from it.
-            data_container_file: optional path; if given, `run` writes an
-                HDF5 bundle of the `ExchangeHistory`, each replica's
-                `mchammer.BaseDataContainer`, and run metadata to this path
-                on completion.
+            data_container_file: optional path; if given, `run` writes a
+                full checkpoint to this path on completion (the
+                `ExchangeHistory`, each replica's
+                `mchammer.BaseDataContainer`, run metadata, identity hashes,
+                and orchestrator-level state). Files written this way are
+                valid resume sources for
+                `CanonicalParallelTempering.resume`.
             ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used by
                 every worker's Replica. Spawn workers re-import the class by
                 fully qualified name. Top-level classes in a ``python
