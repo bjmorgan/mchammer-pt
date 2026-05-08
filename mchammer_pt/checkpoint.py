@@ -64,16 +64,16 @@ def _compute_ensemble_kwargs_hash(
 ) -> str:
     """Best-effort stable hash of ensemble kwargs.
 
-    Returns the SHA-256 hex digest of `pickle.dumps(kwargs)` when
-    the kwargs pickle cleanly, or the sentinel ``""`` otherwise
-    (kwargs containing icet `ClusterSpace`, `ClusterExpansion`, or
-    other non-picklable objects fall back to the sentinel).
+    Returns the SHA-256 hex digest of `pickle.dumps(sorted(items))`
+    when the kwargs serialise cleanly, or the sentinel ``""``
+    otherwise. Any pickling failure (non-picklable values like icet
+    `ClusterSpace`, instances of locally-defined classes, etc.) falls
+    back to the sentinel; the resume-time identity check treats a
+    sentinel value on either side as "kwargs identity unknown, skip
+    the check".
 
     Pickle is used purely as a stable serialiser for hashing — the
-    bytes are not stored anywhere and never unpickled. The hash
-    feeds into the resume-time identity check, where a sentinel
-    value on either side is treated as "kwargs identity unknown,
-    skip the check".
+    bytes are not stored anywhere and never unpickled.
 
     The empty dict and `None` produce the same hash so that
     `ensemble_kwargs=None` and `ensemble_kwargs={}` are
@@ -85,6 +85,6 @@ def _compute_ensemble_kwargs_hash(
         # so callers passing the same kwargs in different insertion
         # orders get matching hashes.
         payload = pickle.dumps(sorted(canonical.items()))
-    except (TypeError, pickle.PickleError):
+    except Exception:
         return ""
     return hashlib.sha256(payload).hexdigest()

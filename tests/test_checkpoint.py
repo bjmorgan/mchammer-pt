@@ -84,6 +84,86 @@ def test_compute_ce_identity_differs_for_different_parameters(
     assert _compute_ce_identity(toy_ce) != _compute_ce_identity(other)
 
 
+def test_compute_ce_identity_differs_for_different_chemistry(toy_ce):
+    """Different chemical_symbols → different digest."""
+    from ase.build import bulk
+    from icet import ClusterExpansion, ClusterSpace
+
+    from mchammer_pt.checkpoint import _compute_ce_identity
+
+    primitive = bulk("Cu", "fcc", a=4.0, cubic=True)
+    other_cs = ClusterSpace(
+        structure=primitive,
+        cutoffs=[3.5],
+        chemical_symbols=["Cu", "Ag"],
+    )
+    other_ce = ClusterExpansion(
+        cluster_space=other_cs,
+        parameters=np.zeros(len(other_cs)),
+    )
+    # toy_ce uses Cu/Au; reconstruct an Au-version for a fair comparison
+    # with matching parameter vector length.
+    toy_au_cs = ClusterSpace(
+        structure=primitive,
+        cutoffs=[3.5],
+        chemical_symbols=["Cu", "Au"],
+    )
+    toy_au_ce = ClusterExpansion(
+        cluster_space=toy_au_cs,
+        parameters=np.zeros(len(toy_au_cs)),
+    )
+    assert _compute_ce_identity(other_ce) != _compute_ce_identity(toy_au_ce)
+
+
+def test_compute_ce_identity_differs_for_different_cutoffs():
+    """Different cutoffs → different digest."""
+    from ase.build import bulk
+    from icet import ClusterExpansion, ClusterSpace
+
+    from mchammer_pt.checkpoint import _compute_ce_identity
+
+    primitive = bulk("Cu", "fcc", a=4.0, cubic=True)
+    cs_short = ClusterSpace(
+        structure=primitive, cutoffs=[3.5], chemical_symbols=["Cu", "Au"]
+    )
+    cs_long = ClusterSpace(
+        structure=primitive, cutoffs=[4.5], chemical_symbols=["Cu", "Au"]
+    )
+    ce_short = ClusterExpansion(
+        cluster_space=cs_short, parameters=np.zeros(len(cs_short))
+    )
+    ce_long = ClusterExpansion(
+        cluster_space=cs_long, parameters=np.zeros(len(cs_long))
+    )
+    assert _compute_ce_identity(ce_short) != _compute_ce_identity(ce_long)
+
+
+def test_compute_ce_identity_differs_for_different_primitive_structure():
+    """Different primitive structure → different digest."""
+    from ase.build import bulk
+    from icet import ClusterExpansion, ClusterSpace
+
+    from mchammer_pt.checkpoint import _compute_ce_identity
+
+    cs_a = ClusterSpace(
+        structure=bulk("Cu", "fcc", a=4.0, cubic=True),
+        cutoffs=[3.5],
+        chemical_symbols=["Cu", "Au"],
+    )
+    cs_b = ClusterSpace(
+        structure=bulk("Cu", "fcc", a=4.1, cubic=True),  # different lattice constant
+        cutoffs=[3.5],
+        chemical_symbols=["Cu", "Au"],
+    )
+    ce_a = ClusterExpansion(
+        cluster_space=cs_a, parameters=np.zeros(len(cs_a))
+    )
+    ce_b = ClusterExpansion(
+        cluster_space=cs_b, parameters=np.zeros(len(cs_b))
+    )
+    assert _compute_ce_identity(ce_a) != _compute_ce_identity(ce_b)
+
+
 def test_compute_ensemble_kwargs_hash_handles_picklable_and_unpicklable():
     """Picklable kwargs hash deterministically; unpicklable kwargs return the
     sentinel ``""``."""
@@ -109,3 +189,16 @@ def test_compute_ensemble_kwargs_hash_handles_picklable_and_unpicklable():
             raise TypeError("nope")
 
     assert _compute_ensemble_kwargs_hash({"x": _Unpicklable()}) == ""
+
+
+def test_compute_ensemble_kwargs_hash_returns_sentinel_for_local_class():
+    """Instances of locally-defined classes return the sentinel rather than
+    crashing — pickle can't resolve their qualified name."""
+    from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+
+    class _LocalClass:
+        pass
+
+    # pickle raises AttributeError (or similar) for local-class instances;
+    # the broadened except in `_compute_ensemble_kwargs_hash` should catch.
+    assert _compute_ensemble_kwargs_hash({"x": _LocalClass()}) == ""
