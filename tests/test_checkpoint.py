@@ -60,3 +60,52 @@ def test_replica_restart_from_restores_per_replica_state(
         assert stdlib_random.getstate() == saved_random_state
     finally:
         stdlib_random.setstate(caller_state)
+
+
+def test_compute_ce_identity_is_deterministic_for_same_ce(toy_ce):
+    """Hashing the same CE twice gives the same digest."""
+    from mchammer_pt.checkpoint import _compute_ce_identity
+
+    assert _compute_ce_identity(toy_ce) == _compute_ce_identity(toy_ce)
+
+
+def test_compute_ce_identity_differs_for_different_parameters(
+    toy_ce, toy_cluster_space
+):
+    """Different parameters → different digest."""
+    from icet import ClusterExpansion
+
+    from mchammer_pt.checkpoint import _compute_ce_identity
+
+    other = ClusterExpansion(
+        cluster_space=toy_cluster_space,
+        parameters=np.zeros(len(toy_cluster_space)),
+    )
+    assert _compute_ce_identity(toy_ce) != _compute_ce_identity(other)
+
+
+def test_compute_ensemble_kwargs_hash_handles_picklable_and_unpicklable():
+    """Picklable kwargs hash deterministically; unpicklable kwargs return the
+    sentinel ``""``."""
+    from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+
+    # None and {} both hash to the same canonical empty value.
+    assert (
+        _compute_ensemble_kwargs_hash(None)
+        == _compute_ensemble_kwargs_hash({})
+    )
+    # Picklable kwargs hash deterministically.
+    h1 = _compute_ensemble_kwargs_hash({"a": 1, "b": "x"})
+    h2 = _compute_ensemble_kwargs_hash({"a": 1, "b": "x"})
+    assert h1 == h2 and h1 != ""
+    # Different picklable kwargs give different hashes.
+    assert _compute_ensemble_kwargs_hash({"a": 1}) != _compute_ensemble_kwargs_hash(
+        {"a": 2}
+    )
+
+    # Unpicklable kwargs return the sentinel.
+    class _Unpicklable:
+        def __reduce__(self):
+            raise TypeError("nope")
+
+    assert _compute_ensemble_kwargs_hash({"x": _Unpicklable()}) == ""
