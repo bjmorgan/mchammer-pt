@@ -218,7 +218,7 @@ def test_orchestrator_state_round_trips(tmp_path):
         path,
         history=history,
         replica_containers=[],
-        meta={"schema_version": "1"},
+        meta={"schema_version": "2"},
         orchestrator_state={
             "replica_labels": np.array([2, 0, 3, 1], dtype=np.int64),
             "rng_state": rng_state_json,
@@ -280,6 +280,7 @@ def test_save_checkpoint_before_run_raises(toy_ce, toy_atoms, tmp_path):
 def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp_path):
     """The existing `data_container_file=` write path now produces files that
     include the new schema additions, so they are valid resume sources."""
+    from mchammer_pt import CanonicalParallelTempering
     from mchammer_pt.checkpoint import _read_orchestrator_state
     from mchammer_pt.history import read_hdf5
 
@@ -291,6 +292,13 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     assert meta["schema_version"] == "2"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
+
+    # The README promises files written via `data_container_file=` are
+    # valid resume sources. Pin that end-to-end so a regression where
+    # the write path drifts away from `_write_checkpoint` would surface
+    # here rather than at a user's next walltime kill.
+    pt_b = CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
+    pt_b.run(n_cycles=1)
 
 
 def test_checkpoint_writer_emits_at_interval_and_final_cycle(
