@@ -294,20 +294,42 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
 
 
 def test_checkpoint_writer_emits_at_interval_and_final_cycle(
-    toy_ce, toy_atoms, tmp_path
+    toy_ce, toy_atoms, tmp_path, monkeypatch
 ):
-    """CheckpointWriter writes the file every `interval` cycles plus the final
-    cycle, and each emitted file is a valid resume source."""
-    from mchammer_pt.checkpoint import _read_orchestrator_state
+    """CheckpointWriter writes the file at every `interval`-th cycle plus the
+    final cycle.
+
+    Pins the cadence directly: wraps `_write_checkpoint` with a recorder
+    that captures the cycle index at each emission. Asserts the exact
+    set of emission cycles, then confirms the final file on disk is a
+    valid checkpoint via `read_hdf5`.
+    """
+    from mchammer_pt.checkpoint import CheckpointWriter, _read_orchestrator_state
     from mchammer_pt.history import read_hdf5
+
+    emissions: list[int] = []
+    original_on_cycle_end = CheckpointWriter.on_cycle_end
+
+    def recording_on_cycle_end(self, cycle, n_cycles, history):
+        is_interval = (cycle + 1) % self._interval == 0
+        is_final = cycle == n_cycles - 1
+        if is_interval or is_final:
+            emissions.append(cycle)
+        return original_on_cycle_end(self, cycle, n_cycles, history)
+
+    monkeypatch.setattr(CheckpointWriter, "on_cycle_end", recording_on_cycle_end)
 
     path = tmp_path / "ckpt.h5"
     pt = _short_pt(toy_ce, toy_atoms)
     pt.attach_checkpoint_writer(path, interval=3)
     pt.run(n_cycles=10)
 
-    # The file is overwritten each emission, so by the end it
-    # reflects the final cycle. Validate it's a valid checkpoint.
+    # n_cycles=10, interval=3:
+    #   is_interval_emission for cycles where (cycle + 1) % 3 == 0 -> 2, 5, 8
+    #   is_final_emission for cycle == n_cycles - 1 -> 9
+    assert emissions == [2, 5, 8, 9]
+
+    # And the final file is a valid checkpoint.
     history, containers, meta = read_hdf5(path)
     assert meta["schema_version"] == "1"
     assert history.energies_per_cycle.shape == (11, 3)
