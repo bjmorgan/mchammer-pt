@@ -14,6 +14,7 @@ Schema design lives in
 from __future__ import annotations
 
 import hashlib
+import json
 import pickle
 from collections.abc import Mapping
 from pathlib import Path
@@ -138,3 +139,58 @@ def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
             else str(rng_state_raw)
         )
     return {"replica_labels": replica_labels, "rng_state": rng_state}
+
+
+def _serialise_rng_state(rng: np.random.Generator) -> str:
+    """JSON-encode `rng.bit_generator.state` for HDF5 round-trip.
+
+    `np.random.default_rng().bit_generator.state` is a small nested
+    dict of int64s that JSON round-trips cleanly. Using JSON keeps
+    the checkpoint schema free of pickle on the read path.
+    """
+    return json.dumps(rng.bit_generator.state)
+
+
+def _write_checkpoint(pt: object, path: Path | str) -> None:
+    """Write a full checkpoint of `pt` to `path` atomically.
+
+    Used by `CanonicalParallelTempering.save_checkpoint`,
+    `CheckpointWriter`, and the `data_container_file=` write path.
+    `pt` must be a `CanonicalParallelTempering` instance whose
+    `run()` has been called at least once.
+
+    The function reads the identity hashes the orchestrator cached
+    at construction (`_ce_identity`, `_ensemble_cls_fqn`,
+    `_ensemble_kwargs_hash`, `_random_seed`) and the live state
+    (`_history`, `_replica_labels`, `_rng`) and packs them into the
+    HDF5 schema documented in
+    ``docs/superpowers/specs/2026-05-08-checkpoint-and-resume-design.md``.
+    """
+    from .history import write_hdf5
+
+    if pt._history is None:  # type: ignore[attr-defined]
+        raise RuntimeError(
+            "save_checkpoint requires run() to have been called at "
+            "least once; the per-replica data containers do not have "
+            "a populated `_last_state` until a run completes."
+        )
+    meta: dict[str, Any] = {
+        "schema_version": "1",
+        "temperatures": pt._temperatures,  # type: ignore[attr-defined]
+        "block_size": int(pt._block_size),  # type: ignore[attr-defined]
+        "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
+        "ce_identity": pt._ce_identity,  # type: ignore[attr-defined]
+        "ensemble_cls_fqn": pt._ensemble_cls_fqn,  # type: ignore[attr-defined]
+        "ensemble_kwargs_hash": pt._ensemble_kwargs_hash,  # type: ignore[attr-defined]
+    }
+    orchestrator_state: dict[str, np.ndarray | str] = {
+        "replica_labels": pt._replica_labels.copy(),  # type: ignore[attr-defined]
+        "rng_state": _serialise_rng_state(pt._rng),  # type: ignore[attr-defined]
+    }
+    write_hdf5(
+        Path(path),
+        history=pt._history,  # type: ignore[attr-defined]
+        replica_containers=pt._pool.data_containers(),  # type: ignore[attr-defined]
+        meta=meta,
+        orchestrator_state=orchestrator_state,
+    )

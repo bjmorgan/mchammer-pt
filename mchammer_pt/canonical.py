@@ -14,6 +14,7 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
 
 from .base import BaseParallelTempering
+from .checkpoint import _compute_ce_identity, _compute_ensemble_kwargs_hash
 from .history import ExchangeHistory
 from .parallel.backend import ReplicaPool
 from .parallel.processes import ProcessPool
@@ -182,11 +183,38 @@ class CanonicalParallelTempering(BaseParallelTempering):
         self._temperatures = np.asarray(temperatures, dtype=np.float64)
         self._beta = 1.0 / (_KB * self._temperatures)
         self._data_container_file = data_container_file
+        # Stored for the checkpoint payload — computed once at
+        # construction so checkpoint writes don't repeat the
+        # CE-write-and-hash cost on every emission.
+        self._random_seed = int(random_seed)
+        self._ce_identity = _compute_ce_identity(cluster_expansion)
+        self._ensemble_cls_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        self._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
 
     @property
     def temperatures(self) -> np.ndarray:
         """Copy of the per-replica temperature array (kelvin)."""
         return self._temperatures.copy()
+
+    def save_checkpoint(self, path: Path | str) -> None:
+        """Write a full checkpoint of this orchestrator atomically.
+
+        Captures everything `CanonicalParallelTempering.resume` needs
+        to reconstruct an equivalent orchestrator: per-replica state
+        (via each `mchammer.BaseDataContainer`'s ``_last_state``),
+        the orchestrator's replica-label permutation and exchange-
+        proposal RNG state, and identity hashes for the CE,
+        ensemble class, and ensemble kwargs.
+
+        Requires `run()` to have been called at least once. Raises
+        `RuntimeError` otherwise — the per-replica data containers
+        do not populate `_last_state` until a run completes.
+        """
+        from .checkpoint import _write_checkpoint
+
+        _write_checkpoint(self, path)
 
     def _log_prob_ratio(self, i: int, j: int) -> float:
         E_i = self._pool.current_energy(i)
@@ -197,23 +225,18 @@ class CanonicalParallelTempering(BaseParallelTempering):
         """Run `n_cycles` PT cycles, optionally writing an HDF5 bundle.
 
         When `data_container_file` was provided at construction, the
-        `ExchangeHistory`, each replica's `mchammer.BaseDataContainer`,
-        and a metadata dict (temperatures and block size) are written
-        to that path as a single HDF5 file on completion.
+        full checkpoint payload (`ExchangeHistory`, each replica's
+        `mchammer.BaseDataContainer`, run metadata, identity hashes,
+        and orchestrator-level state) is written to that path on
+        completion as a single atomic HDF5 file. Files written this
+        way are valid resume sources for
+        `CanonicalParallelTempering.resume`.
         """
         history = super().run(n_cycles=n_cycles)
         if self._data_container_file is not None:
-            from .history import write_hdf5
+            from .checkpoint import _write_checkpoint
 
-            write_hdf5(
-                Path(self._data_container_file),
-                history=history,
-                replica_containers=self._pool.data_containers(),
-                meta={
-                    "temperatures": self._temperatures,
-                    "block_size": int(self._block_size),
-                },
-            )
+            _write_checkpoint(self, Path(self._data_container_file))
         return history
 
     @classmethod

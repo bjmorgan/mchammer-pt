@@ -5,6 +5,7 @@ from __future__ import annotations
 import random as stdlib_random
 
 import numpy as np
+import pytest
 from mchammer.data_containers.base_data_container import BaseDataContainer
 
 from mchammer_pt.replica import Replica
@@ -229,3 +230,64 @@ def test_orchestrator_state_round_trips(tmp_path):
         loaded["replica_labels"], np.array([2, 0, 3, 1])
     )
     assert loaded["rng_state"] == rng_state_json
+
+
+def _short_pt(toy_ce, toy_atoms, **overrides):
+    """Build a short canonical PT for fast tests."""
+    from mchammer_pt import CanonicalParallelTempering
+
+    return CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        block_size=10,
+        random_seed=42,
+        **overrides,
+    )
+
+
+def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_path):
+    """`pt.save_checkpoint(path)` writes the schema fields the resume path
+    requires."""
+    from mchammer_pt.checkpoint import _read_orchestrator_state
+    from mchammer_pt.history import read_hdf5
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    history, containers, meta = read_hdf5(path)
+    assert meta["schema_version"] == "1"
+    assert meta["block_size"] == 10
+    assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
+    assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
+    assert meta["random_seed"] == 42
+    assert len(containers) == 3
+
+    orchestrator_state = _read_orchestrator_state(path)
+    assert orchestrator_state["replica_labels"].shape == (3,)
+    assert orchestrator_state["rng_state"].startswith("{")  # JSON
+
+
+def test_save_checkpoint_before_run_raises(toy_ce, toy_atoms, tmp_path):
+    """`pt.save_checkpoint` requires `run()` to have been called at least once."""
+    pt = _short_pt(toy_ce, toy_atoms)
+    with pytest.raises(RuntimeError, match="run.*at least once"):
+        pt.save_checkpoint(tmp_path / "ckpt.h5")
+
+
+def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp_path):
+    """The existing `data_container_file=` write path now produces files that
+    include the new schema additions, so they are valid resume sources."""
+    from mchammer_pt.checkpoint import _read_orchestrator_state
+    from mchammer_pt.history import read_hdf5
+
+    path = tmp_path / "run.h5"
+    pt = _short_pt(toy_ce, toy_atoms, data_container_file=path)
+    pt.run(n_cycles=3)
+
+    _, _, meta = read_hdf5(path)
+    assert meta["schema_version"] == "1"
+    # And the orchestrator state is there too.
+    _read_orchestrator_state(path)  # raises if absent
