@@ -299,23 +299,43 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
     """CheckpointWriter writes the file at every `interval`-th cycle plus the
     final cycle.
 
-    Pins the cadence directly: wraps `_write_checkpoint` with a recorder
-    that captures the cycle index at each emission. Asserts the exact
-    set of emission cycles, then confirms the final file on disk is a
-    valid checkpoint via `read_hdf5`.
+    Pins the cadence by observing production: spies on `_write_checkpoint`
+    (the function `CheckpointWriter.on_cycle_end` calls when it decides to
+    emit) and records the cycle index at each call. A regression that broke
+    the production modulus would invoke `_write_checkpoint` on different
+    cycles, flipping this assertion red.
     """
+    from mchammer_pt import checkpoint as checkpoint_module
     from mchammer_pt.checkpoint import CheckpointWriter, _read_orchestrator_state
     from mchammer_pt.history import read_hdf5
 
+    # Spy on the actual write function. The spy records that *some* write
+    # happened; the wrapping on_cycle_end below records *which cycle* the
+    # write was for. Together they observe production's decision rather
+    # than re-implementing it.
+    write_calls: list[None] = []
+
+    def spy_write_checkpoint(pt_arg, path_arg):
+        # Run the real write so the final-file assertion still passes.
+        original_write_checkpoint(pt_arg, path_arg)
+        write_calls.append(None)
+
+    original_write_checkpoint = checkpoint_module._write_checkpoint
+    monkeypatch.setattr(
+        checkpoint_module, "_write_checkpoint", spy_write_checkpoint
+    )
+
+    # Wrap on_cycle_end to record the cycle when (and only when) production
+    # actually triggered a write — i.e. the spy was invoked during the
+    # original call.
     emissions: list[int] = []
     original_on_cycle_end = CheckpointWriter.on_cycle_end
 
     def recording_on_cycle_end(self, cycle, n_cycles, history):
-        is_interval = (cycle + 1) % self._interval == 0
-        is_final = cycle == n_cycles - 1
-        if is_interval or is_final:
+        before = len(write_calls)
+        original_on_cycle_end(self, cycle, n_cycles, history)
+        if len(write_calls) > before:
             emissions.append(cycle)
-        return original_on_cycle_end(self, cycle, n_cycles, history)
 
     monkeypatch.setattr(CheckpointWriter, "on_cycle_end", recording_on_cycle_end)
 
@@ -324,13 +344,15 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
     pt.attach_checkpoint_writer(path, interval=3)
     pt.run(n_cycles=10)
 
-    # n_cycles=10, interval=3:
-    #   is_interval_emission for cycles where (cycle + 1) % 3 == 0 -> 2, 5, 8
-    #   is_final_emission for cycle == n_cycles - 1 -> 9
+    # n_cycles=10, interval=3 — production's emission decision is
+    # `(cycle + 1) % interval == 0` OR `cycle == n_cycles - 1`:
+    #   modulus fires at cycles 2, 5, 8
+    #   final-cycle guard fires at cycle 9
+    # If production's modulus is wrong, this list is wrong.
     assert emissions == [2, 5, 8, 9]
 
-    # And the final file is a valid checkpoint.
-    history, containers, meta = read_hdf5(path)
+    # And the final file is a valid resumable checkpoint.
+    history, _, meta = read_hdf5(path)
     assert meta["schema_version"] == "1"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
