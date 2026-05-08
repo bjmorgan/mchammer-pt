@@ -9,6 +9,10 @@ following command loop:
 - ``("GET_OCC",)`` -> replies ``("OK", np.ndarray)`` with occupations
 - ``("SET_OCC", occupations)`` -> overwrites state
 - ``("GET_DC",)`` -> replies ``("OK", BaseDataContainer)`` (pickled)
+- ``("SNAPSHOT_FOR_CHECKPOINT",)`` -> refreshes the replica's
+  ``_data_container._last_state`` and replies ``("OK", dict)`` with the
+  per-replica extras the checkpoint writer embeds (notably
+  ``"sites_by_species"``)
 - ``("ATTACH_OBS", pickled_blob)`` -> deserialises and attaches an
   observer; replies ``("OK", None)``
 - ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
@@ -111,6 +115,8 @@ def _worker(
                 conn.send(("OK", None))
             elif op == "GET_DC":
                 conn.send(("OK", replica.data_container()))
+            elif op == "SNAPSHOT_FOR_CHECKPOINT":
+                conn.send(("OK", replica.snapshot_for_checkpoint()))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

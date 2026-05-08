@@ -321,6 +321,17 @@ class ProcessPool:
             containers.append(self._recv_or_raise(conn, "GET_DC", i))
         return containers
 
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
+        extras: list[dict[str, Any]] = []
+        for i, (_, conn) in enumerate(self._workers):
+            extras.append(
+                self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
+            )
+        return extras
+
     def attach_observer(
         self,
         observer: BaseObserver,

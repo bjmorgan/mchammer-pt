@@ -420,6 +420,32 @@ def test_resume_rejects_unknown_schema_version(toy_ce, toy_atoms, tmp_path):
         CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
 
 
+def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path):
+    """`process_pool(... data_container_file=...).run(...)` writes a valid
+    checkpoint. Pins the symmetry guarantee that both pool kinds produce
+    files via the same cross-pool snapshot machinery — a regression to
+    the prior `_pool.replicas` hard-coding would break ProcessPool here."""
+    from mchammer_pt import CanonicalParallelTempering
+    from mchammer_pt.checkpoint import _read_orchestrator_state
+    from mchammer_pt.history import read_hdf5
+
+    path = tmp_path / "run.h5"
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        block_size=10,
+        random_seed=42,
+        data_container_file=path,
+    ) as pt:
+        pt.run(n_cycles=3)
+
+    history, containers, meta = read_hdf5(path)
+    assert meta["schema_version"] == "2"
+    assert len(containers) == 3
+    _read_orchestrator_state(path)
+
+
 def test_resume_rejects_mismatched_ce(toy_ce, toy_atoms, toy_cluster_space, tmp_path):
     """Resuming with a different CE raises with a clear message."""
     from icet import ClusterExpansion

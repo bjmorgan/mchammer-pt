@@ -91,6 +91,26 @@ class ReplicaPool(Protocol):
         """
         ...
 
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        """Per-replica state snapshot for the checkpoint payload.
+
+        Each pool implementation calls ``Replica.snapshot_for_checkpoint``
+        on its replicas — for ``ProcessPool`` this is a worker-boundary
+        round trip — and returns the per-replica extras dicts in slot
+        order. As a side effect, each replica's ``BaseDataContainer``
+        has its ``_last_state`` refreshed (mchammer's
+        ``write_data_container`` does the same refresh inline; the
+        checkpoint write path serialises containers directly and so
+        must replicate it).
+
+        Used by ``CanonicalParallelTempering.save_checkpoint`` and
+        ``CheckpointWriter`` immediately before reading
+        ``data_containers()``. Call this *first*: ``data_containers()``
+        returns containers whose ``_last_state`` is empty unless this
+        method has populated it.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release any resources (worker processes, file handles, ...)."""
         ...

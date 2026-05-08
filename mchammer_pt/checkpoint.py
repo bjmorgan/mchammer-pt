@@ -237,14 +237,18 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     }
     # Refresh per-replica `_last_state` (populating the four fields
     # `_restart_ensemble` reads on resume) and capture the additional
-    # state required for bit-identical continuation.
-    replicas = pt._pool.replicas  # type: ignore[attr-defined]
-    replica_extra = [r.snapshot_for_checkpoint() for r in replicas]
-    replica_containers = [r.data_container() for r in replicas]
+    # state required for bit-identical continuation. The pool's
+    # `snapshot_for_checkpoint()` is the cross-pool entry point — it
+    # works for both `SerialPool` (in-process) and `ProcessPool`
+    # (round-trips to each worker). Snapshot runs before
+    # `data_containers()` because the snapshot side-effect populates
+    # each container's `_last_state`, which mchammer's
+    # `_restart_ensemble` reads on resume.
+    replica_extra = pt._pool.snapshot_for_checkpoint()  # type: ignore[attr-defined]
     write_hdf5(
         Path(path),
         history=pt._history,  # type: ignore[attr-defined]
-        replica_containers=replica_containers,
+        replica_containers=pt._pool.data_containers(),  # type: ignore[attr-defined]
         meta=meta,
         orchestrator_state=orchestrator_state,
         replica_extra=replica_extra,
