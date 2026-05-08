@@ -406,6 +406,120 @@ class CanonicalParallelTempering(BaseParallelTempering):
         return pt
 
     @classmethod
+    def resume_process_pool(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> CanonicalParallelTempering:
+        """Resume a checkpointed canonical PT run into a `ProcessPool`.
+
+        Same identity validation and per-replica restoration as
+        `resume`, but reconstructs the pool as a `ProcessPool`
+        instead of a `SerialPool`. Worker scheduling
+        non-determinism means the bit-identical contract does NOT
+        hold across the serial-to-process or process-to-serial
+        boundary; resume into the same pool kind that wrote the
+        checkpoint for bit-identical continuation, or accept that
+        cross-pool resume gives a statistically-valid continuation
+        only.
+
+        See `resume` for argument and error semantics.
+        """
+        import json
+
+        from .checkpoint import (
+            _read_orchestrator_state,
+            _read_replica_extra,
+        )
+        from .history import read_hdf5
+
+        history, containers, meta = read_hdf5(path)
+        schema_version = meta.get("schema_version")
+        if schema_version != "2":
+            raise ValueError(
+                f"{path}: unknown schema_version {schema_version!r}; "
+                f"this version of mchammer-pt understands '2' only."
+            )
+        expected_ce_identity = _compute_ce_identity(cluster_expansion)
+        if meta["ce_identity"] != expected_ce_identity:
+            raise ValueError(
+                f"{path}: CE identity mismatch. The checkpoint was "
+                f"written against a different cluster_expansion than "
+                f"the one supplied. Use `pt.final_configurations()` "
+                f"plus a fresh orchestrator if you intend to continue "
+                f"under a different CE."
+            )
+        expected_ensemble_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
+            raise ValueError(
+                f"{path}: ensemble_cls FQN mismatch. Checkpoint has "
+                f"{meta['ensemble_cls_fqn']!r}; resume_process_pool "
+                f"was called with {expected_ensemble_fqn!r}."
+            )
+        expected_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
+        saved_kwargs_hash = meta.get("ensemble_kwargs_hash", "")
+        if (
+            expected_kwargs_hash
+            and saved_kwargs_hash
+            and expected_kwargs_hash != saved_kwargs_hash
+        ):
+            raise ValueError(
+                f"{path}: ensemble_kwargs hash mismatch. "
+                f"resume_process_pool was called with kwargs that hash "
+                f"differently from the checkpoint."
+            )
+
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        temperatures = list(np.asarray(meta["temperatures"]))
+        block_size = int(meta["block_size"])
+        random_seed = int(meta["random_seed"])
+
+        # Reconstruct per-replica atoms from each container — mirrors
+        # the SerialPool resume path.
+        atoms_list = [container.structure.copy() for container in containers]
+
+        # Use the existing `process_pool` factory to build a ProcessPool
+        # at the saved ladder. The factory writes the CE to a managed
+        # tempdir and spawns workers; each worker's data container is
+        # initially empty until `restore_replica_state` overwrites it.
+        pt = cls.process_pool(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms_list,
+            temperatures=temperatures,
+            block_size=block_size,
+            random_seed=random_seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+        )
+        # Restore per-replica state on each worker via the new
+        # RESTORE_STATE opcode. After this returns, each worker's
+        # replica matches the saved checkpoint.
+        pt._pool.restore_replica_state(  # type: ignore[attr-defined]
+            containers, replica_extras
+        )
+
+        # Re-stamp identity hashes from the loaded checkpoint so
+        # users custom-supplying non-default kwargs see preserved
+        # identity rather than the constructor's recompute.
+        pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
+        pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
+
+        # Restore orchestrator-level state.
+        pt._replica_labels = np.asarray(
+            orchestrator_state["replica_labels"], dtype=np.int64
+        )
+        rng_state_raw = orchestrator_state["rng_state"]
+        assert isinstance(rng_state_raw, str)
+        pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        return pt
+
+    @classmethod
     def process_pool(
         cls,
         cluster_expansion: ClusterExpansion,

@@ -13,6 +13,11 @@ following command loop:
   ``_data_container._last_state`` and replies ``("OK", dict)`` with the
   per-replica extras the checkpoint writer embeds (notably
   ``"sites_by_species"``)
+- ``("RESTORE_STATE", container, sites_by_species)`` -> swaps the saved
+  data container onto the replica's ensemble, drives mchammer's
+  ``_restart_ensemble``, and (if ``sites_by_species`` is non-None)
+  restores the ``ConfigurationManager._sites_by_species`` cache;
+  replies ``("OK", None)``
 - ``("ATTACH_OBS", pickled_blob)`` -> deserialises and attaches an
   observer; replies ``("OK", None)``
 - ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
@@ -117,6 +122,12 @@ def _worker(
                 conn.send(("OK", replica.data_container()))
             elif op == "SNAPSHOT_FOR_CHECKPOINT":
                 conn.send(("OK", replica.snapshot_for_checkpoint()))
+            elif op == "RESTORE_STATE":
+                _, container, sites_by_species = cmd
+                replica.restore_state(
+                    container, sites_by_species=sites_by_species
+                )
+                conn.send(("OK", None))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

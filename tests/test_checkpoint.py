@@ -446,6 +446,33 @@ def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path
     _read_orchestrator_state(path)
 
 
+def test_resume_process_pool_round_trips(toy_ce, toy_atoms, tmp_path):
+    """Smoke test: a process-pool run can be checkpointed, resumed under
+    `resume_process_pool`, and continued. No bit-identical claim across
+    pools — worker scheduling makes that flake — only that resume works
+    end-to-end."""
+    from mchammer_pt import CanonicalParallelTempering
+
+    path = tmp_path / "ckpt.h5"
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        block_size=10,
+        random_seed=42,
+    ) as pt_a:
+        pt_a.run(n_cycles=5)
+        pt_a.save_checkpoint(path)
+
+    with CanonicalParallelTempering.resume_process_pool(
+        path, cluster_expansion=toy_ce
+    ) as pt_b:
+        history_b = pt_b.run(n_cycles=5)
+
+    assert history_b.energies_per_cycle.shape == (6, 3)
+    assert np.all(np.isfinite(history_b.energies_per_cycle))
+
+
 def test_resume_rejects_mismatched_ce(toy_ce, toy_atoms, toy_cluster_space, tmp_path):
     """Resuming with a different CE raises with a clear message."""
     from icet import ClusterExpansion

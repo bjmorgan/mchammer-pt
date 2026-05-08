@@ -194,20 +194,54 @@ class Replica:
             ensemble_kwargs=ensemble_kwargs,
             cluster_expansion_path=cluster_expansion_path,
         )
+        replica.restore_state(container, sites_by_species=sites_by_species)
+        return replica
+
+    def restore_state(
+        self,
+        container: BaseDataContainer,
+        *,
+        sites_by_species: list[dict[int, list[int]]] | None = None,
+    ) -> None:
+        """Mutate this replica to match a saved checkpoint.
+
+        Swaps the ensemble's `BaseDataContainer` for ``container``,
+        calls mchammer's ``_restart_ensemble`` to restore step count,
+        configuration, accepted-trial count, and stdlib-``random``
+        state from ``container._last_state``, and (if supplied)
+        overwrites the path-dependent
+        ``ConfigurationManager._sites_by_species`` cache with the
+        saved order so the next trial-step proposal matches the
+        original run.
+
+        Used by `Replica.restart_from` (which constructs a fresh
+        replica before calling this) and by `ProcessPool` workers
+        (which call this on their existing in-process replica when
+        the parent broadcasts a `RESTORE_STATE` opcode).
+
+        Args:
+            container: an mchammer `BaseDataContainer` whose
+                ``_last_state`` carries the saved per-replica state.
+            sites_by_species: saved
+                ``ConfigurationManager._sites_by_species`` cache.
+                When supplied, overwrites the rebuilt cache so the
+                next ``random.choice``-driven proposal lands on the
+                same site as the original run.
+        """
         # Swap in the saved container so `_restart_ensemble` reads
         # from it. mchammer reads `self.data_container._last_state`
         # to drive every field of the restoration.
-        replica._ensemble._data_container = container
+        self._ensemble._data_container = container
         # Save the caller's stdlib-`random` state and restore the
         # replica's private snapshot first — the same caller-isolation
         # discipline `Replica.advance` follows. `_restart_ensemble`
         # ends with a `random.setstate(saved_state)`, which we then
         # capture into `_rng_state`.
         caller_state = random.getstate()
-        random.setstate(replica._rng_state)
+        random.setstate(self._rng_state)
         try:
-            replica._ensemble._restart_ensemble()
-            replica._rng_state = random.getstate()
+            self._ensemble._restart_ensemble()
+            self._rng_state = random.getstate()
         finally:
             random.setstate(caller_state)
         if sites_by_species is not None:
@@ -215,8 +249,7 @@ class Replica:
             # `_sites_by_species` cache so the next trial-step
             # proposal matches the original run. Same direct-access
             # pattern as the `_data_container` swap above.
-            replica._ensemble.configuration._sites_by_species = sites_by_species
-        return replica
+            self._ensemble.configuration._sites_by_species = sites_by_species
 
     @property
     def temperature(self) -> float:
