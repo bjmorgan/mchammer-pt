@@ -21,7 +21,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
 
-from .callbacks import ExchangeCallback
+from .callbacks import CycleCallback, ExchangeCallback
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
 from .parallel.backend import ObservablePool, ReplicaPool
@@ -56,6 +56,7 @@ class BaseParallelTempering(ABC):
         self._block_size = int(block_size)
         self._rng = np.random.default_rng(int(random_seed))
         self._callbacks: list[ExchangeCallback] = []
+        self._cycle_callbacks: list[CycleCallback] = []
         self._replica_labels = np.arange(len(pool), dtype=np.int64)
         self._history: ExchangeHistory | None = None
         self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
@@ -110,7 +111,21 @@ class BaseParallelTempering(ABC):
         return configs
 
     def attach_callback(self, callback: ExchangeCallback) -> None:
+        """Register an exchange-event callback.
+
+        Multiple exchange callbacks compose; they are invoked in
+        registration order on each proposed exchange.
+        """
         self._callbacks.append(callback)
+
+    def attach_cycle_callback(self, callback: CycleCallback) -> None:
+        """Register a per-cycle callback.
+
+        Multiple cycle callbacks compose; they are invoked in
+        registration order at the end of each cycle, after history
+        rows for that cycle have been written.
+        """
+        self._cycle_callbacks.append(callback)
 
     def attach_observer(
         self,
@@ -156,6 +171,8 @@ class BaseParallelTempering(ABC):
                     self._try_exchange(int(pair), int(pair) + 1, c, history)
                 history.energies_per_cycle[c + 1] = self._pool.current_energies()
                 history.replica_labels_per_cycle[c + 1] = self._replica_labels
+                for cb in self._cycle_callbacks:
+                    cb.on_cycle_end(c, n_cycles, history)
         finally:
             self._history = history
         return history
