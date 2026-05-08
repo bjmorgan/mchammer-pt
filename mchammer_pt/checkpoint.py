@@ -96,6 +96,52 @@ def _compute_ensemble_kwargs_hash(
     return hashlib.sha256(payload).hexdigest()
 
 
+def _read_replica_extra(path: Path | str) -> list[dict[str, Any]]:
+    """Read per-replica extra state (e.g. ``_sites_by_species``).
+
+    Reads the ``/sites_by_species/<i>`` JSON datasets written by
+    `write_hdf5` with ``replica_extra=`` populated. The returned list
+    is in integer-id order, with one dict per replica carrying
+    ``"sites_by_species"`` reconstructed (JSON's string dict keys
+    converted back to ``int`` so the structure round-trips to its
+    original ``list[dict[int, list[int]]]`` shape).
+
+    Raises:
+        FileNotFoundError: if `path` does not exist.
+        KeyError: if the file does not have a ``/sites_by_species/``
+            group — typically a sign the file was written by a
+            pre-checkpoint version of `write_hdf5` and is therefore
+            not a valid resume source for bit-identical continuation.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"no such file: {path}")
+    with h5py.File(path, "r") as f:
+        if "sites_by_species" not in f:
+            raise KeyError(
+                f"{path}: missing required '/sites_by_species/' group. "
+                f"File was not written as a checkpoint and cannot be "
+                f"used for resume."
+            )
+        group = f["sites_by_species"]
+        keys = sorted(group.keys(), key=int)
+        extras: list[dict[str, Any]] = []
+        for key in keys:
+            payload_raw = group[key][()]
+            payload = (
+                payload_raw.decode("utf-8")
+                if isinstance(payload_raw, bytes)
+                else str(payload_raw)
+            )
+            decoded = json.loads(payload)
+            sites_by_species = [
+                {int(species): list(sites) for species, sites in sublattice.items()}
+                for sublattice in decoded
+            ]
+            extras.append({"sites_by_species": sites_by_species})
+    return extras
+
+
 def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     """Read the orchestrator-level state from a checkpoint file.
 
@@ -177,7 +223,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
             "a populated `_last_state` until a run completes."
         )
     meta: dict[str, Any] = {
-        "schema_version": "1",
+        "schema_version": "2",
         "temperatures": pt._temperatures,  # type: ignore[attr-defined]
         "block_size": int(pt._block_size),  # type: ignore[attr-defined]
         "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
@@ -189,12 +235,19 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         "replica_labels": pt._replica_labels.copy(),  # type: ignore[attr-defined]
         "rng_state": _serialise_rng_state(pt._rng),  # type: ignore[attr-defined]
     }
+    # Refresh per-replica `_last_state` (populating the four fields
+    # `_restart_ensemble` reads on resume) and capture the additional
+    # state required for bit-identical continuation.
+    replicas = pt._pool.replicas  # type: ignore[attr-defined]
+    replica_extra = [r.snapshot_for_checkpoint() for r in replicas]
+    replica_containers = [r.data_container() for r in replicas]
     write_hdf5(
         Path(path),
         history=pt._history,  # type: ignore[attr-defined]
-        replica_containers=pt._pool.data_containers(),  # type: ignore[attr-defined]
+        replica_containers=replica_containers,
         meta=meta,
         orchestrator_state=orchestrator_state,
+        replica_extra=replica_extra,
     )
 
 

@@ -243,6 +243,169 @@ class CanonicalParallelTempering(BaseParallelTempering):
         return history
 
     @classmethod
+    def resume(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> CanonicalParallelTempering:
+        """Resume a previously-checkpointed canonical PT run.
+
+        Reconstructs the orchestrator at the state the checkpoint
+        captured: per-replica state (configuration, step count,
+        accepted-trial count, stdlib `random` state, plus
+        ``ConfigurationManager._sites_by_species`` cache) via
+        mchammer's `_restart_ensemble` augmented by
+        `Replica.restart_from`, plus orchestrator-level state
+        (replica-label permutation, exchange-proposal RNG state).
+
+        The next `run(M)` call returns an `ExchangeHistory`
+        covering only those `M` cycles. Combine it with the prior
+        history via
+        `ExchangeHistory.concatenate(prior_history, run_b_history)`
+        to get the bit-identical-to-single-run view.
+
+        To start a new run from a previous run's equilibrated
+        configurations under a *different* CE, use
+        `pt.final_configurations()` plus a fresh orchestrator
+        instead. `resume` enforces CE identity to make the two
+        workflows distinguishable.
+
+        Args:
+            path: checkpoint file written by `CheckpointWriter` or
+                `pt.save_checkpoint`.
+            cluster_expansion: must match the CE used when the
+                checkpoint was written. Hard error on mismatch.
+            ensemble_cls: same class used at original construction.
+                Hard error if its fully-qualified name does not
+                match the checkpoint's ``ensemble_cls_fqn``.
+            ensemble_kwargs: same kwargs used at original
+                construction. Where representable, the kwargs hash
+                is validated; non-representable kwargs (e.g. those
+                containing icet `ClusterSpace`) skip the check.
+
+        Raises:
+            FileNotFoundError: ``path`` does not exist.
+            KeyError: file is missing required schema groups.
+            ValueError: ``schema_version`` is unknown, CE identity
+                mismatches, or ``ensemble_cls_fqn`` mismatches.
+        """
+        import json
+
+        from .checkpoint import (
+            _read_orchestrator_state,
+            _read_replica_extra,
+        )
+        from .history import read_hdf5
+
+        history, containers, meta = read_hdf5(path)
+        schema_version = meta.get("schema_version")
+        if schema_version != "2":
+            raise ValueError(
+                f"{path}: unknown schema_version {schema_version!r}; "
+                f"this version of mchammer-pt understands '2' only."
+            )
+        expected_ce_identity = _compute_ce_identity(cluster_expansion)
+        if meta["ce_identity"] != expected_ce_identity:
+            raise ValueError(
+                f"{path}: CE identity mismatch. The checkpoint was "
+                f"written against a different cluster_expansion than "
+                f"the one supplied. Use `pt.final_configurations()` "
+                f"plus a fresh orchestrator if you intend to continue "
+                f"under a different CE."
+            )
+        expected_ensemble_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
+            raise ValueError(
+                f"{path}: ensemble_cls FQN mismatch. Checkpoint has "
+                f"{meta['ensemble_cls_fqn']!r}; resume was called "
+                f"with {expected_ensemble_fqn!r}."
+            )
+        expected_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
+        saved_kwargs_hash = meta.get("ensemble_kwargs_hash", "")
+        if (
+            expected_kwargs_hash
+            and saved_kwargs_hash
+            and expected_kwargs_hash != saved_kwargs_hash
+        ):
+            raise ValueError(
+                f"{path}: ensemble_kwargs hash mismatch. Resume was "
+                f"called with kwargs that hash differently from the "
+                f"checkpoint."
+            )
+
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        temperatures = list(np.asarray(meta["temperatures"]))
+        block_size = int(meta["block_size"])
+        random_seed = int(meta["random_seed"])
+
+        # Reconstruct per-replica atoms from each container. The
+        # atoms argument is a per-T list because each container's
+        # structure already carries the saved occupations (which
+        # `_restart_ensemble` will restore again from `_last_state`).
+        atoms_list = [container.structure.copy() for container in containers]
+
+        # Build replicas via `Replica.restart_from`. Per-replica seeds
+        # are reproduced from the master seed using the same
+        # `SeedSequence` spawn the constructor uses; values are
+        # immediately overwritten by `_restart_ensemble`.
+        seed_sequence = np.random.SeedSequence(random_seed)
+        child_seeds = seed_sequence.spawn(len(temperatures) + 1)
+        replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
+
+        replicas = [
+            Replica.restart_from(
+                container,
+                cluster_expansion=cluster_expansion,
+                atoms=atoms,
+                temperature=T,
+                random_seed=seed,
+                ensemble_cls=ensemble_cls,
+                ensemble_kwargs=ensemble_kwargs,
+                sites_by_species=extra["sites_by_species"],
+            )
+            for container, atoms, T, seed, extra in zip(
+                containers,
+                atoms_list,
+                temperatures,
+                replica_seeds,
+                replica_extras,
+                strict=True,
+            )
+        ]
+        pool = SerialPool(replicas)
+        pt = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms_list,
+            temperatures=temperatures,
+            block_size=block_size,
+            random_seed=random_seed,
+            pool=pool,
+        )
+        # Preserve fidelity for users who custom-supplied non-default
+        # ensemble kwargs: re-stamp the identity hashes from the
+        # loaded checkpoint (the constructor recomputes them from the
+        # supplied kwargs, which already passed validation above).
+        # ``meta`` values are typed as the ``MetaValue`` union; cast
+        # to the concrete types we know each field carries.
+        pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
+        pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
+
+        # Restore orchestrator-level state.
+        pt._replica_labels = np.asarray(
+            orchestrator_state["replica_labels"], dtype=np.int64
+        )
+        rng_state_raw = orchestrator_state["rng_state"]
+        assert isinstance(rng_state_raw, str)
+        pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        return pt
+
+    @classmethod
     def process_pool(
         cls,
         cluster_expansion: ClusterExpansion,

@@ -258,7 +258,7 @@ def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_pa
     pt.save_checkpoint(path)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "1"
+    assert meta["schema_version"] == "2"
     assert meta["block_size"] == 10
     assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
     assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
@@ -288,7 +288,7 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     pt.run(n_cycles=3)
 
     _, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "1"
+    assert meta["schema_version"] == "2"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
 
@@ -353,7 +353,7 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
 
     # And the final file is a valid resumable checkpoint.
     history, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "1"
+    assert meta["schema_version"] == "2"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
 
@@ -366,3 +366,74 @@ def test_checkpoint_writer_rejects_non_positive_interval(toy_ce, toy_atoms, tmp_
         CheckpointWriter(tmp_path / "ckpt.h5", interval=0, pt=pt)
     with pytest.raises(ValueError):
         CheckpointWriter(tmp_path / "ckpt.h5", interval=-1, pt=pt)
+
+
+def test_resume_is_bit_identical(toy_ce, toy_atoms, tmp_path):
+    """A:N + B:M, concatenated, equals a single-run-of-(N+M)."""
+    from mchammer_pt import CanonicalParallelTempering
+    from mchammer_pt.history import ExchangeHistory
+
+    pt_full = _short_pt(toy_ce, toy_atoms)
+    history_full = pt_full.run(n_cycles=20)
+
+    pt_a = _short_pt(toy_ce, toy_atoms)
+    history_a = pt_a.run(n_cycles=10)
+    path = tmp_path / "ckpt.h5"
+    pt_a.save_checkpoint(path)
+
+    pt_b = CanonicalParallelTempering.resume(
+        path, cluster_expansion=toy_ce
+    )
+    history_b = pt_b.run(n_cycles=10)
+
+    combined = ExchangeHistory.concatenate(history_a, history_b)
+    np.testing.assert_array_equal(
+        combined.energies_per_cycle, history_full.energies_per_cycle
+    )
+    np.testing.assert_array_equal(
+        combined.replica_labels_per_cycle,
+        history_full.replica_labels_per_cycle,
+    )
+    np.testing.assert_array_equal(
+        combined.swap_attempted, history_full.swap_attempted
+    )
+    np.testing.assert_array_equal(
+        combined.swap_accepted, history_full.swap_accepted
+    )
+
+
+def test_resume_rejects_unknown_schema_version(toy_ce, toy_atoms, tmp_path):
+    """A checkpoint with an unrecognised schema_version raises ValueError."""
+    import h5py
+
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r+") as f:
+        f["meta"].attrs["schema_version"] = "999"
+
+    with pytest.raises(ValueError, match="schema_version"):
+        CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
+
+
+def test_resume_rejects_mismatched_ce(toy_ce, toy_atoms, toy_cluster_space, tmp_path):
+    """Resuming with a different CE raises with a clear message."""
+    from icet import ClusterExpansion
+
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    other = ClusterExpansion(
+        cluster_space=toy_cluster_space,
+        parameters=np.zeros(len(toy_cluster_space)),
+    )
+    with pytest.raises(ValueError, match="CE identity"):
+        CanonicalParallelTempering.resume(path, cluster_expansion=other)

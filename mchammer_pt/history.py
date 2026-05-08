@@ -34,10 +34,12 @@ embedding via a temp file.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import h5py  # type: ignore[import-untyped]
 import numpy as np
@@ -172,6 +174,7 @@ def write_hdf5(
     replica_containers: list[BaseDataContainer],
     meta: dict[str, MetaValue],
     orchestrator_state: dict[str, np.ndarray | str] | None = None,
+    replica_extra: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write an `ExchangeHistory`, replica containers, and metadata.
 
@@ -188,10 +191,24 @@ def write_hdf5(
     via `read_hdf5`; ``CanonicalParallelTempering.resume`` requires
     files that include the group.
 
+    When ``replica_extra`` is supplied, its length must match
+    ``replica_containers``; each element's ``"sites_by_species"`` field
+    is JSON-encoded and stored at ``/sites_by_species/<i>``. This
+    carries `ConfigurationManager._sites_by_species` — the
+    path-dependent per-sublattice species → site-list cache that
+    bit-identical canonical-ensemble resume requires alongside the
+    container's `_last_state`.
+
     Writes are atomic: the file is first written to a sibling ``.tmp``
     path and renamed on success via ``os.replace``. A partial or failed
     write leaves the target path untouched.
     """
+    if replica_extra is not None and len(replica_extra) != len(replica_containers):
+        raise ValueError(
+            f"replica_extra has {len(replica_extra)} entries but "
+            f"replica_containers has {len(replica_containers)}; the "
+            f"two must match one-to-one."
+        )
     path = Path(path)
     tmp_target = path.with_suffix(path.suffix + ".tmp")
     try:
@@ -235,6 +252,13 @@ def write_hdf5(
                     "rng_state",
                     data=str(orchestrator_state["rng_state"]),
                 )
+
+            if replica_extra is not None:
+                sites_group = f.create_group("sites_by_species")
+                for i, extra in enumerate(replica_extra):
+                    sites_group.create_dataset(
+                        str(i), data=json.dumps(extra["sites_by_species"])
+                    )
         os.replace(tmp_target, path)
     except BaseException:
         # Clean the partial .tmp on any failure; leave the target path
