@@ -117,6 +117,81 @@ class Replica:
         finally:
             random.setstate(caller_state)
 
+    @classmethod
+    def restart_from(
+        cls,
+        container: BaseDataContainer,
+        *,
+        cluster_expansion: ClusterExpansion,
+        atoms: Atoms,
+        temperature: float,
+        random_seed: int,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+        cluster_expansion_path: str | os.PathLike[str] | None = None,
+    ) -> Replica:
+        """Construct a Replica whose ensemble has been restored from `container`.
+
+        Drives mchammer's restoration path: builds the replica
+        normally, swaps its empty `BaseDataContainer` for the
+        supplied one, then explicitly calls
+        `replica.ensemble._restart_ensemble()` to fire the
+        upstream `_step` / `occupations` / `_accepted_trials` /
+        stdlib-`random` restoration. The replica's private RNG
+        snapshot is updated to match.
+
+        `temperature`, `random_seed`, `ensemble_cls`, and
+        `ensemble_kwargs` are passed through to the standard
+        `Replica.__init__`. The seed is overwritten by
+        `_restart_ensemble`'s `random.setstate` call, so its
+        value is not load-bearing for bit-identical resume —
+        supplied for completeness only.
+
+        Args:
+            container: an mchammer `BaseDataContainer` whose
+                ``_last_state`` carries the saved per-replica state.
+            cluster_expansion: same CE used at the original run.
+            atoms: structure with the right cell/positions/pbc.
+                Occupations are immediately overwritten by
+                `_restart_ensemble` from `container._last_state`,
+                so the atoms argument is load-bearing only for the
+                geometry template.
+            temperature: simulation temperature (must match the
+                replica's slot on the original ladder).
+            random_seed: forwarded to `Replica.__init__`; overwritten
+                by the saved `random_state`.
+            ensemble_cls: same class used at the original run.
+            ensemble_kwargs: same kwargs used at the original run.
+            cluster_expansion_path: optional path the CE was loaded
+                from; same semantics as `Replica.__init__`.
+        """
+        replica = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            temperature=temperature,
+            random_seed=random_seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=cluster_expansion_path,
+        )
+        # Swap in the saved container so `_restart_ensemble` reads
+        # from it. mchammer reads `self.data_container._last_state`
+        # to drive every field of the restoration.
+        replica._ensemble._data_container = container
+        # Save the caller's stdlib-`random` state and restore the
+        # replica's private snapshot first — the same caller-isolation
+        # discipline `Replica.advance` follows. `_restart_ensemble`
+        # ends with a `random.setstate(saved_state)`, which we then
+        # capture into `_rng_state`.
+        caller_state = random.getstate()
+        random.setstate(replica._rng_state)
+        try:
+            replica._ensemble._restart_ensemble()
+            replica._rng_state = random.getstate()
+        finally:
+            random.setstate(caller_state)
+        return replica
+
     @property
     def temperature(self) -> float:
         """Replica temperature in kelvin."""
