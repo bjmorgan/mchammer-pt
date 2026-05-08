@@ -153,6 +153,8 @@ the subclass in a `.py` module file rather than a Jupyter cell. See
 - `examples/04_equilibrium_sampling.py` – discarding the initial burn-in period for equilibrium sampling.
 - `examples/05_custom_ensemble.py` — PT with a custom
   `CanonicalEnsemble` subclass.
+- `examples/06_progress_monitoring.py` — live progress on stderr for
+  long runs via `ProgressPrinter`.
 
 ## License
 
