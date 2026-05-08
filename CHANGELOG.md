@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-08
+
+### Added
+
+- `CycleCallback` protocol on `BaseParallelTempering` — handlers fired
+  once per PT cycle, after that cycle's history rows have been
+  written. Mirrors the existing `ExchangeCallback` registration shape:
+  `attach_cycle_callback(cb)`. Multiple cycle callbacks compose.
+- `ProgressPrinter` built-in `CycleCallback` — emits periodic
+  append-only progress lines to stderr during long PT runs, designed
+  for monitoring multi-hour SLURM jobs where stderr lands in the job
+  file. Each line carries a wall-clock timestamp, cycle/total counter,
+  completion fraction, elapsed and ETA, and (optionally) cumulative
+  per-pair swap-acceptance rates. Cadence is "every `interval` cycles
+  plus the final cycle"; the elapsed/ETA clock resets at the start of
+  each `run()` so reusing one printer across multiple runs produces a
+  fresh clock per run. Output stays single-line for wide ladders, and
+  the `H:MM:SS` shape is stable past 24 hours.
+- `examples/06_progress_monitoring.py` — worked example showing
+  `ProgressPrinter` attached to a short canonical PT run.
+
 ## [0.5.0] - 2026-04-30
 
 ### Added
