@@ -291,3 +291,34 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     assert meta["schema_version"] == "1"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
+
+
+def test_checkpoint_writer_emits_at_interval_and_final_cycle(
+    toy_ce, toy_atoms, tmp_path
+):
+    """CheckpointWriter writes the file every `interval` cycles plus the final
+    cycle, and each emitted file is a valid resume source."""
+    from mchammer_pt.checkpoint import _read_orchestrator_state
+    from mchammer_pt.history import read_hdf5
+
+    path = tmp_path / "ckpt.h5"
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.attach_checkpoint_writer(path, interval=3)
+    pt.run(n_cycles=10)
+
+    # The file is overwritten each emission, so by the end it
+    # reflects the final cycle. Validate it's a valid checkpoint.
+    history, containers, meta = read_hdf5(path)
+    assert meta["schema_version"] == "1"
+    assert history.energies_per_cycle.shape == (11, 3)
+    _read_orchestrator_state(path)
+
+
+def test_checkpoint_writer_rejects_non_positive_interval(toy_ce, toy_atoms, tmp_path):
+    from mchammer_pt import CheckpointWriter
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    with pytest.raises(ValueError):
+        CheckpointWriter(tmp_path / "ckpt.h5", interval=0, pt=pt)
+    with pytest.raises(ValueError):
+        CheckpointWriter(tmp_path / "ckpt.h5", interval=-1, pt=pt)

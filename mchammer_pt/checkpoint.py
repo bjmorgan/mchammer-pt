@@ -24,6 +24,8 @@ import h5py  # type: ignore[import-untyped]
 import numpy as np
 from icet import ClusterExpansion  # type: ignore[import-untyped]
 
+from .history import ExchangeHistory
+
 
 def _compute_ce_identity(cluster_expansion: ClusterExpansion) -> str:
     """SHA-256 hex digest of an icet `ClusterExpansion`.
@@ -194,3 +196,57 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         meta=meta,
         orchestrator_state=orchestrator_state,
     )
+
+
+class CheckpointWriter:
+    """Periodic full-checkpoint writer.
+
+    A built-in `CycleCallback` for crash-safe long PT runs. Writes
+    the same payload `pt.save_checkpoint(path)` produces, atomically
+    every ``interval`` cycles plus the final cycle. The file at
+    ``path`` is overwritten on each emission, so on resume the user
+    picks up from the most recent successful write.
+
+    A failed write raises out of `on_cycle_end`. The orchestrator's
+    cycle-callback fan-out propagates the exception, which aborts
+    the run with the partial history preserved on `pt.history`.
+    A full disk fails loud rather than silently losing checkpoints.
+
+    Prefer `pt.attach_checkpoint_writer(path, interval=...)` over
+    constructing this directly — the convenience method binds
+    ``pt=self`` so the user does not have to repeat the orchestrator
+    reference.
+
+    Args:
+        path: target file. Overwritten atomically on each emission.
+        interval: emit every ``interval`` completed cycles. Must be
+            ``>= 1``. The final cycle of every `run()` always emits.
+        pt: the orchestrator this writer checkpoints. Required —
+            `CheckpointWriter` reads identity hashes and live state
+            off it on every emission.
+    """
+
+    def __init__(
+        self,
+        path: Path | str,
+        interval: int = 1000,
+        *,
+        pt: object,
+    ) -> None:
+        if int(interval) < 1:
+            raise ValueError(f"interval must be >= 1, got {interval!r}")
+        self._path = Path(path)
+        self._interval = int(interval)
+        self._pt = pt
+
+    def on_cycle_end(
+        self,
+        cycle: int,
+        n_cycles: int,
+        history: ExchangeHistory,
+    ) -> None:
+        is_interval_emission = (cycle + 1) % self._interval == 0
+        is_final_emission = cycle == n_cycles - 1
+        if not (is_interval_emission or is_final_emission):
+            return
+        _write_checkpoint(self._pt, self._path)

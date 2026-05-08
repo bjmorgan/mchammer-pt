@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -127,6 +128,29 @@ class BaseParallelTempering(ABC):
         """
         self._cycle_callbacks.append(callback)
 
+    def attach_checkpoint_writer(
+        self,
+        path: Path | str,
+        *,
+        interval: int = 1000,
+    ) -> None:
+        """Attach a periodic checkpoint writer to this orchestrator.
+
+        Convenience wrapper around `CheckpointWriter` that binds the
+        orchestrator at attach time. Equivalent to::
+
+            from mchammer_pt import CheckpointWriter
+            pt.attach_cycle_callback(CheckpointWriter(path, interval, pt=pt))
+
+        See `CheckpointWriter` for output shape and atomicity
+        semantics.
+        """
+        from .checkpoint import CheckpointWriter
+
+        self.attach_cycle_callback(
+            CheckpointWriter(path, interval=interval, pt=self)
+        )
+
     def attach_observer(
         self,
         observer: BaseObserver,
@@ -162,6 +186,11 @@ class BaseParallelTempering(ABC):
         """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
+        # Publish the in-progress history on `self._history` immediately so
+        # cycle callbacks (e.g. `CheckpointWriter`) can read live orchestrator
+        # state via `self`. The `finally` is now a no-op for the happy path
+        # but preserves the partial-history-on-exception contract.
+        self._history = history
         try:
             history.energies_per_cycle[0] = self._pool.current_energies()
             history.replica_labels_per_cycle[0] = self._replica_labels

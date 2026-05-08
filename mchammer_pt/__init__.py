@@ -9,6 +9,7 @@ from .callbacks import (
     SwapRateTracker,
 )
 from .canonical import CanonicalParallelTempering
+from .checkpoint import CheckpointWriter
 from .diagnostics import (
     energy_autocorrelation_time,
     round_trip_counts,
@@ -25,6 +26,7 @@ __version__ = "0.6.0"
 __all__ = [
     "BaseParallelTempering",
     "CanonicalParallelTempering",
+    "CheckpointWriter",
     "CycleCallback",
     "ExchangeCallback",
     "ExchangeHistory",
