@@ -202,3 +202,30 @@ def test_compute_ensemble_kwargs_hash_returns_sentinel_for_local_class():
     # pickle raises AttributeError (or similar) for local-class instances;
     # the broadened except in `_compute_ensemble_kwargs_hash` should catch.
     assert _compute_ensemble_kwargs_hash({"x": _LocalClass()}) == ""
+
+
+def test_orchestrator_state_round_trips(tmp_path):
+    """Writing orchestrator state via `write_hdf5` and reading it back via
+    `_read_orchestrator_state` returns equivalent values."""
+    from mchammer_pt.checkpoint import _read_orchestrator_state
+    from mchammer_pt.history import ExchangeHistory, write_hdf5
+
+    path = tmp_path / "ckpt.h5"
+    history = ExchangeHistory.empty(n_cycles=3, n_replicas=4)
+    rng_state_json = '{"bit_generator": "PCG64", "state": {"state": 42}}'
+    write_hdf5(
+        path,
+        history=history,
+        replica_containers=[],
+        meta={"schema_version": "1"},
+        orchestrator_state={
+            "replica_labels": np.array([2, 0, 3, 1], dtype=np.int64),
+            "rng_state": rng_state_json,
+        },
+    )
+
+    loaded = _read_orchestrator_state(path)
+    np.testing.assert_array_equal(
+        loaded["replica_labels"], np.array([2, 0, 3, 1])
+    )
+    assert loaded["rng_state"] == rng_state_json

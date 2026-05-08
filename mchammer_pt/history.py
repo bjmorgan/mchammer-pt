@@ -171,12 +171,22 @@ def write_hdf5(
     history: ExchangeHistory,
     replica_containers: list[BaseDataContainer],
     meta: dict[str, MetaValue],
+    orchestrator_state: dict[str, np.ndarray | str] | None = None,
 ) -> None:
     """Write an `ExchangeHistory`, replica containers, and metadata.
 
     Each container is serialised via its `write` method (which produces
     an mchammer tarball) and the resulting bytes are embedded as a
     single opaque ``uint8`` dataset at ``/replicas/<i>``.
+
+    When ``orchestrator_state`` is supplied, an ``/orchestrator/`` group
+    is added carrying the orchestrator-level runtime state needed for
+    resume: ``replica_labels`` (int64 array of the current replica
+    permutation) and ``rng_state`` (a JSON string round-tripping the
+    orchestrator's exchange-proposal RNG ``bit_generator.state``).
+    Files written without ``orchestrator_state`` are still readable
+    via `read_hdf5`; ``CanonicalParallelTempering.resume`` requires
+    files that include the group.
 
     Writes are atomic: the file is first written to a sibling ``.tmp``
     path and renamed on success via ``os.replace``. A partial or failed
@@ -211,6 +221,19 @@ def write_hdf5(
                     tmp_path.unlink(missing_ok=True)
                 replicas.create_dataset(
                     str(i), data=np.frombuffer(payload, dtype=np.uint8)
+                )
+
+            if orchestrator_state is not None:
+                orchestrator_group = f.create_group("orchestrator")
+                orchestrator_group.create_dataset(
+                    "replica_labels",
+                    data=np.asarray(
+                        orchestrator_state["replica_labels"], dtype=np.int64
+                    ),
+                )
+                orchestrator_group.create_dataset(
+                    "rng_state",
+                    data=str(orchestrator_state["rng_state"]),
                 )
         os.replace(tmp_target, path)
     except BaseException:

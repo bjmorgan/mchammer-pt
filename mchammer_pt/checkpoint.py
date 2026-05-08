@@ -16,8 +16,11 @@ from __future__ import annotations
 import hashlib
 import pickle
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+import h5py  # type: ignore[import-untyped]
+import numpy as np
 from icet import ClusterExpansion  # type: ignore[import-untyped]
 
 
@@ -88,3 +91,50 @@ def _compute_ensemble_kwargs_hash(
     except Exception:
         return ""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
+    """Read the orchestrator-level state from a checkpoint file.
+
+    Reads the ``/orchestrator/replica_labels`` and
+    ``/orchestrator/rng_state`` datasets from a file written by
+    `write_hdf5` with ``orchestrator_state=`` populated.
+
+    Returns:
+        Dict with keys ``replica_labels`` (int64 numpy array) and
+        ``rng_state`` (JSON string).
+
+    Raises:
+        FileNotFoundError: if `path` does not exist.
+        KeyError: if the file does not have an ``/orchestrator/``
+            group with both required datasets — typically a sign
+            the file was written by a pre-checkpoint version of
+            ``write_hdf5`` and is therefore not a valid resume
+            source.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"no such file: {path}")
+    with h5py.File(path, "r") as f:
+        if "orchestrator" not in f:
+            raise KeyError(
+                f"{path}: missing required '/orchestrator/' group. "
+                f"File was not written as a checkpoint and cannot be "
+                f"used for resume."
+            )
+        group = f["orchestrator"]
+        for name in ("replica_labels", "rng_state"):
+            if name not in group:
+                raise KeyError(
+                    f"{path}: missing 'orchestrator/{name}' dataset."
+                )
+        replica_labels = np.array(group["replica_labels"])
+        # h5py stores Python str datasets as variable-length bytes;
+        # decode on read.
+        rng_state_raw = group["rng_state"][()]
+        rng_state = (
+            rng_state_raw.decode("utf-8")
+            if isinstance(rng_state_raw, bytes)
+            else str(rng_state_raw)
+        )
+    return {"replica_labels": replica_labels, "rng_state": rng_state}
