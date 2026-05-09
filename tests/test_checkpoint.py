@@ -498,3 +498,46 @@ def test_resume_rejects_mismatched_ce(toy_ce, toy_atoms, toy_cluster_space, tmp_
     )
     with pytest.raises(ValueError, match="CE identity"):
         CanonicalParallelTempering.resume(path, cluster_expansion=other)
+
+
+def test_resume_rejects_mismatched_ensemble_cls(toy_ce, toy_atoms, tmp_path):
+    """Resuming with a different `ensemble_cls` raises with a clear message."""
+    from mchammer.ensembles import CanonicalEnsemble
+
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    # Subclass with a different fully-qualified name; the cls itself is
+    # picklable and the spawn-import guard accepts it, so the only thing
+    # the FQN guard catches is the identity mismatch.
+    class _OtherEnsemble(CanonicalEnsemble):
+        pass
+
+    with pytest.raises(ValueError, match="ensemble_cls FQN mismatch"):
+        CanonicalParallelTempering.resume(
+            path,
+            cluster_expansion=toy_ce,
+            ensemble_cls=_OtherEnsemble,
+        )
+
+
+def test_resume_rejects_mismatched_ensemble_kwargs_hash(toy_ce, toy_atoms, tmp_path):
+    """Resuming with materially different `ensemble_kwargs` raises with a clear
+    message when both sides hash cleanly."""
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms, ensemble_kwargs={"user_tag": "first"})
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with pytest.raises(ValueError, match="ensemble_kwargs hash mismatch"):
+        CanonicalParallelTempering.resume(
+            path,
+            cluster_expansion=toy_ce,
+            ensemble_kwargs={"user_tag": "second"},
+        )

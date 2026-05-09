@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import warnings
 import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -19,7 +20,7 @@ from .checkpoint import (
     _compute_ensemble_kwargs_hash,
     _write_checkpoint,
 )
-from .history import ExchangeHistory
+from .history import ExchangeHistory, MetaValue
 from .parallel.backend import ReplicaPool
 from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
@@ -28,6 +29,44 @@ from .replica import Replica
 # Boltzmann constant in eV / K. Energies returned by `Replica.current_energy`
 # are in eV (total energy for the supercell), so beta has units 1/eV.
 _KB = 8.617333262145e-5
+
+
+def _validate_kwargs_hash(
+    path: Path | str,
+    meta: dict[str, MetaValue],
+    ensemble_kwargs: Mapping[str, Any] | None,
+    caller: str,
+) -> None:
+    """Resume-side guard for the ensemble-kwargs hash.
+
+    Hard-error on a real mismatch (both sides hashed cleanly and
+    differ). When either side returned the unpicklable-kwargs
+    sentinel ``""``, the hash carries no information and the guard
+    cannot enforce identity — emit a `UserWarning` rather than
+    silently skipping, so a user resuming with materially different
+    kwargs sees a signal that bit-identical resume isn't guaranteed.
+    """
+    expected = _compute_ensemble_kwargs_hash(ensemble_kwargs)
+    saved = meta.get("ensemble_kwargs_hash", "")
+    if expected and saved and expected != saved:
+        raise ValueError(
+            f"{path}: ensemble_kwargs hash mismatch. {caller} was "
+            f"called with kwargs that hash differently from the "
+            f"checkpoint."
+        )
+    if not expected or not saved:
+        side = "the supplied" if not expected else "the checkpoint's"
+        warnings.warn(
+            f"{path}: {side} ensemble_kwargs are not stably "
+            f"hashable (typically because they contain icet "
+            f"ClusterSpace, ClusterExpansion, or similar "
+            f"non-picklable objects). The kwargs-identity guard "
+            f"is being skipped; if {caller} was called with "
+            f"materially different kwargs from the original run, "
+            f"the resumed trajectory will diverge silently.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class CanonicalParallelTempering(BaseParallelTempering):
@@ -210,10 +249,12 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         Captures everything `CanonicalParallelTempering.resume` needs
         to reconstruct an equivalent orchestrator: per-replica state
-        (via each `mchammer.BaseDataContainer`'s ``_last_state``),
-        the orchestrator's replica-label permutation and exchange-
-        proposal RNG state, and identity hashes for the CE,
-        ensemble class, and ensemble kwargs.
+        (each `mchammer.BaseDataContainer`'s ``_last_state`` plus the
+        path-dependent ``ConfigurationManager._sites_by_species``
+        cache that bit-identical resume requires), the orchestrator's
+        replica-label permutation and exchange-proposal RNG state,
+        and identity hashes for the CE, ensemble class, and ensemble
+        kwargs.
 
         Requires `run()` to have been called at least once. Raises
         `RuntimeError` otherwise — the per-replica data containers
@@ -325,18 +366,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 f"{meta['ensemble_cls_fqn']!r}; resume was called "
                 f"with {expected_ensemble_fqn!r}."
             )
-        expected_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
-        saved_kwargs_hash = meta.get("ensemble_kwargs_hash", "")
-        if (
-            expected_kwargs_hash
-            and saved_kwargs_hash
-            and expected_kwargs_hash != saved_kwargs_hash
-        ):
-            raise ValueError(
-                f"{path}: ensemble_kwargs hash mismatch. Resume was "
-                f"called with kwargs that hash differently from the "
-                f"checkpoint."
-            )
+        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
@@ -461,18 +491,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 f"{meta['ensemble_cls_fqn']!r}; resume_process_pool "
                 f"was called with {expected_ensemble_fqn!r}."
             )
-        expected_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
-        saved_kwargs_hash = meta.get("ensemble_kwargs_hash", "")
-        if (
-            expected_kwargs_hash
-            and saved_kwargs_hash
-            and expected_kwargs_hash != saved_kwargs_hash
-        ):
-            raise ValueError(
-                f"{path}: ensemble_kwargs hash mismatch. "
-                f"resume_process_pool was called with kwargs that hash "
-                f"differently from the checkpoint."
-            )
+        _validate_kwargs_hash(
+            path, meta, ensemble_kwargs, "resume_process_pool"
+        )
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
@@ -497,26 +518,37 @@ class CanonicalParallelTempering(BaseParallelTempering):
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
         )
-        # Restore per-replica state on each worker via the new
-        # RESTORE_STATE opcode. After this returns, each worker's
-        # replica matches the saved checkpoint.
-        pt._pool.restore_replica_state(  # type: ignore[attr-defined]
-            containers, replica_extras
-        )
+        # Once `process_pool` has spawned workers, any failure on the
+        # rest of the resume path leaks them — the orchestrator is
+        # never returned, the caller has no handle to call
+        # `pt.shutdown()`, and a notebook-cell retry would accumulate
+        # workers. Shut the pool down on any failure between here
+        # and the return statement, mirroring the cleanup discipline
+        # `process_pool(...)` uses for its CE tempdir.
+        try:
+            # Restore per-replica state on each worker via the new
+            # RESTORE_STATE opcode. After this returns, each worker's
+            # replica matches the saved checkpoint.
+            pt._pool.restore_replica_state(  # type: ignore[attr-defined]
+                containers, replica_extras
+            )
 
-        # Re-stamp identity hashes from the loaded checkpoint so
-        # users custom-supplying non-default kwargs see preserved
-        # identity rather than the constructor's recompute.
-        pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
-        pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
+            # Re-stamp identity hashes from the loaded checkpoint so
+            # users custom-supplying non-default kwargs see preserved
+            # identity rather than the constructor's recompute.
+            pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
+            pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
 
-        # Restore orchestrator-level state.
-        pt._replica_labels = np.asarray(
-            orchestrator_state["replica_labels"], dtype=np.int64
-        )
-        rng_state_raw = orchestrator_state["rng_state"]
-        assert isinstance(rng_state_raw, str)
-        pt._rng.bit_generator.state = json.loads(rng_state_raw)
+            # Restore orchestrator-level state.
+            pt._replica_labels = np.asarray(
+                orchestrator_state["replica_labels"], dtype=np.int64
+            )
+            rng_state_raw = orchestrator_state["rng_state"]
+            assert isinstance(rng_state_raw, str)
+            pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        except BaseException:
+            pt._pool.shutdown()
+            raise
         return pt
 
     @classmethod

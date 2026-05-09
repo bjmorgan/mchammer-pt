@@ -7,8 +7,18 @@ helpers used by `CanonicalParallelTempering.save_checkpoint`,
 `CanonicalParallelTempering.resume`, and the existing
 `data_container_file=` write path.
 
-Schema design lives in
-`docs/superpowers/specs/2026-05-08-checkpoint-and-resume-design.md`.
+The on-disk schema (version ``"2"``) is HDF5 with these top-level
+groups: ``meta`` (run metadata as attrs, including
+``schema_version``, ``temperatures``, ``block_size``,
+``random_seed``, ``ce_identity``, ``ensemble_cls_fqn``, and
+``ensemble_kwargs_hash``); ``exchanges`` (per-cycle history
+arrays); ``replicas`` (one opaque tarball per replica, the native
+mchammer ``BaseDataContainer`` format); ``orchestrator`` (the
+exchange-proposal RNG state and the replica-label permutation);
+and ``sites_by_species`` (one JSON dataset per replica carrying
+the path-dependent ``ConfigurationManager._sites_by_species``
+cache that bit-identical resume requires alongside
+``_last_state``).
 """
 
 from __future__ import annotations
@@ -211,8 +221,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     at construction (`_ce_identity`, `_ensemble_cls_fqn`,
     `_ensemble_kwargs_hash`, `_random_seed`) and the live state
     (`_history`, `_replica_labels`, `_rng`) and packs them into the
-    HDF5 schema documented in
-    ``docs/superpowers/specs/2026-05-08-checkpoint-and-resume-design.md``.
+    schema-``"2"`` HDF5 layout described in this module's docstring.
     """
     from .history import write_hdf5
 

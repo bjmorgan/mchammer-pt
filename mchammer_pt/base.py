@@ -141,7 +141,7 @@ class BaseParallelTempering(ABC):
         orchestrator at attach time. Equivalent to::
 
             from mchammer_pt import CheckpointWriter
-            pt.attach_cycle_callback(CheckpointWriter(path, interval, pt=pt))
+            pt.attach_cycle_callback(CheckpointWriter(path, interval=interval, pt=pt))
 
         See `CheckpointWriter` for output shape and atomicity
         semantics.
