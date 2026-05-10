@@ -525,6 +525,42 @@ def test_resume_rejects_mismatched_ensemble_cls(toy_ce, toy_atoms, tmp_path):
         )
 
 
+def test_validate_kwargs_hash_warns_on_sentinel():
+    """When either side returned the unpicklable-kwargs sentinel ``""``, the
+    resume-time guard emits `UserWarning` rather than silently passing.
+
+    Pins the silent-to-loud transition the previous review fix introduced.
+    A regression that removed the warning, downgraded it to a less-visible
+    category, or gated it on a branch that doesn't fire would restore the
+    original silent-physics-divergence failure mode."""
+    from mchammer_pt.canonical import _validate_kwargs_hash
+    from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+
+    # Saved-side sentinel (original run had unpicklable kwargs); user
+    # supplies kwargs that hash cleanly. Guard cannot enforce identity.
+    with pytest.warns(UserWarning, match="kwargs-identity guard"):
+        _validate_kwargs_hash(
+            "ckpt.h5",
+            {"ensemble_kwargs_hash": ""},
+            ensemble_kwargs={"user_tag": "first"},
+            caller="resume",
+        )
+
+    # Supplied-side sentinel (user's kwargs are not stably hashable);
+    # checkpoint's hash is real. Same skip → same warning.
+    class _Local:
+        pass
+
+    saved_hash = _compute_ensemble_kwargs_hash({"user_tag": "first"})
+    with pytest.warns(UserWarning, match="kwargs-identity guard"):
+        _validate_kwargs_hash(
+            "ckpt.h5",
+            {"ensemble_kwargs_hash": saved_hash},
+            ensemble_kwargs={"thing": _Local()},
+            caller="resume",
+        )
+
+
 def test_resume_rejects_mismatched_ensemble_kwargs_hash(toy_ce, toy_atoms, tmp_path):
     """Resuming with materially different `ensemble_kwargs` raises with a clear
     message when both sides hash cleanly."""
