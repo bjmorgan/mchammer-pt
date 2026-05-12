@@ -37,6 +37,10 @@ include = ["mchammer_pt*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: integration tests that take minutes (not run by default)",
+]
 
 [tool.mypy]
 python_version = "3.11"
