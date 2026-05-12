@@ -16,16 +16,24 @@ from .diagnostics import (
     swap_acceptance_rates,
 )
 from .history import ExchangeHistory, read_hdf5, write_hdf5
-from .parallel.backend import ObservablePool, ReplicaPool
-from .parallel.processes import ProcessPool
-from .parallel.serial import SerialPool
+from .parallel.backend import (
+    CanonicalPool,
+    ObservablePool,
+    ReplicaPool,
+    WangLandauPool,
+)
+from .parallel.processes import ProcessPool, ProcessWangLandauPool
+from .parallel.serial import SerialPool, SerialWangLandauPool
 from .replica import Replica
+from .wl import WangLandauParallelTempering
+from .wl_replica import WangLandauReplica
 
 __version__ = "0.7.0"
 
 __all__ = [
     "BaseParallelTempering",
     "CanonicalParallelTempering",
+    "CanonicalPool",
     "CheckpointWriter",
     "CycleCallback",
     "ExchangeCallback",
@@ -33,11 +41,16 @@ __all__ = [
     "ExchangePrinter",
     "ObservablePool",
     "ProcessPool",
+    "ProcessWangLandauPool",
     "ProgressPrinter",
     "Replica",
     "ReplicaPool",
     "SerialPool",
+    "SerialWangLandauPool",
     "SwapRateTracker",
+    "WangLandauParallelTempering",
+    "WangLandauPool",
+    "WangLandauReplica",
     "__version__",
     "energy_autocorrelation_time",
     "read_hdf5",
