@@ -145,8 +145,8 @@ class ProgressPrinter:
     """Periodic per-cycle progress lines on stderr.
 
     A built-in `CycleCallback` for monitoring long PT runs in
-    non-interactive environments (SLURM job files, ``nohup``, output
-    redirection). Emits one append-only line every ``interval``
+    non-interactive environments where stderr is captured to a log
+    file or pipe. Emits one append-only line every ``interval``
     cycles plus one at the final cycle, with a wall-clock timestamp,
     completion fraction, elapsed and ETA, and (optionally) cumulative
     per-pair swap-acceptance rates.

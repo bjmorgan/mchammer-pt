@@ -5,12 +5,12 @@ Run from the repo root:
     python examples/06_progress_monitoring.py
 
 Demonstrates the `ProgressPrinter` cycle callback. Each emitted line
-goes to stderr by default (so it composes with shell redirection and
-SLURM `--error=` directives without extra plumbing) and carries a
-wall-clock timestamp, the cycle counter, completion fraction, elapsed
-and ETA, plus cumulative per-pair swap-acceptance rates — enough
-signal to spot a bad temperature ladder while a multi-hour run is
-still going, rather than after it finishes.
+goes to stderr by default (so it composes with shell redirection
+without extra plumbing) and carries a wall-clock timestamp, the
+cycle counter, completion fraction, elapsed and ETA, plus
+cumulative per-pair swap-acceptance rates — enough signal to spot
+a bad temperature ladder while a multi-hour run is still going,
+rather than after it finishes.
 
 The example is short and runs in a few seconds; bump `n_cycles` and
 shrink `interval` to see what a real run's stderr looks like.

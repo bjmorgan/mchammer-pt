@@ -18,10 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pt.attach_checkpoint_writer(path, interval=...)` for periodic
   mid-run checkpointing. Writes the same payload as
   `save_checkpoint` every ``interval`` cycles plus the final
-  cycle, atomically. The headline use case is surviving SLURM
-  walltime kills on long ARCHER2 jobs. A failed write raises
-  out of `on_cycle_end` and aborts the run with the partial
-  history preserved.
+  cycle, atomically. A failed write raises out of `on_cycle_end`
+  and aborts the run with the partial history preserved.
 - `CanonicalParallelTempering.resume(path, *, cluster_expansion)` —
   reconstructs a `SerialPool` orchestrator from a checkpoint and
   returns it ready for further `run()` calls. The bit-identical
@@ -104,14 +102,15 @@ value other than ``"2"`` with a clear message.
   `attach_cycle_callback(cb)`. Multiple cycle callbacks compose.
 - `ProgressPrinter` built-in `CycleCallback` — emits periodic
   append-only progress lines to stderr during long PT runs, designed
-  for monitoring multi-hour SLURM jobs where stderr lands in the job
-  file. Each line carries a wall-clock timestamp, cycle/total counter,
-  completion fraction, elapsed and ETA, and (optionally) cumulative
-  per-pair swap-acceptance rates. Cadence is "every `interval` cycles
-  plus the final cycle"; the elapsed/ETA clock resets at the start of
-  each `run()` so reusing one printer across multiple runs produces a
-  fresh clock per run. Output stays single-line for wide ladders, and
-  the `H:MM:SS` shape is stable past 24 hours.
+  for monitoring multi-hour non-interactive runs where stderr is
+  captured to a log file. Each line carries a wall-clock timestamp,
+  cycle/total counter, completion fraction, elapsed and ETA, and
+  (optionally) cumulative per-pair swap-acceptance rates. Cadence is
+  "every `interval` cycles plus the final cycle"; the elapsed/ETA
+  clock resets at the start of each `run()` so reusing one printer
+  across multiple runs produces a fresh clock per run. Output stays
+  single-line for wide ladders, and the `H:MM:SS` shape is stable
+  past 24 hours.
 - `examples/06_progress_monitoring.py` — worked example showing
   `ProgressPrinter` attached to a short canonical PT run.
 
