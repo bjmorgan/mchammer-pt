@@ -1386,3 +1386,12 @@ def test_replica_pool_protocol_does_not_carry_temperatures():
     from mchammer_pt.parallel.backend import ReplicaPool
 
     assert "temperatures" not in dir(ReplicaPool)
+
+
+def test_wang_landau_pool_protocol_exists():
+    """WangLandauPool is a runtime-checkable Protocol extending ReplicaPool."""
+    from mchammer_pt.parallel.backend import ReplicaPool, WangLandauPool
+
+    assert issubclass(WangLandauPool, ReplicaPool)
+    for name in ("windows", "energy_spacing", "log_g", "log_g_pair", "converged_flags"):
+        assert hasattr(WangLandauPool, name) or name in dir(WangLandauPool)

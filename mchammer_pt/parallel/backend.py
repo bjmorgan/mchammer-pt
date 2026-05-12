@@ -129,6 +129,43 @@ class CanonicalPool(ReplicaPool, Protocol):
 
 
 @runtime_checkable
+class WangLandauPool(ReplicaPool, Protocol):
+    """A ReplicaPool driving Wang-Landau ensembles.
+
+    Each replica owns a fixed energy window. The orchestrator queries
+    per-window log-density-of-states via `log_g`; the batched
+    `log_g_pair` halves round-trip cost on process-parallel pools.
+    `converged_flags` reports per-replica convergence so the
+    orchestrator can stop on global convergence.
+    """
+
+    @property
+    def windows(self) -> Sequence[tuple[float | None, float | None]]: ...
+
+    @property
+    def energy_spacing(self) -> float: ...
+
+    def log_g(self, i: int, energy: float) -> float:
+        """Return ln g at the given energy for replica i, or -inf out of window."""
+        ...
+
+    def log_g_pair(
+        self, i: int, j: int, E_i: float, E_j: float,
+    ) -> tuple[float, float, float, float]:
+        """Returns (log_g_i_at_E_i, log_g_i_at_E_j, log_g_j_at_E_i, log_g_j_at_E_j).
+
+        Taking the energies as inputs (rather than looking them up
+        internally) saves two worker round-trips in the ProcessPool
+        path. Serial pools may implement it as four `log_g` calls.
+        """
+        ...
+
+    def converged_flags(self) -> np.ndarray:
+        """Per-replica convergence (bool array, length len(self))."""
+        ...
+
+
+@runtime_checkable
 class ObservablePool(CanonicalPool, Protocol):
     """A `CanonicalPool` that can have mchammer observers attached.
 
