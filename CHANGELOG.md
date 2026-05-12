@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped checkpoint schema to ``"3"``. Checkpoints written by
+  v0.7.0 (schema ``"2"``) are not valid resume sources for this
+  version; ``resume`` hard-errors with a clear message on the
+  version mismatch. The schema change accompanies a refactor that
+  moves ladder-specific meta keys (``temperatures`` for canonical
+  PT, ``windows`` + ``energy_spacing`` for the upcoming
+  Wang-Landau PT) behind a per-subclass ``_checkpoint_meta()``
+  hook on ``BaseParallelTempering``.
+
 ## [0.7.0] - 2026-05-08
 
 ### Added

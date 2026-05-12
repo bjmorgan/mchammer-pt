@@ -8,11 +8,14 @@ helpers used by `CanonicalParallelTempering.save_checkpoint`,
 `data_container_file=` write path.
 
 The on-disk schema (version ``"3"``) is HDF5 with these top-level
-groups: ``meta`` (run metadata as attrs, including
-``schema_version``, ``temperatures``, ``block_size``,
-``random_seed``, ``ce_identity``, ``ensemble_cls_fqn``, and
-``ensemble_kwargs_hash``); ``exchanges`` (per-cycle history
-arrays); ``replicas`` (one opaque tarball per replica, the native
+groups: ``meta`` (run metadata as attrs; six shared keys —
+``schema_version``, ``block_size``, ``random_seed``,
+``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
+plus ladder-specific keys contributed by the orchestrator subclass
+via ``_checkpoint_meta()`` such as ``temperatures`` for canonical
+PT or ``windows`` + ``energy_spacing`` for REWL);
+``exchanges`` (per-cycle history arrays); ``replicas`` (one opaque
+tarball per replica, the native
 mchammer ``BaseDataContainer`` format); ``orchestrator`` (the
 exchange-proposal RNG state and the replica-label permutation);
 and ``sites_by_species`` (one JSON dataset per replica carrying
