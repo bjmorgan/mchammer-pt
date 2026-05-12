@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tempfile
-import warnings
 import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -18,6 +17,7 @@ from .base import BaseParallelTempering
 from .checkpoint import (
     _compute_ce_identity,
     _compute_ensemble_kwargs_hash,
+    _validate_kwargs_hash,
     _write_checkpoint,
 )
 from .history import ExchangeHistory, MetaValue
@@ -29,44 +29,6 @@ from .replica import Replica
 # Boltzmann constant in eV / K. Energies returned by `Replica.current_energy`
 # are in eV (total energy for the supercell), so beta has units 1/eV.
 _KB = 8.617333262145e-5
-
-
-def _validate_kwargs_hash(
-    path: Path | str,
-    meta: dict[str, MetaValue],
-    ensemble_kwargs: Mapping[str, Any] | None,
-    caller: str,
-) -> None:
-    """Resume-side guard for the ensemble-kwargs hash.
-
-    Hard-error on a real mismatch (both sides hashed cleanly and
-    differ). When either side returned the unpicklable-kwargs
-    sentinel ``""``, the hash carries no information and the guard
-    cannot enforce identity — emit a `UserWarning` rather than
-    silently skipping, so a user resuming with materially different
-    kwargs sees a signal that bit-identical resume isn't guaranteed.
-    """
-    expected = _compute_ensemble_kwargs_hash(ensemble_kwargs)
-    saved = meta.get("ensemble_kwargs_hash", "")
-    if expected and saved and expected != saved:
-        raise ValueError(
-            f"{path}: ensemble_kwargs hash mismatch. {caller} was "
-            f"called with kwargs that hash differently from the "
-            f"checkpoint."
-        )
-    if not expected or not saved:
-        side = "the supplied" if not expected else "the checkpoint's"
-        warnings.warn(
-            f"{path}: {side} ensemble_kwargs are not stably "
-            f"hashable (typically because they contain icet "
-            f"ClusterSpace, ClusterExpansion, or similar "
-            f"non-picklable objects). The kwargs-identity guard "
-            f"is being skipped; if {caller} was called with "
-            f"materially different kwargs from the original run, "
-            f"the resumed trajectory will diverge silently.",
-            UserWarning,
-            stacklevel=3,
-        )
 
 
 class CanonicalParallelTempering(BaseParallelTempering):
@@ -346,10 +308,10 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         history, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "2":
+        if schema_version != "3":
             raise ValueError(
                 f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '2' only."
+                f"this version of mchammer-pt understands '3' only."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -471,10 +433,10 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         history, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "2":
+        if schema_version != "3":
             raise ValueError(
                 f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '2' only."
+                f"this version of mchammer-pt understands '3' only."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:

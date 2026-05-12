@@ -218,7 +218,7 @@ def test_orchestrator_state_round_trips(tmp_path):
         path,
         history=history,
         replica_containers=[],
-        meta={"schema_version": "2"},
+        meta={"schema_version": "3"},
         orchestrator_state={
             "replica_labels": np.array([2, 0, 3, 1], dtype=np.int64),
             "rng_state": rng_state_json,
@@ -258,7 +258,7 @@ def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_pa
     pt.save_checkpoint(path)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "2"
+    assert meta["schema_version"] == "3"
     assert meta["block_size"] == 10
     assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
     assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
@@ -289,7 +289,7 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     pt.run(n_cycles=3)
 
     _, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "2"
+    assert meta["schema_version"] == "3"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
 
@@ -361,7 +361,7 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
 
     # And the final file is a valid resumable checkpoint.
     history, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "2"
+    assert meta["schema_version"] == "3"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
 
@@ -449,7 +449,7 @@ def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path
         pt.run(n_cycles=3)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "2"
+    assert meta["schema_version"] == "3"
     assert len(containers) == 3
     _read_orchestrator_state(path)
 
@@ -533,8 +533,10 @@ def test_validate_kwargs_hash_warns_on_sentinel():
     A regression that removed the warning, downgraded it to a less-visible
     category, or gated it on a branch that doesn't fire would restore the
     original silent-physics-divergence failure mode."""
-    from mchammer_pt.canonical import _validate_kwargs_hash
-    from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+    from mchammer_pt.checkpoint import (
+        _compute_ensemble_kwargs_hash,
+        _validate_kwargs_hash,
+    )
 
     # Saved-side sentinel (original run had unpicklable kwargs); user
     # supplies kwargs that hash cleanly. Guard cannot enforce identity.
