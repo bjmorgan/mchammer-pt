@@ -321,6 +321,62 @@ class ProcessPool:
             containers.append(self._recv_or_raise(conn, "GET_DC", i))
         return containers
 
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
+        extras: list[dict[str, Any]] = []
+        for i, (_, conn) in enumerate(self._workers):
+            extras.append(
+                self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
+            )
+        return extras
+
+    def restore_replica_state(
+        self,
+        containers: list[BaseDataContainer],
+        replica_extras: list[dict[str, Any]],
+    ) -> None:
+        """Push saved per-replica state into each worker.
+
+        Sends each worker its corresponding `BaseDataContainer` and the
+        ``sites_by_species`` cache from ``replica_extras``; the worker
+        applies them via `Replica.restore_state`. Used by
+        `CanonicalParallelTempering.resume_process_pool` to bring a
+        freshly-spawned process pool to the saved state.
+
+        Args:
+            containers: one container per worker, in slot order.
+                Length must equal `len(self)`.
+            replica_extras: one per-replica extras dict per worker.
+                Each must carry a ``"sites_by_species"`` key.
+
+        Raises:
+            RuntimeError: pool is shut down, or any worker reports an
+                error during restoration.
+            ValueError: lengths of ``containers`` and ``replica_extras``
+                do not match `len(self)`.
+        """
+        self._check_open()
+        if len(containers) != len(self):
+            raise ValueError(
+                f"restore_replica_state expects {len(self)} containers, "
+                f"got {len(containers)}"
+            )
+        if len(replica_extras) != len(self):
+            raise ValueError(
+                f"restore_replica_state expects {len(self)} extras dicts, "
+                f"got {len(replica_extras)}"
+            )
+        for (_, conn), container, extra in zip(
+            self._workers, containers, replica_extras, strict=True
+        ):
+            conn.send(
+                ("RESTORE_STATE", container, extra["sites_by_species"])
+            )
+        for i, (_, conn) in enumerate(self._workers):
+            self._recv_or_raise(conn, "RESTORE_STATE", i)
+
     def attach_observer(
         self,
         observer: BaseObserver,

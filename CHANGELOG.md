@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-08
+
+### Added
+
+- `CanonicalParallelTempering.save_checkpoint(path)` — atomic
+  full-checkpoint write at the call site. Captures everything
+  needed to reconstruct the orchestrator at the saved state.
+- `CheckpointWriter` `CycleCallback` and the convenience method
+  `pt.attach_checkpoint_writer(path, interval=...)` for periodic
+  mid-run checkpointing. Writes the same payload as
+  `save_checkpoint` every ``interval`` cycles plus the final
+  cycle, atomically. The headline use case is surviving SLURM
+  walltime kills on long ARCHER2 jobs. A failed write raises
+  out of `on_cycle_end` and aborts the run with the partial
+  history preserved.
+- `CanonicalParallelTempering.resume(path, *, cluster_expansion)` —
+  reconstructs a `SerialPool` orchestrator from a checkpoint and
+  returns it ready for further `run()` calls. The bit-identical
+  contract holds: a run of `N` cycles, checkpointed, resumed, and
+  continued for `M` cycles produces an `ExchangeHistory` that —
+  when concatenated with the prior history via
+  `ExchangeHistory.concatenate` — equals byte-for-byte the history
+  of a single run of `N+M` cycles from the same seed.
+- `CanonicalParallelTempering.resume_process_pool(path, *, cluster_expansion)`
+  — `ProcessPool` resume. Same identity validation as `resume`, but
+  the bit-identical contract holds per-pool-kind only (worker
+  scheduling non-determinism prevents cross-pool exact equivalence).
+- `Replica.restart_from(container, *, cluster_expansion, atoms, ...)` —
+  classmethod that constructs a `Replica` whose ensemble has been
+  restored from a saved `BaseDataContainer` via mchammer's
+  `_restart_ensemble`, plus the path-dependent
+  `ConfigurationManager._sites_by_species` cache that
+  `_restart_ensemble` does not itself restore but whose order
+  controls `random.choice` outcomes in canonical trial-step
+  proposals.
+- `Replica.restore_state(container, *, sites_by_species=None)` —
+  instance-method counterpart to `restart_from` for mutating an
+  existing replica. Used by `ProcessPool` workers to restore state
+  in place via the new `RESTORE_STATE` opcode.
+- `Replica.snapshot_for_checkpoint() -> dict` — populates the
+  live `BaseDataContainer._last_state` with the four fields
+  `_restart_ensemble` reads on resume, and returns the additional
+  per-replica state the orchestrator embeds in the checkpoint
+  (notably `_sites_by_species`). mchammer's own
+  `BaseEnsemble.write_data_container` performs the equivalent
+  refresh inline; serialising containers directly via the
+  checkpoint writer requires us to replicate it.
+- `ReplicaPool.snapshot_for_checkpoint() -> list[dict]` protocol
+  method — cross-pool snapshot capture. `SerialPool` calls each
+  replica locally; `ProcessPool` round-trips a new
+  `SNAPSHOT_FOR_CHECKPOINT` opcode to each worker.
+- `examples/07_resume.py` — worked example demonstrating
+  checkpoint/resume with the bit-identical concatenation pattern.
+
+### Changed
+
+- HDF5 ``meta/`` schema extended with ``schema_version``,
+  ``random_seed``, ``ce_identity`` (sha256 of a stable canonical
+  form: `to_dataframe().to_csv()` plus `chemical_symbols`,
+  `cutoffs`, and the primitive structure — `ClusterExpansion.write`
+  is not byte-deterministic and was rejected as a hash source),
+  ``ensemble_cls_fqn``, and ``ensemble_kwargs_hash``. ``schema_version``
+  bumped to ``"2"``; new top-level ``/orchestrator/`` group carries
+  ``replica_labels`` and the JSON-encoded numpy ``bit_generator.state``;
+  new top-level ``/sites_by_species/`` group carries one JSON
+  dataset per replica.
+- The existing ``data_container_file=`` constructor kwarg now
+  produces full checkpoints. Files written via that path are
+  resumable via `resume`/`resume_process_pool`. No behaviour change
+  for users not using resume; the file payload simply includes the
+  new schema additions.
+- `BaseParallelTempering.run()` now publishes ``self._history`` to
+  the in-progress history object before the cycle loop, so cycle
+  callbacks (such as `CheckpointWriter`) see the live history rather
+  than ``None``. The prior behaviour was that ``self._history``
+  remained ``None`` until the run completed; the existing
+  partial-history-on-exception contract was preserved via a
+  ``try/finally`` that became redundant once the eager assignment
+  landed and was removed.
+
+### Notes
+
+Files written by 0.6.0 (no checkpoint payload) or by intermediate
+development builds (schema ``"1"``, lacking ``_sites_by_species``)
+are not resumable. The schema-version guard hard-errors on any
+value other than ``"2"`` with a clear message.
+
 ## [0.6.0] - 2026-05-08
 
 ### Added

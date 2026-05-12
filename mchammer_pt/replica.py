@@ -117,6 +117,140 @@ class Replica:
         finally:
             random.setstate(caller_state)
 
+    @classmethod
+    def restart_from(
+        cls,
+        container: BaseDataContainer,
+        *,
+        cluster_expansion: ClusterExpansion,
+        atoms: Atoms,
+        temperature: float,
+        random_seed: int,
+        ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+        cluster_expansion_path: str | os.PathLike[str] | None = None,
+        sites_by_species: list[dict[int, list[int]]] | None = None,
+    ) -> Replica:
+        """Construct a Replica whose ensemble has been restored from `container`.
+
+        Drives mchammer's restoration path: builds the replica
+        normally, swaps its empty `BaseDataContainer` for the
+        supplied one, then explicitly calls
+        `replica.ensemble._restart_ensemble()` to fire the
+        upstream `_step` / `occupations` / `_accepted_trials` /
+        stdlib-`random` restoration. The replica's private RNG
+        snapshot is updated to match.
+
+        `temperature`, `random_seed`, `ensemble_cls`, and
+        `ensemble_kwargs` are passed through to the standard
+        `Replica.__init__`. The seed is overwritten by
+        `_restart_ensemble`'s `random.setstate` call, so its
+        value is not load-bearing for bit-identical resume —
+        supplied for completeness only.
+
+        Bit-identical resume additionally requires restoring
+        `ConfigurationManager._sites_by_species` — a
+        path-dependent cache of per-sublattice ordered site lists
+        keyed by species. mchammer's `_restart_ensemble` rebuilds
+        this cache from current occupations in natural sublattice
+        order, but the canonical-ensemble trial-step proposal
+        draws `random.choice` from a list built in the cache's
+        live order, so a freshly-rebuilt cache produces a
+        different proposal stream than the original run. Passing
+        the saved cache via ``sites_by_species`` overwrites the
+        rebuilt cache to match the original order.
+
+        Args:
+            container: an mchammer `BaseDataContainer` whose
+                ``_last_state`` carries the saved per-replica state.
+            cluster_expansion: same CE used at the original run.
+            atoms: structure with the right cell/positions/pbc.
+                Occupations are immediately overwritten by
+                `_restart_ensemble` from `container._last_state`,
+                so the atoms argument is load-bearing only for the
+                geometry template.
+            temperature: simulation temperature (must match the
+                replica's slot on the original ladder).
+            random_seed: forwarded to `Replica.__init__`; overwritten
+                by the saved `random_state`.
+            ensemble_cls: same class used at the original run.
+            ensemble_kwargs: same kwargs used at the original run.
+            cluster_expansion_path: optional path the CE was loaded
+                from; same semantics as `Replica.__init__`.
+            sites_by_species: saved
+                ``ConfigurationManager._sites_by_species`` cache
+                (one dict per sublattice, mapping atomic number to
+                ordered list of site indices). When supplied,
+                overwrites the rebuilt cache so the next
+                `random.choice`-driven proposal lands on the same
+                site as the original run.
+        """
+        replica = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            temperature=temperature,
+            random_seed=random_seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=cluster_expansion_path,
+        )
+        replica.restore_state(container, sites_by_species=sites_by_species)
+        return replica
+
+    def restore_state(
+        self,
+        container: BaseDataContainer,
+        *,
+        sites_by_species: list[dict[int, list[int]]] | None = None,
+    ) -> None:
+        """Mutate this replica to match a saved checkpoint.
+
+        Swaps the ensemble's `BaseDataContainer` for ``container``,
+        calls mchammer's ``_restart_ensemble`` to restore step count,
+        configuration, accepted-trial count, and stdlib-``random``
+        state from ``container._last_state``, and (if supplied)
+        overwrites the path-dependent
+        ``ConfigurationManager._sites_by_species`` cache with the
+        saved order so the next trial-step proposal matches the
+        original run.
+
+        Used by `Replica.restart_from` (which constructs a fresh
+        replica before calling this) and by `ProcessPool` workers
+        (which call this on their existing in-process replica when
+        the parent broadcasts a `RESTORE_STATE` opcode).
+
+        Args:
+            container: an mchammer `BaseDataContainer` whose
+                ``_last_state`` carries the saved per-replica state.
+            sites_by_species: saved
+                ``ConfigurationManager._sites_by_species`` cache.
+                When supplied, overwrites the rebuilt cache so the
+                next ``random.choice``-driven proposal lands on the
+                same site as the original run.
+        """
+        # Swap in the saved container so `_restart_ensemble` reads
+        # from it. mchammer reads `self.data_container._last_state`
+        # to drive every field of the restoration.
+        self._ensemble._data_container = container
+        # Save the caller's stdlib-`random` state and restore the
+        # replica's private snapshot first — the same caller-isolation
+        # discipline `Replica.advance` follows. `_restart_ensemble`
+        # ends with a `random.setstate(saved_state)`, which we then
+        # capture into `_rng_state`.
+        caller_state = random.getstate()
+        random.setstate(self._rng_state)
+        try:
+            self._ensemble._restart_ensemble()
+            self._rng_state = random.getstate()
+        finally:
+            random.setstate(caller_state)
+        if sites_by_species is not None:
+            # mchammer-internal: restoring the path-dependent
+            # `_sites_by_species` cache so the next trial-step
+            # proposal matches the original run. Same direct-access
+            # pattern as the `_data_container` swap above.
+            self._ensemble.configuration._sites_by_species = sites_by_species
+
     @property
     def temperature(self) -> float:
         """Replica temperature in kelvin."""
@@ -203,3 +337,47 @@ class Replica:
         unchanged.
         """
         return self._ensemble.data_container
+
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Refresh restart-state on the live container and return extras.
+
+        Populates ``data_container._last_state`` with the four fields
+        `_restart_ensemble` reads on resume — ``last_step``,
+        ``occupations``, ``accepted_trials``, and ``random_state`` —
+        and returns the additional per-replica state the orchestrator
+        needs to checkpoint alongside the container. mchammer's own
+        ``BaseEnsemble.write_data_container`` performs the same
+        refresh inline; serialising the container directly (e.g. via
+        the checkpoint writer) requires us to replicate it.
+
+        ``random_state`` is taken from the replica's saved snapshot
+        (`Replica.advance` pins this), not stdlib
+        ``random.getstate()`` — the latter is the *caller*'s state at
+        snapshot time, not the replica's.
+
+        Returns:
+            Dict with key ``"sites_by_species"`` carrying a deep copy
+            of `ConfigurationManager._sites_by_species` (the
+            path-dependent per-sublattice species → site-list cache
+            consulted by canonical trial-step proposals). The
+            orchestrator-side checkpoint code embeds this alongside
+            the container.
+        """
+        self._ensemble._data_container._update_last_state(
+            last_step=self._ensemble.step,
+            occupations=self._ensemble.configuration.occupations.tolist(),
+            accepted_trials=self._ensemble._accepted_trials,
+            random_state=self._rng_state,
+        )
+        # Deep-copy to insulate the snapshot from later
+        # `update_occupations` calls that mutate the live cache.
+        # Cast numpy ints to Python ints so the JSON serialiser
+        # downstream can handle them.
+        sites_by_species: list[dict[int, list[int]]] = [
+            {
+                int(species): [int(s) for s in sites]
+                for species, sites in sublattice.items()
+            }
+            for sublattice in self._ensemble.configuration._sites_by_species
+        ]
+        return {"sites_by_species": sites_by_species}

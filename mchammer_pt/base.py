@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -22,6 +23,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from .callbacks import CycleCallback, ExchangeCallback
+from .checkpoint import CheckpointWriter
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
 from .parallel.backend import ObservablePool, ReplicaPool
@@ -127,6 +129,27 @@ class BaseParallelTempering(ABC):
         """
         self._cycle_callbacks.append(callback)
 
+    def attach_checkpoint_writer(
+        self,
+        path: Path | str,
+        *,
+        interval: int = 1000,
+    ) -> None:
+        """Attach a periodic checkpoint writer to this orchestrator.
+
+        Convenience wrapper around `CheckpointWriter` that binds the
+        orchestrator at attach time. Equivalent to::
+
+            from mchammer_pt import CheckpointWriter
+            pt.attach_cycle_callback(CheckpointWriter(path, interval=interval, pt=pt))
+
+        See `CheckpointWriter` for output shape and atomicity
+        semantics.
+        """
+        self.attach_cycle_callback(
+            CheckpointWriter(path, interval=interval, pt=self)
+        )
+
     def attach_observer(
         self,
         observer: BaseObserver,
@@ -162,19 +185,21 @@ class BaseParallelTempering(ABC):
         """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
-        try:
-            history.energies_per_cycle[0] = self._pool.current_energies()
-            history.replica_labels_per_cycle[0] = self._replica_labels
-            for c in range(n_cycles):
-                self._pool.advance_all(self._block_size)
-                for pair in pair_set_for_cycle(n_replicas, c):
-                    self._try_exchange(int(pair), int(pair) + 1, c, history)
-                history.energies_per_cycle[c + 1] = self._pool.current_energies()
-                history.replica_labels_per_cycle[c + 1] = self._replica_labels
-                for cb in self._cycle_callbacks:
-                    cb.on_cycle_end(c, n_cycles, history)
-        finally:
-            self._history = history
+        # Publish the in-progress history on `self._history` before the loop
+        # so cycle callbacks (e.g. `CheckpointWriter`) can read live
+        # orchestrator state via `self`, and so an exception inside the loop
+        # leaves `self.history` pointing at the partially filled history.
+        self._history = history
+        history.energies_per_cycle[0] = self._pool.current_energies()
+        history.replica_labels_per_cycle[0] = self._replica_labels
+        for c in range(n_cycles):
+            self._pool.advance_all(self._block_size)
+            for pair in pair_set_for_cycle(n_replicas, c):
+                self._try_exchange(int(pair), int(pair) + 1, c, history)
+            history.energies_per_cycle[c + 1] = self._pool.current_energies()
+            history.replica_labels_per_cycle[c + 1] = self._replica_labels
+            for cb in self._cycle_callbacks:
+                cb.on_cycle_end(c, n_cycles, history)
         return history
 
     # --- abstract hook ----

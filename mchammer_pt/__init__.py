@@ -9,6 +9,7 @@ from .callbacks import (
     SwapRateTracker,
 )
 from .canonical import CanonicalParallelTempering
+from .checkpoint import CheckpointWriter
 from .diagnostics import (
     energy_autocorrelation_time,
     round_trip_counts,
@@ -20,11 +21,12 @@ from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
 from .replica import Replica
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "BaseParallelTempering",
     "CanonicalParallelTempering",
+    "CheckpointWriter",
     "CycleCallback",
     "ExchangeCallback",
     "ExchangeHistory",

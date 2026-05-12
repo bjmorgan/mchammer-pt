@@ -192,5 +192,8 @@ class SerialPool:
     def data_containers(self) -> list[BaseDataContainer]:
         return [r.data_container() for r in self._replicas]
 
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        return [r.snapshot_for_checkpoint() for r in self._replicas]
+
     def shutdown(self) -> None:
         return None

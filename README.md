@@ -45,6 +45,12 @@ paths to the colder chains.
 - `CycleCallback` protocol for per-cycle hooks, with `ProgressPrinter`
   built-in for periodic stderr progress lines on long runs (cycle,
   percent, elapsed, ETA, swap-acceptance rates).
+- `CheckpointWriter` cycle callback and
+  `CanonicalParallelTempering.resume(...)` for crash-safe long runs
+  and bit-identical continuation across `pt.run()` calls (after
+  `ExchangeHistory.concatenate`). Same payload also written by
+  `pt.save_checkpoint(path)` and via the existing
+  `data_container_file=` constructor kwarg.
 - `mchammer_pt.testing.assert_boltzmann_sampling` — public utility for
   pinning the empirical stationary distribution of a custom
   `CanonicalEnsemble` subclass against an analytic Boltzmann fixture.
@@ -155,6 +161,8 @@ the subclass in a `.py` module file rather than a Jupyter cell. See
   `CanonicalEnsemble` subclass.
 - `examples/06_progress_monitoring.py` — live progress on stderr for
   long runs via `ProgressPrinter`.
+- `examples/07_resume.py` — checkpoint and resume a PT run, with
+  bit-identical continuation.
 
 ## License
 
