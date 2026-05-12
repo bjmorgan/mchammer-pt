@@ -24,6 +24,9 @@ from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.calculators import (  # type: ignore[import-untyped]
     ClusterExpansionCalculator,
 )
+from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+    WangLandauDataContainer,
+)
 from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped]
 from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
     OneOverTWangLandauEnsemble,
@@ -210,3 +213,120 @@ class WangLandauReplica:
     def converged(self) -> bool:
         """True once the underlying WL ensemble has flagged convergence."""
         return bool(self._ensemble.converged or False)
+
+    def data_container(self) -> WangLandauDataContainer:
+        """The replica's live `WangLandauDataContainer`."""
+        return self._ensemble.data_container
+
+    def attach_mchammer_observer(self, observer) -> None:
+        """Attach an mchammer observer; fires inside `advance(...)`."""
+        self._ensemble.attach_observer(observer)
+
+    @property
+    def cluster_expansion_path(self) -> str | None:
+        return self._cluster_expansion_path
+
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Refresh `_last_state` on the live container and return extras.
+
+        Populates the fields icet's WL `_restart_ensemble` reads on resume
+        (`last_step`, `occupations`, `accepted_trials`, `random_state`,
+        `fill_factor`, `fill_factor_history`, `entropy_history`,
+        `histogram`, `entropy`), plus the 1/t-schedule fields when the
+        ensemble is a `OneOverTWangLandauEnsemble`. Returns the
+        `sites_by_species` extras the orchestrator-side checkpoint code
+        embeds alongside the container.
+        """
+        from collections import OrderedDict
+
+        e = self._ensemble
+        e._data_container._update_last_state(
+            last_step=e.step,
+            occupations=e.configuration.occupations.tolist(),
+            accepted_trials=e._accepted_trials,
+            random_state=self._rng_state,
+            fill_factor=e._fill_factor,
+            fill_factor_history=e._fill_factor_history,
+            entropy_history=e._entropy_history,
+            histogram=OrderedDict(sorted(e._histogram.items())),
+            entropy=OrderedDict(sorted(e._entropy.items())),
+        )
+        # The 1/t schedule fields live directly on `_last_state`
+        # rather than via `_update_last_state`, mirroring the inline
+        # writes performed by
+        # `OneOverTWangLandauEnsemble.write_data_container`.
+        if isinstance(e, OneOverTWangLandauEnsemble):
+            e._data_container._last_state[
+                "in_one_over_t_phase"
+            ] = e._in_one_over_t_phase
+            e._data_container._last_state[
+                "window_entry_step"
+            ] = e._window_entry_step
+            e._data_container._last_state["switch_mode"] = e._switch_mode
+        sites_by_species: list[dict[int, list[int]]] = [
+            {
+                int(species): [int(s) for s in sites]
+                for species, sites in sublattice.items()
+            }
+            for sublattice in e.configuration._sites_by_species
+        ]
+        return {"sites_by_species": sites_by_species}
+
+    def restore_state(
+        self,
+        container: WangLandauDataContainer,
+        *,
+        sites_by_species: list[dict[int, list[int]]] | None = None,
+    ) -> None:
+        """Mutate this replica to match a saved checkpoint."""
+        self._ensemble._data_container = container
+        caller_state = random.getstate()
+        random.setstate(self._rng_state)
+        try:
+            self._ensemble._restart_ensemble()
+            self._rng_state = random.getstate()
+        finally:
+            random.setstate(caller_state)
+        # After `_restart_ensemble`, configuration occupations match
+        # the saved state; refresh the WL-cached potential and window
+        # flag the same way `set_occupations` does.
+        e = self._ensemble
+        e._potential = float(
+            e.calculator.calculate_total(occupations=e.configuration.occupations)
+        )
+        e._reached_energy_window = e._inside_energy_window(
+            e._get_bin_index(e._potential)
+        )
+        if sites_by_species is not None:
+            self._ensemble.configuration._sites_by_species = sites_by_species
+
+    @classmethod
+    def restart_from(
+        cls,
+        container: WangLandauDataContainer,
+        *,
+        cluster_expansion: ClusterExpansion,
+        atoms: Atoms,
+        energy_spacing: float,
+        energy_limit_left: float | None,
+        energy_limit_right: float | None,
+        random_seed: int,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+        cluster_expansion_path: str | os.PathLike[str] | None = None,
+        sites_by_species: list[dict[int, list[int]]] | None = None,
+    ) -> "WangLandauReplica":
+        """Construct a replica whose ensemble has been restored from `container`."""
+        replica = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            energy_spacing=energy_spacing,
+            energy_limit_left=energy_limit_left,
+            energy_limit_right=energy_limit_right,
+            random_seed=random_seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=cluster_expansion_path,
+        )
+        replica.restore_state(container, sites_by_species=sites_by_species)
+        return replica

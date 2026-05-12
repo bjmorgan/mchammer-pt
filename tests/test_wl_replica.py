@@ -136,3 +136,44 @@ def test_wl_replica_advance_is_rng_isolated():
     np.testing.assert_array_equal(
         a.current_occupations(), b.current_occupations()
     )
+
+
+def test_wl_replica_snapshot_and_restore_round_trip(tmp_path):
+    """Snapshot, write the container, restore into a fresh replica; state matches."""
+    from mchammer_pt.wl_replica import WangLandauReplica
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    from mchammer.calculators import ClusterExpansionCalculator
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+
+    replica = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+        random_seed=7,
+    )
+    replica.advance(50)
+    extras = replica.snapshot_for_checkpoint()
+    assert "sites_by_species" in extras
+
+    dc_path = tmp_path / "wl.dc"
+    replica.data_container().write(str(dc_path))
+
+    from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+        WangLandauDataContainer,
+    )
+    container = WangLandauDataContainer.read(str(dc_path))
+
+    restored = WangLandauReplica.restart_from(
+        container,
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+        random_seed=7,
+        sites_by_species=extras["sites_by_species"],
+    )
+    np.testing.assert_array_equal(
+        restored.current_occupations(), replica.current_occupations()
+    )
+    assert restored.current_energy() == pytest.approx(replica.current_energy())
