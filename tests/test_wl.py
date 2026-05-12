@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
@@ -136,3 +137,48 @@ def test_wl_pt_run_stops_on_all_converged():
     pt.run(n_cycles=10)
     # Run should bail out after the first cycle's converged_flags check.
     assert pt.cycles_completed == 1
+
+
+def test_wl_pt_checkpoint_round_trip_is_bit_identical(tmp_path):
+    """Checkpoint mid-run, resume, run M more cycles — bit-identical to a single run."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    def fresh():
+        return WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=1234,
+        )
+
+    # Reference: 4 cycles in one go.
+    pt_ref = fresh()
+    pt_ref.run(n_cycles=4)
+
+    # Split: 2 + checkpoint + resume + 2.
+    pt_a = fresh()
+    pt_a.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt_a.save_checkpoint(cp)
+    pt_b = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    pt_b.run(n_cycles=2)
+
+    # The bit-identical contract: configurations and energies after
+    # the split match the reference at the matching cycle.
+    np.testing.assert_array_equal(
+        pt_ref.pool.current_occupations(0),
+        pt_b.pool.current_occupations(0),
+    )
+    np.testing.assert_array_equal(
+        pt_ref.pool.current_occupations(1),
+        pt_b.pool.current_occupations(1),
+    )
+    np.testing.assert_allclose(
+        pt_ref.pool.current_energies(),
+        pt_b.pool.current_energies(),
+    )

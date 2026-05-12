@@ -44,6 +44,39 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
     }
 )
 
+# `_last_state` fields whose dict keys are integer bin indices.
+# JSON round-trips coerce these to strings; the conversion has to be
+# reversed before mchammer's `_restart_ensemble` reads them. Matches
+# the set `WangLandauDataContainer.read` converts upstream.
+_WL_INT_KEY_FIELDS: frozenset[str] = frozenset(
+    {"histogram", "entropy", "fill_factor_history", "entropy_history"}
+)
+
+
+def _coerce_wl_last_state_keys_to_int(last_state: dict[str, Any]) -> None:
+    """Convert string dict keys back to ints in WL `_last_state` fields.
+
+    Mirrors the conversion `WangLandauDataContainer.read` applies
+    inline; used on the WL resume path when the container was
+    deserialised via `BaseDataContainer.read` (which does not know
+    about WL).
+    """
+    for tag in _WL_INT_KEY_FIELDS:
+        if tag not in last_state:
+            continue
+        value = last_state[tag]
+        if not value:
+            continue
+        first_key = next(iter(value))
+        if isinstance(first_key, int):
+            continue  # already int-keyed
+        converted: dict[int, Any] = {}
+        for key, val in value.items():
+            if isinstance(val, dict):
+                val = {int(k): v for k, v in val.items()}
+            converted[int(key)] = val
+        last_state[tag] = converted
+
 
 class WangLandauReplica:
     """One Wang-Landau ensemble at one energy window, wrapped for REWL use.
@@ -280,6 +313,15 @@ class WangLandauReplica:
     ) -> None:
         """Mutate this replica to match a saved checkpoint."""
         self._ensemble._data_container = container
+        # `BaseDataContainer.read` deserialises `_last_state` via JSON,
+        # which coerces integer dict keys to strings.
+        # `WangLandauDataContainer.read` overrides this and converts
+        # them back. Containers reaching us through
+        # `mchammer_pt.history.read_hdf5` are read as plain
+        # `BaseDataContainer`s (history.py does not own WL knowledge),
+        # so the conversion has to happen here for `_restart_ensemble`
+        # to find its integer-keyed bin lookups.
+        _coerce_wl_last_state_keys_to_int(container._last_state)
         caller_state = random.getstate()
         random.setstate(self._rng_state)
         try:

@@ -238,3 +238,104 @@ class WangLandauParallelTempering(BaseParallelTempering):
         if self._data_container_file is not None:
             _write_checkpoint(self, Path(self._data_container_file))
         return history
+
+    def save_checkpoint(self, path: Path | str) -> None:
+        """Write a full checkpoint of this orchestrator atomically."""
+        _write_checkpoint(self, path)
+
+    @classmethod
+    def resume(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Resume a previously-checkpointed REWL run.
+
+        Schema-3 only. CE identity, ensemble_cls FQN, and
+        ensemble_kwargs hash validate against the checkpoint;
+        mismatches raise. Bit-identical resume requires the original
+        `_sites_by_species` cache, which is persisted in the
+        checkpoint.
+        """
+        import json
+
+        from .checkpoint import (
+            _read_orchestrator_state,
+            _read_replica_extra,
+            _validate_kwargs_hash,
+        )
+        from .history import read_hdf5
+
+        _, containers, meta = read_hdf5(path)
+        schema_version = meta.get("schema_version")
+        if schema_version != "3":
+            raise ValueError(
+                f"{path}: unknown schema_version {schema_version!r}; "
+                f"this version of mchammer-pt understands '3' only."
+            )
+        expected_ce_identity = _compute_ce_identity(cluster_expansion)
+        if meta["ce_identity"] != expected_ce_identity:
+            raise ValueError(f"{path}: CE identity mismatch.")
+        expected_ensemble_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
+            raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
+        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
+
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        windows = _array_to_windows(np.asarray(meta["windows"]))
+        energy_spacing = float(meta["energy_spacing"])
+        block_size = int(meta["block_size"])
+        random_seed = int(meta["random_seed"])
+
+        atoms_list = [container.structure.copy() for container in containers]
+        seed_sequence = np.random.SeedSequence(random_seed)
+        child_seeds = seed_sequence.spawn(len(windows) + 1)
+        replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
+
+        replicas = [
+            WangLandauReplica.restart_from(
+                container,
+                cluster_expansion=cluster_expansion,
+                atoms=atoms,
+                energy_spacing=energy_spacing,
+                energy_limit_left=lo,
+                energy_limit_right=hi,
+                random_seed=seed,
+                ensemble_cls=ensemble_cls,
+                ensemble_kwargs=ensemble_kwargs,
+                sites_by_species=extra["sites_by_species"],
+            )
+            for container, atoms, (lo, hi), seed, extra in zip(
+                containers,
+                atoms_list,
+                windows,
+                replica_seeds,
+                replica_extras,
+                strict=True,
+            )
+        ]
+        pool = SerialWangLandauPool(replicas, energy_spacing=energy_spacing)
+        pt = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms_list,
+            windows=windows,
+            energy_spacing=energy_spacing,
+            block_size=block_size,
+            random_seed=random_seed,
+            pool=pool,
+        )
+        pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
+        pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
+        pt._replica_labels = np.asarray(
+            orchestrator_state["replica_labels"], dtype=np.int64
+        )
+        rng_state_raw = orchestrator_state["rng_state"]
+        assert isinstance(rng_state_raw, str)
+        pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        return pt
