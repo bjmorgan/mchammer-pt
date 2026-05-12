@@ -212,7 +212,7 @@ class BaseParallelTempering(ABC):
         """Log of the exchange acceptance ratio for adjacent replicas i, j."""
         ...
 
-    def _checkpoint_meta(self) -> dict[str, "MetaValue"]:
+    def _checkpoint_meta(self) -> dict[str, MetaValue]:
         """Subclass-specific keys for the checkpoint meta dict.
 
         Default: empty dict (subclass contributes nothing beyond the

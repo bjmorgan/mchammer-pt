@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
 def _make_serial_wl_pool(n_replicas: int = 2):
     from mchammer.calculators import ClusterExpansionCalculator
+
     from mchammer_pt.parallel.serial import SerialWangLandauPool
     from mchammer_pt.wl_replica import WangLandauReplica
 

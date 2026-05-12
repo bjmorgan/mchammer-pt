@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable, Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
@@ -17,6 +17,11 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
 from ._imports import _resolve_replicas
+
+if TYPE_CHECKING:
+    from mchammer.data_containers.wang_landau_data_container import (
+        WangLandauDataContainer,
+    )
 
 
 class SerialPool:
@@ -277,7 +282,7 @@ class SerialWangLandauPool:
     def converged_flags(self) -> np.ndarray:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
-    def data_containers(self) -> list:
+    def data_containers(self) -> list[WangLandauDataContainer]:
         return [r.data_container() for r in self._replicas]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
