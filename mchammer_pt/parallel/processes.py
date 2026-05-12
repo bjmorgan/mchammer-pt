@@ -782,7 +782,7 @@ class ProcessWangLandauPool:
             result[i] = bool(self._recv_or_raise(conn, "CONVERGED", i))
         return result
 
-    def data_containers(self) -> list:
+    def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
         for _, conn in self._workers:
             conn.send(("GET_DC",))
@@ -817,5 +817,10 @@ class ProcessWangLandauPool:
     def __enter__(self) -> ProcessWangLandauPool:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
         self.shutdown()

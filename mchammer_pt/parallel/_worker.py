@@ -184,10 +184,9 @@ def _wl_worker(
 ) -> None:
     """REWL worker entry point: build a WangLandauReplica, then serve commands.
 
-    Recognises the same control opcodes as the canonical worker
+    Recognises the data/state opcodes shared with the canonical worker
     (ADVANCE, ENERGY, GET_OCC, SET_OCC, GET_DC, SNAPSHOT_FOR_CHECKPOINT,
-    RESTORE_STATE, ATTACH_OBS, ATTACH_OBS_CLS, ATTACH_OBS_FACTORY,
-    GET_OBSERVERS, SHUTDOWN) plus two REWL-specific ones:
+    RESTORE_STATE, SHUTDOWN) plus two REWL-specific ones:
 
     - ``("LOG_G_AT", E_i, E_j)`` -> ``("OK", (g_at_E_i, g_at_E_j))``
       The worker evaluates its replica's `log_g` at the two energies
@@ -253,32 +252,6 @@ def _wl_worker(
                 conn.send(("OK", (replica.log_g(E_i), replica.log_g(E_j))))
             elif op == "CONVERGED":
                 conn.send(("OK", replica.converged))
-            elif op == "ATTACH_OBS":
-                observer = pickle.loads(cmd[1])
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_CLS":
-                _, cls, args, kwargs = cmd
-                replica.attach_mchammer_observer(cls(*args, **kwargs))
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_FACTORY":
-                factory = cmd[1]
-                observer = factory(replica)
-                if not isinstance(observer, BaseObserver):
-                    raise TypeError(
-                        f"attach_observer_factory: factory returned "
-                        f"{type(observer).__name__}, not a BaseObserver"
-                    )
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "GET_OBSERVERS":
-                observers = replica.ensemble.observers
-                try:
-                    pickle.dumps(observers)
-                except Exception:
-                    conn.send(("ERR_PICKLE", traceback.format_exc()))
-                else:
-                    conn.send(("OK", observers))
             elif op == "SHUTDOWN":
                 conn.send(("OK", None))
                 conn.close()
