@@ -51,12 +51,16 @@ from typing import Any
 
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.ensembles import (  # type: ignore[import-untyped]
+    CanonicalEnsemble,
+    WangLandauEnsemble,
+)
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
 
 from ..replica import Replica
+from ..wl_replica import WangLandauReplica
 
 
 def _worker(
@@ -150,6 +154,124 @@ def _worker(
                 # Pickling the live observer dict is safe because the
                 # worker is single-threaded and idle here; a future
                 # refactor adding background work would need to copy.
+                observers = replica.ensemble.observers
+                try:
+                    pickle.dumps(observers)
+                except Exception:
+                    conn.send(("ERR_PICKLE", traceback.format_exc()))
+                else:
+                    conn.send(("OK", observers))
+            elif op == "SHUTDOWN":
+                conn.send(("OK", None))
+                conn.close()
+                return
+            else:
+                conn.send(("ERR", f"unknown command: {op!r}"))
+        except Exception:
+            conn.send(("ERR", traceback.format_exc()))
+
+
+def _wl_worker(
+    conn: Connection,
+    ce_path: str,
+    atoms_dict: dict[str, Any],
+    energy_spacing: float,
+    energy_limit_left: float | None,
+    energy_limit_right: float | None,
+    seed: int,
+    ensemble_cls: type[WangLandauEnsemble],
+    ensemble_kwargs: dict[str, Any],
+) -> None:
+    """REWL worker entry point: build a WangLandauReplica, then serve commands.
+
+    Recognises the same control opcodes as the canonical worker
+    (ADVANCE, ENERGY, GET_OCC, SET_OCC, GET_DC, SNAPSHOT_FOR_CHECKPOINT,
+    RESTORE_STATE, ATTACH_OBS, ATTACH_OBS_CLS, ATTACH_OBS_FACTORY,
+    GET_OBSERVERS, SHUTDOWN) plus two REWL-specific ones:
+
+    - ``("LOG_G_AT", E_i, E_j)`` -> ``("OK", (g_at_E_i, g_at_E_j))``
+      The worker evaluates its replica's `log_g` at the two energies
+      in one round trip.
+    - ``("CONVERGED",)`` -> ``("OK", bool)`` the replica's `converged`
+      flag.
+    """
+    try:
+        atoms = Atoms(
+            numbers=atoms_dict["numbers"],
+            positions=atoms_dict["positions"],
+            cell=atoms_dict["cell"],
+            pbc=atoms_dict["pbc"],
+        )
+        ce = ClusterExpansion.read(ce_path)
+        replica = WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=energy_spacing,
+            energy_limit_left=energy_limit_left,
+            energy_limit_right=energy_limit_right,
+            random_seed=seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=ce_path,
+        )
+    except BaseException:
+        conn.send(("ERR", traceback.format_exc()))
+        conn.close()
+        return
+
+    conn.send(("OK", None))
+
+    while True:
+        try:
+            cmd = conn.recv()
+        except EOFError:
+            return
+        op = cmd[0]
+        try:
+            if op == "ADVANCE":
+                replica.advance(cmd[1])
+                conn.send(("OK", None))
+            elif op == "ENERGY":
+                conn.send(("OK", replica.current_energy()))
+            elif op == "GET_OCC":
+                conn.send(("OK", replica.current_occupations()))
+            elif op == "SET_OCC":
+                replica.set_occupations(cmd[1])
+                conn.send(("OK", None))
+            elif op == "GET_DC":
+                conn.send(("OK", replica.data_container()))
+            elif op == "SNAPSHOT_FOR_CHECKPOINT":
+                conn.send(("OK", replica.snapshot_for_checkpoint()))
+            elif op == "RESTORE_STATE":
+                _, container, sites_by_species = cmd
+                replica.restore_state(
+                    container, sites_by_species=sites_by_species
+                )
+                conn.send(("OK", None))
+            elif op == "LOG_G_AT":
+                _, E_i, E_j = cmd
+                conn.send(("OK", (replica.log_g(E_i), replica.log_g(E_j))))
+            elif op == "CONVERGED":
+                conn.send(("OK", replica.converged))
+            elif op == "ATTACH_OBS":
+                observer = pickle.loads(cmd[1])
+                replica.attach_mchammer_observer(observer)
+                conn.send(("OK", None))
+            elif op == "ATTACH_OBS_CLS":
+                _, cls, args, kwargs = cmd
+                replica.attach_mchammer_observer(cls(*args, **kwargs))
+                conn.send(("OK", None))
+            elif op == "ATTACH_OBS_FACTORY":
+                factory = cmd[1]
+                observer = factory(replica)
+                if not isinstance(observer, BaseObserver):
+                    raise TypeError(
+                        f"attach_observer_factory: factory returned "
+                        f"{type(observer).__name__}, not a BaseObserver"
+                    )
+                replica.attach_mchammer_observer(observer)
+                conn.send(("OK", None))
+            elif op == "GET_OBSERVERS":
                 observers = replica.ensemble.observers
                 try:
                     pickle.dumps(observers)
