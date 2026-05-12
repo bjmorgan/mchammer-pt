@@ -187,3 +187,26 @@ class WangLandauReplica:
         e._reached_energy_window = e._inside_energy_window(
             e._get_bin_index(e._potential)
         )
+
+    def advance(self, n_steps: int) -> None:
+        """Run `n_steps` WL trial steps, isolating this replica's RNG stream.
+
+        Mirrors the save/restore discipline used by
+        `mchammer_pt.Replica.advance`. icet's `BaseEnsemble.run` may
+        short-circuit early once the underlying WL ensemble has
+        converged (`_terminate_sampling`); the orchestrator handles
+        this case by stopping the global loop when all replicas
+        report `converged`. See `converged`.
+        """
+        previous_state = random.getstate()
+        random.setstate(self._rng_state)
+        try:
+            self._ensemble.run(int(n_steps))
+            self._rng_state = random.getstate()
+        finally:
+            random.setstate(previous_state)
+
+    @property
+    def converged(self) -> bool:
+        """True once the underlying WL ensemble has flagged convergence."""
+        return bool(self._ensemble.converged or False)

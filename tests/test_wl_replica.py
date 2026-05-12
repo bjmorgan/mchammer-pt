@@ -109,3 +109,30 @@ def test_wl_replica_set_occupations_refreshes_potential():
     assert replica.current_energy() == pytest.approx(expected)
     # _reached_energy_window should be True because expected is in window.
     assert replica.ensemble._reached_energy_window is True
+
+
+def test_wl_replica_advance_is_rng_isolated():
+    """Two replicas with the same seed advance to the same state when each runs alone."""
+    from mchammer_pt.wl_replica import WangLandauReplica
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    from mchammer.calculators import ClusterExpansionCalculator
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+
+    a = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+        random_seed=42,
+    )
+    b = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+        random_seed=42,
+    )
+    a.advance(100)
+    b.advance(100)
+    np.testing.assert_array_equal(
+        a.current_occupations(), b.current_occupations()
+    )
