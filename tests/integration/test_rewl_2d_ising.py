@@ -16,10 +16,18 @@ from icet import ClusterExpansion, ClusterSpace  # type: ignore[import-untyped]
 @pytest.mark.slow
 def test_rewl_recovers_analytic_2d_ising_dos():
     """4x4 2D Ising via REWL: stitched ln g(E) matches analytic within tolerance."""
+    pytest.xfail(
+        "REWL stitching helper and per-window starting configurations "
+        "not yet implemented. Once the stitching helper lands and a "
+        "configuration-generator gives each window an in-window starter, "
+        "delete this xfail and the body below becomes the real correctness "
+        "gate: stitched ln g(E) compared against the analytic 4x4 2D "
+        "Ising DOS."
+    )
+
+    # Sketch of the eventual correctness gate. Not currently reachable.
     from mchammer_pt.wl import WangLandauParallelTempering
 
-    # 4x4 single-layer FCC, antiferromagnetic-like single nearest-neighbour
-    # pair ECI to give a clean Ising-shaped energy landscape.
     primitive = Atoms(
         "Au", positions=[[0, 0, 0]], cell=[1, 1, 10], pbc=True
     )
@@ -32,7 +40,10 @@ def test_rewl_recovers_analytic_2d_ising_dos():
     for k in range(8):
         structure[k].symbol = "Ag"
 
-    # Energy range for 4x4 Ising is exactly [-32, 32] in units of J.
+    # NOTE: passing four copies of `structure` is wrong here — every
+    # replica's starting energy is 16, which lies outside three of the
+    # four windows. The eventual real test needs per-window starting
+    # configurations whose energies fall in their assigned windows.
     pt = WangLandauParallelTempering.from_bin_count(
         cluster_expansion=ce,
         atoms=[structure.copy() for _ in range(4)],
@@ -45,13 +56,3 @@ def test_rewl_recovers_analytic_2d_ising_dos():
         random_seed=42,
     )
     pt.run(n_cycles=500)
-
-    # Stitching the per-window entropies into a single g(E) curve and
-    # comparing against the analytic 4x4 2D Ising DOS is the
-    # correctness gate. v1 ships no stitching helper, so we xfail
-    # rather than silently pass. Until this xfail flips to a real
-    # comparison, REWL is not production-validated.
-    pytest.xfail(
-        "REWL stitching helper not yet implemented; once it lands, "
-        "compare stitched ln g(E) with analytic Ising DOS."
-    )
