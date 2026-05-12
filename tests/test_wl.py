@@ -270,3 +270,168 @@ def test_wl_pt_process_pool_round_trips():
     ) as pt:
         history = pt.run(n_cycles=3)
     assert history.energies_per_cycle.shape == (4, 2)
+
+
+def test_wl_pt_rejects_pool_plus_ensemble_kwargs():
+    """Cannot combine an explicit pool with non-default ensemble args."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+    e0 = _initial_energy()
+
+    replicas = [
+        WangLandauReplica(
+            cluster_expansion=make_wl_ce(), atoms=make_wl_atoms(),
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+            random_seed=i,
+        )
+        for i in range(2)
+    ]
+    pool = SerialWangLandauPool(replicas, energy_spacing=0.1)
+
+    with pytest.raises(ValueError, match="pool already owns"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(e0 - 100.0, e0 + 100.0), (e0 - 100.0, e0 + 100.0)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=0,
+            pool=pool,
+            ensemble_kwargs={"flatness_limit": 0.5},
+        )
+
+
+def test_wl_pt_resume_process_pool_round_trips(tmp_path):
+    """Checkpoint, resume into a process pool, continue running.
+
+    Worker scheduling non-determinism means we don't assert bit-identity
+    across the serial/process boundary; only that the resumed
+    orchestrator continues running correctly and the final
+    configurations are inside-window.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt_a = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=42,
+    )
+    pt_a.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt_a.save_checkpoint(cp)
+
+    pt_b = WangLandauParallelTempering.resume_process_pool(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    try:
+        history = pt_b.run(n_cycles=2)
+        assert history.energies_per_cycle.shape == (3, 2)
+    finally:
+        pt_b._pool.shutdown()
+
+
+def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
+    import h5py
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+    with h5py.File(cp, "r+") as f:
+        f["meta"].attrs["schema_version"] = "999"
+    with pytest.raises(ValueError, match="schema_version"):
+        WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
+
+
+def test_wl_pt_resume_rejects_mismatched_ce(tmp_path):
+    from icet import ClusterExpansion
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_cluster_space
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    # Build a different CE — bump one parameter so the identity hash differs.
+    cs = make_wl_cluster_space()
+    params = np.zeros(len(cs))
+    params[0] = 0.0
+    params[1] = 0.5
+    params[2] = 1.5  # was 1.0 in make_wl_ce — bumps the identity hash
+    different_ce = ClusterExpansion(cluster_space=cs, parameters=params)
+
+    with pytest.raises(ValueError, match="CE identity mismatch"):
+        WangLandauParallelTempering.resume(cp, cluster_expansion=different_ce)
+
+
+def test_wl_pt_resume_rejects_mismatched_ensemble_cls(tmp_path):
+    from mchammer.ensembles import WangLandauEnsemble
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+    # The original used OneOverTWangLandauEnsemble; resume with the plain
+    # WangLandauEnsemble should be rejected by the FQN mismatch.
+    with pytest.raises(ValueError, match="ensemble_cls FQN"):
+        WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(),
+            ensemble_cls=WangLandauEnsemble,
+        )
+
+
+def test_wl_pt_resume_rejects_mismatched_ensemble_kwargs_hash(tmp_path):
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+    # Original ensemble_kwargs=None hashes to the canonical empty-dict
+    # hash, which is a real (non-sentinel) hash. Resuming with a
+    # picklable but materially different kwargs should fail the hash
+    # comparison rather than fall through the sentinel skip.
+    with pytest.raises(ValueError, match="ensemble_kwargs hash mismatch"):
+        WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(),
+            ensemble_kwargs={"flatness_limit": 0.5},
+        )

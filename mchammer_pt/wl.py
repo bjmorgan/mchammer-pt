@@ -140,6 +140,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
+        if pool is not None and (
+            ensemble_cls is not OneOverTWangLandauEnsemble or ensemble_kwargs
+        ):
+            raise ValueError(
+                "ensemble_cls / ensemble_kwargs cannot be combined with an "
+                "explicit pool=; the pool already owns its replicas. Pass "
+                "these kwargs only when letting WangLandauParallelTempering "
+                "build the default SerialWangLandauPool, or use "
+                "process_pool(...) which forwards them."
+            )
         if pool is None:
             replicas = [
                 WangLandauReplica(
@@ -358,6 +368,90 @@ class WangLandauParallelTempering(BaseParallelTempering):
         rng_state_raw = orchestrator_state["rng_state"]
         assert isinstance(rng_state_raw, str)
         pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        return pt
+
+    @classmethod
+    def resume_process_pool(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
+
+        Same identity validation and per-replica restoration as `resume`,
+        but reconstructs the pool as a `ProcessWangLandauPool` instead of
+        a `SerialWangLandauPool`. Worker scheduling non-determinism means
+        the bit-identical contract does NOT hold across the serial-to-
+        process or process-to-serial boundary; resume into the same pool
+        kind that wrote the checkpoint for bit-identical continuation,
+        or accept that cross-pool resume gives a statistically-valid
+        continuation only.
+
+        See `resume` for argument and error semantics.
+        """
+        import json
+
+        from .checkpoint import (
+            _read_orchestrator_state,
+            _read_replica_extra,
+            _validate_kwargs_hash,
+        )
+        from .history import read_hdf5
+
+        _, containers, meta = read_hdf5(path)
+        schema_version = meta.get("schema_version")
+        if schema_version != "3":
+            raise ValueError(
+                f"{path}: unknown schema_version {schema_version!r}; "
+                f"this version of mchammer-pt understands '3' only."
+            )
+        expected_ce_identity = _compute_ce_identity(cluster_expansion)
+        if meta["ce_identity"] != expected_ce_identity:
+            raise ValueError(f"{path}: CE identity mismatch.")
+        expected_ensemble_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
+            raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
+        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume_process_pool")
+
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        windows = _array_to_windows(np.asarray(meta["windows"]))
+        energy_spacing = float(meta["energy_spacing"])
+        block_size = int(meta["block_size"])
+        random_seed = int(meta["random_seed"])
+
+        atoms_list = [container.structure.copy() for container in containers]
+
+        pt = cls.process_pool(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms_list,
+            windows=windows,
+            energy_spacing=energy_spacing,
+            block_size=block_size,
+            random_seed=random_seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+        )
+        try:
+            pt._pool.restore_replica_state(  # type: ignore[attr-defined]
+                containers, replica_extras
+            )
+            pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
+            pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
+            pt._replica_labels = np.asarray(
+                orchestrator_state["replica_labels"], dtype=np.int64
+            )
+            rng_state_raw = orchestrator_state["rng_state"]
+            assert isinstance(rng_state_raw, str)
+            pt._rng.bit_generator.state = json.loads(rng_state_raw)
+        except BaseException:
+            pt._pool.shutdown()
+            raise
         return pt
 
     @classmethod

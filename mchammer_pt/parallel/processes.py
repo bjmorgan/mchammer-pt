@@ -590,12 +590,11 @@ class ProcessPool:
 class ProcessWangLandauPool:
     """Persistent-worker REWL pool.
 
-    One OS process per replica. Implements `WangLandauPool` but NOT
-    `WangLandauObservablePool` — REWL observer support is deferred
-    in v1 (see the spec's "Deviations from the spec" section). If
-    you need observer attach for REWL, use the canonical
-    `ProcessPool` patterns as a template and add the equivalent
-    methods here.
+    One OS process per replica. Implements `WangLandauPool`. Observer
+    attach is deliberately not part of the v1 REWL surface (see the
+    spec's "Deviations from the spec" section); a follow-up that adds
+    WL observer support would introduce both the parent-side attach
+    methods here and the corresponding subprotocol on `_worker.py`.
 
     Args:
         ce_path: path to a CE file readable by `ClusterExpansion.read`.
@@ -799,6 +798,51 @@ class ProcessWangLandauPool:
             self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
             for i, (_, conn) in enumerate(self._workers)
         ]
+
+    def restore_replica_state(
+        self,
+        containers: list[BaseDataContainer],
+        replica_extras: list[dict[str, Any]],
+    ) -> None:
+        """Push saved per-replica state into each worker.
+
+        Sends each worker its corresponding `WangLandauDataContainer` and
+        the ``sites_by_species`` cache from ``replica_extras``; the worker
+        applies them via `WangLandauReplica.restore_state`. Used by
+        `WangLandauParallelTempering.resume_process_pool` to bring a
+        freshly-spawned process pool to the saved state.
+
+        Args:
+            containers: one container per worker, in slot order.
+                Length must equal `len(self)`.
+            replica_extras: one per-replica extras dict per worker.
+                Each must carry a ``"sites_by_species"`` key.
+
+        Raises:
+            RuntimeError: pool is shut down, or any worker reports an
+                error during restoration.
+            ValueError: lengths of ``containers`` and ``replica_extras``
+                do not match `len(self)`.
+        """
+        self._check_open()
+        if len(containers) != len(self):
+            raise ValueError(
+                f"restore_replica_state expects {len(self)} containers, "
+                f"got {len(containers)}"
+            )
+        if len(replica_extras) != len(self):
+            raise ValueError(
+                f"restore_replica_state expects {len(self)} extras dicts, "
+                f"got {len(replica_extras)}"
+            )
+        for (_, conn), container, extra in zip(
+            self._workers, containers, replica_extras, strict=True
+        ):
+            conn.send(
+                ("RESTORE_STATE", container, extra["sites_by_species"])
+            )
+        for i, (_, conn) in enumerate(self._workers):
+            self._recv_or_raise(conn, "RESTORE_STATE", i)
 
     def shutdown(self) -> None:
         for _, conn in self._workers:
