@@ -339,3 +339,63 @@ class WangLandauParallelTempering(BaseParallelTempering):
         assert isinstance(rng_state_raw, str)
         pt._rng.bit_generator.state = json.loads(rng_state_raw)
         return pt
+
+    @classmethod
+    def from_bin_count(
+        cls,
+        cluster_expansion: ClusterExpansion,
+        atoms: Sequence[Atoms],
+        n_bins: int,
+        energy_spacing: float,
+        minimum_energy: float,
+        maximum_energy: float,
+        block_size: int,
+        random_seed: int,
+        *,
+        overlap: int = 4,
+        bin_size_exponent: float = 1.0,
+        pool: WangLandauPool | None = None,
+        data_container_file: Path | str | None = None,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Construct an REWL run from a uniform bin specification.
+
+        Wraps icet's `get_bins_for_parallel_simulations` for the
+        common case of an even split. Power users construct
+        `windows` by hand.
+        """
+        from mchammer.ensembles.wang_landau_ensemble import (  # type: ignore[import-untyped]
+            get_bins_for_parallel_simulations,
+        )
+
+        raw_windows = get_bins_for_parallel_simulations(
+            n_bins=n_bins,
+            energy_spacing=energy_spacing,
+            minimum_energy=minimum_energy,
+            maximum_energy=maximum_energy,
+            overlap=overlap,
+            bin_size_exponent=bin_size_exponent,
+        )
+        # icet returns NaN for the unbounded edges of the first and
+        # last windows; the orchestrator's window convention uses
+        # `None` for unbounded edges. Translate.
+        windows: list[tuple[float | None, float | None]] = [
+            (
+                None if np.isnan(lo) else float(lo),
+                None if np.isnan(hi) else float(hi),
+            )
+            for lo, hi in raw_windows
+        ]
+        return cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            windows=windows,
+            energy_spacing=energy_spacing,
+            block_size=block_size,
+            random_seed=random_seed,
+            pool=pool,
+            data_container_file=data_container_file,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+        )

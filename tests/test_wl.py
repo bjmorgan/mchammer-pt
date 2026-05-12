@@ -182,3 +182,40 @@ def test_wl_pt_checkpoint_round_trip_is_bit_identical(tmp_path):
         pt_ref.pool.current_energies(),
         pt_b.pool.current_energies(),
     )
+
+
+def test_wl_pt_from_bin_count_builds_overlapping_windows():
+    from mchammer.ensembles.wang_landau_ensemble import (  # type: ignore[import-untyped]
+        get_bins_for_parallel_simulations,
+    )
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    # Two windows with wide enough overlap that the single starting
+    # configuration (energy e0) lies in both — keeps the test
+    # focused on the windows-translation contract without needing
+    # tuned per-window starting structures.
+    raw = get_bins_for_parallel_simulations(
+        n_bins=2, energy_spacing=0.1,
+        minimum_energy=e0 - 1.0, maximum_energy=e0 + 1.0, overlap=4,
+    )
+    # icet returns NaN for unbounded edges; the orchestrator uses
+    # None. Translate before comparison.
+    expected = [
+        (None if np.isnan(lo) else float(lo),
+         None if np.isnan(hi) else float(hi))
+        for lo, hi in raw
+    ]
+    pt = WangLandauParallelTempering.from_bin_count(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms()] * 2,
+        n_bins=2,
+        energy_spacing=0.1,
+        minimum_energy=e0 - 1.0,
+        maximum_energy=e0 + 1.0,
+        overlap=4,
+        block_size=10,
+        random_seed=0,
+    )
+    assert pt.windows == expected
