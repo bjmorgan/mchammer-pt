@@ -83,3 +83,29 @@ def test_wl_replica_log_g_returns_zero_for_unvisited_in_window_bin():
     )
     # No MC advance yet, so entropy dict is empty.
     assert replica.log_g(e0) == 0.0
+
+
+def test_wl_replica_set_occupations_refreshes_potential():
+    """After set_occupations, _potential and current_energy reflect the new state."""
+    from mchammer_pt.wl_replica import WangLandauReplica
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    from mchammer.calculators import ClusterExpansionCalculator
+    calc = ClusterExpansionCalculator(atoms, ce)
+    e0 = float(calc.calculate_total(occupations=atoms.numbers))
+
+    replica = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0, energy_limit_right=e0 + 100.0,
+        random_seed=0,
+    )
+
+    # Build a different occupation vector by swapping two atoms.
+    occ = atoms.numbers.copy()
+    occ[[0, -1]] = occ[[-1, 0]]
+    expected = float(calc.calculate_total(occupations=occ))
+
+    replica.set_occupations(occ)
+    assert replica.current_energy() == pytest.approx(expected)
+    # _reached_energy_window should be True because expected is in window.
+    assert replica.ensemble._reached_energy_window is True

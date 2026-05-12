@@ -166,3 +166,24 @@ class WangLandauReplica:
         if bin_idx is None or not e._inside_energy_window(bin_idx):
             return -float(np.inf)
         return float(e._entropy.get(bin_idx, 0.0))
+
+    def set_occupations(self, occupations: np.ndarray) -> None:
+        """Overwrite the replica's configuration and refresh WL-specific caches.
+
+        `WangLandauEnsemble` caches `_potential` as a running total
+        mutated in-place by the acceptance loop. `update_occupations`
+        alone does NOT refresh it, so this method also recomputes the
+        cached potential and the `_reached_energy_window` flag from
+        the new configuration. Without this refresh, the next trial
+        step would look up the wrong bin in `_entropy`, silently
+        corrupting the entropy estimate.
+        """
+        occ = np.asarray(occupations, dtype=int)
+        e = self._ensemble
+        e.update_occupations(sites=list(range(len(occ))), species=list(occ))
+        e._potential = float(
+            e.calculator.calculate_total(occupations=e.configuration.occupations)
+        )
+        e._reached_energy_window = e._inside_energy_window(
+            e._get_bin_index(e._potential)
+        )
