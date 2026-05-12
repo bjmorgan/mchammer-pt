@@ -201,10 +201,27 @@ class WangLandauParallelTempering(BaseParallelTempering):
         return self._energy_spacing
 
     def _log_prob_ratio(self, i: int, j: int) -> float:
+        """Log of the REWL exchange acceptance ratio.
+
+        Standard REWL detailed balance (Vogel/Li/Wuest 2013):
+
+            log A = ln g_i(E_i) - ln g_i(E_j) + ln g_j(E_j) - ln g_j(E_i)
+
+        When the swap would move a replica to an energy outside its own
+        window, the configuration is forbidden in that window's restricted
+        state space, so the swap is rejected with probability 1
+        (log_r = -inf). `WangLandauPool.log_g_pair` returns -inf for
+        out-of-window energies; we detect that and short-circuit rather
+        than letting the formula yield +inf (which `_try_exchange` would
+        treat as a diagnostic failure).
+        """
         E_i = self._pool.current_energy(i)
         E_j = self._pool.current_energy(j)
         g_i_Ei, g_i_Ej, g_j_Ei, g_j_Ej = self._pool.log_g_pair(i, j, E_i, E_j)
-        return float((g_i_Ej - g_i_Ei) + (g_j_Ei - g_j_Ej))
+        if g_i_Ej == -np.inf or g_j_Ei == -np.inf:
+            # Swap would land at least one replica outside its window.
+            return -float(np.inf)
+        return float((g_i_Ei - g_i_Ej) + (g_j_Ej - g_j_Ei))
 
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
         return {

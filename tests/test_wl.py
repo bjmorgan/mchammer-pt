@@ -96,9 +96,45 @@ def test_wl_pt_log_prob_ratio_uses_cross_bin_entropies(monkeypatch):
 
     monkeypatch.setattr(pool, "current_energy", fake_current_energy)
     log_r = pt._log_prob_ratio(0, 1)
-    # (g_i(E_j) - g_i(E_i)) + (g_j(E_i) - g_j(E_j))
-    # = (2 - 1) + (4 - 7) = 1 + (-3) = -2
-    assert log_r == pytest.approx(-2.0)
+    # log_r = (g_i(E_i) - g_i(E_j)) + (g_j(E_j) - g_j(E_i))
+    #       = (1 - 2) + (7 - 4)
+    #       = -1 + 3 = +2
+    # (Standard REWL detailed balance: ln A = ln g_i(E_i)/g_i(E_j) + ln g_j(E_j)/g_j(E_i))
+    assert log_r == pytest.approx(2.0)
+
+
+def test_wl_pt_log_prob_ratio_rejects_out_of_window_partner(monkeypatch):
+    """A swap that would move a replica outside its window returns -inf cleanly."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    # Use broad overlapping windows so the initial configurations
+    # validate at construction; then override `current_energy` below
+    # to simulate replica 1 reporting an energy that lies outside
+    # replica 0's effective coverage.
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(e0 - 100.0, e0 + 100.0), (e0 - 100.0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+    )
+    pool = pt.pool
+    e_i = pool.current_energy(0)
+    bin_i = pool.replicas[0].ensemble._get_bin_index(e_i)
+    pool.replicas[0].ensemble._entropy = {bin_i: 1.0}
+    pool.replicas[1].ensemble._entropy = {bin_i: 4.0}
+
+    # Force replica 1 to report a partner energy that lies outside
+    # replica 0's window: choose E_j beyond replica 0's right edge.
+    e_j_out = pool.replicas[0].energy_window[1] + 10.0
+
+    def fake_current_energy(idx):
+        return e_i if idx == 0 else e_j_out
+
+    monkeypatch.setattr(pool, "current_energy", fake_current_energy)
+    log_r = pt._log_prob_ratio(0, 1)
+    assert log_r == -float("inf")
 
 
 def test_wl_pt_run_returns_history_with_expected_shape():
