@@ -15,6 +15,7 @@ from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
 )
 
 from ..replica import Replica
+from ..wl_replica import WangLandauReplica
 from ._imports import _resolve_replicas
 
 
@@ -190,6 +191,93 @@ class SerialPool:
             ) from exc
 
     def data_containers(self) -> list[BaseDataContainer]:
+        return [r.data_container() for r in self._replicas]
+
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        return [r.snapshot_for_checkpoint() for r in self._replicas]
+
+    def shutdown(self) -> None:
+        return None
+
+
+class SerialWangLandauPool:
+    """In-process pool of `WangLandauReplica` instances.
+
+    Mirrors `SerialPool` for canonical replicas. Implements
+    `WangLandauPool`. Observer attachment is not supported in v1
+    (REWL observer usage is out of scope; see the spec deviation
+    note in `docs/superpowers/plans/2026-05-12-rewl-extension.md`).
+    """
+
+    def __init__(
+        self,
+        replicas: Sequence[WangLandauReplica],
+        *,
+        energy_spacing: float,
+    ) -> None:
+        self._replicas: list[WangLandauReplica] = list(replicas)
+        self._energy_spacing = float(energy_spacing)
+        for r in self._replicas:
+            if r.energy_spacing != self._energy_spacing:
+                raise ValueError(
+                    f"replica energy_spacing {r.energy_spacing} does not "
+                    f"match pool energy_spacing {self._energy_spacing}"
+                )
+
+    def __len__(self) -> int:
+        return len(self._replicas)
+
+    @property
+    def replicas(self) -> list[WangLandauReplica]:
+        return list(self._replicas)
+
+    @property
+    def windows(self) -> list[tuple[float | None, float | None]]:
+        return [r.energy_window for r in self._replicas]
+
+    @property
+    def energy_spacing(self) -> float:
+        return self._energy_spacing
+
+    def advance_all(self, n_steps: int) -> None:
+        for r in self._replicas:
+            r.advance(n_steps)
+
+    def current_energies(self) -> np.ndarray:
+        return np.array(
+            [r.current_energy() for r in self._replicas], dtype=np.float64
+        )
+
+    def current_energy(self, i: int) -> float:
+        return self._replicas[i].current_energy()
+
+    def current_occupations(self, i: int) -> np.ndarray:
+        return self._replicas[i].current_occupations()
+
+    def swap_configurations(self, i: int, j: int) -> None:
+        occ_i = self._replicas[i].current_occupations()
+        occ_j = self._replicas[j].current_occupations()
+        self._replicas[i].set_occupations(occ_j)
+        self._replicas[j].set_occupations(occ_i)
+
+    def log_g(self, i: int, energy: float) -> float:
+        return self._replicas[i].log_g(energy)
+
+    def log_g_pair(
+        self, i: int, j: int, E_i: float, E_j: float,
+    ) -> tuple[float, float, float, float]:
+        r_i, r_j = self._replicas[i], self._replicas[j]
+        return (
+            r_i.log_g(E_i),
+            r_i.log_g(E_j),
+            r_j.log_g(E_i),
+            r_j.log_g(E_j),
+        )
+
+    def converged_flags(self) -> np.ndarray:
+        return np.array([r.converged for r in self._replicas], dtype=bool)
+
+    def data_containers(self) -> list:
         return [r.data_container() for r in self._replicas]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
