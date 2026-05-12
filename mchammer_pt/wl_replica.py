@@ -154,3 +154,15 @@ class WangLandauReplica:
 
     def current_occupations(self) -> np.ndarray:
         return self._ensemble.configuration.occupations.copy()
+
+    def log_g(self, energy: float) -> float:
+        """Return ln g at the given energy, or -inf if outside the window.
+
+        Reads the live `_entropy` dict on the WL ensemble. Unvisited
+        in-window bins return 0.0 (icet's default for missing keys).
+        """
+        e = self._ensemble
+        bin_idx = e._get_bin_index(energy)
+        if bin_idx is None or not e._inside_energy_window(bin_idx):
+            return -float(np.inf)
+        return float(e._entropy.get(bin_idx, 0.0))

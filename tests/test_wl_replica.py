@@ -49,3 +49,37 @@ def test_wl_replica_rejects_out_of_window_initial_energy():
             energy_limit_right=e0 + 2.0,
             random_seed=0,
         )
+
+
+def test_wl_replica_log_g_returns_minus_inf_out_of_window():
+    """log_g at an out-of-window energy returns -inf."""
+    from mchammer_pt.wl_replica import WangLandauReplica
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    from mchammer.calculators import ClusterExpansionCalculator
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+    replica = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 1.0, energy_limit_right=e0 + 1.0,
+        random_seed=0,
+    )
+    assert replica.log_g(e0 + 1000.0) == -np.inf
+    assert replica.log_g(e0 - 1000.0) == -np.inf
+
+
+def test_wl_replica_log_g_returns_zero_for_unvisited_in_window_bin():
+    """log_g for an unvisited in-window bin is 0.0 (entropy defaults to 0)."""
+    from mchammer_pt.wl_replica import WangLandauReplica
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    from mchammer.calculators import ClusterExpansionCalculator
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+    replica = WangLandauReplica(
+        cluster_expansion=ce, atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 1.0, energy_limit_right=e0 + 1.0,
+        random_seed=0,
+    )
+    # No MC advance yet, so entropy dict is empty.
+    assert replica.log_g(e0) == 0.0
