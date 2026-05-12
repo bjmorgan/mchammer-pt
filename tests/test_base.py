@@ -288,8 +288,6 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
     future pool that implements only `ReplicaPool`. A small dummy
     pool that lacks the attach methods stands in for that case.
     """
-    from collections.abc import Sequence
-
     from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
         BaseDataContainer,
     )
@@ -309,10 +307,6 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
         def __len__(self) -> int:
             return 2
 
-        @property
-        def temperatures(self) -> Sequence[float]:
-            return [300.0, 400.0]
-
         def advance_all(self, n_steps: int) -> None:
             raise NotImplementedError
 
@@ -329,6 +323,9 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
             raise NotImplementedError
 
         def data_containers(self) -> list[BaseDataContainer]:
+            raise NotImplementedError
+
+        def snapshot_for_checkpoint(self) -> list[dict]:
             raise NotImplementedError
 
         def shutdown(self) -> None:

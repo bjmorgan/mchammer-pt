@@ -7,16 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Single-walker replica-exchange Wang-Landau (REWL) on top of
+  icet's ``OneOverTWangLandauEnsemble``. Each replica owns a fixed
+  energy window; adjacent windows attempt configuration swaps
+  between cycles using a within-window log-density-of-states ratio
+  for acceptance.
+- ``WangLandauParallelTempering`` orchestrator with
+  ``save_checkpoint``/``resume`` (serial pool) and
+  ``resume_process_pool``. ``run()`` stops early when every replica
+  reports converged. ``from_bin_count`` convenience constructor
+  wraps icet's ``get_bins_for_parallel_simulations`` for a uniform
+  window split.
+- ``WangLandauReplica`` wrapper handle. Validates initial energy is
+  in window at construction; ``set_occupations`` refreshes the
+  cached ``_potential`` and ``_reached_energy_window`` so swap-
+  delivered configurations are bookkept correctly.
+- ``WangLandauPool`` protocol plus ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool`` implementations. The process pool
+  spawns one OS process per replica with a new ``_wl_worker``
+  entry point and two REWL-specific opcodes (``LOG_G_AT``,
+  ``CONVERGED``) on top of the canonical-shared set.
+- A ``slow`` pytest marker and a placeholder 2D Ising integration
+  test (``tests/integration/test_rewl_2d_ising.py``) marking the
+  correctness gate for REWL. The test xfails up front pending a
+  stitching post-processor; once that lands the body becomes the
+  real validation against the analytic 2D Ising DOS.
+
 ### Changed
 
+- Lifted ``temperatures`` off the base ``ReplicaPool`` protocol
+  into a new ``CanonicalPool`` subprotocol. Existing
+  ``SerialPool``/``ProcessPool`` classes continue to satisfy
+  ``CanonicalPool`` (and therefore ``ObservablePool``) without
+  caller changes. ``CanonicalParallelTempering.__init__`` now
+  types its ``pool`` parameter as ``CanonicalPool | None``.
+- ``BaseParallelTempering._try_exchange`` now accepts a ``-inf``
+  log-probability ratio as a clean swap rejection (legal in REWL
+  when one replica's partner energy lies outside its window).
+  ``+inf`` and ``NaN`` continue to raise.
 - Bumped checkpoint schema to ``"3"``. Checkpoints written by
   v0.7.0 (schema ``"2"``) are not valid resume sources for this
   version; ``resume`` hard-errors with a clear message on the
   version mismatch. The schema change accompanies a refactor that
   moves ladder-specific meta keys (``temperatures`` for canonical
-  PT, ``windows`` + ``energy_spacing`` for the upcoming
-  Wang-Landau PT) behind a per-subclass ``_checkpoint_meta()``
-  hook on ``BaseParallelTempering``.
+  PT, ``windows`` + ``energy_spacing`` for Wang-Landau PT) behind
+  a per-subclass ``_checkpoint_meta()`` hook on
+  ``BaseParallelTempering``.
 
 ## [0.7.0] - 2026-05-08
 

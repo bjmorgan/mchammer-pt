@@ -17,6 +17,15 @@ paths to the colder chains.
 
 - `CanonicalParallelTempering` — canonical-ensemble PT with an
   arbitrary temperature ladder.
+- `WangLandauParallelTempering` — single-walker replica-exchange
+  Wang-Landau (REWL) on top of icet's `OneOverTWangLandauEnsemble`.
+  Each replica owns a fixed energy window; adjacent windows attempt
+  configuration swaps with a within-window density-of-states ratio
+  for acceptance. Serial and process-parallel backends as for the
+  canonical orchestrator; checkpoint/resume into either pool kind.
+  The 2D Ising correctness gate (`tests/integration/test_rewl_2d_ising.py`)
+  is xfailed pending a stitching post-processor — REWL is not yet
+  production-validated.
 - Serial and multiprocessing backends, swappable via a single
   constructor argument.
 - Custom Monte Carlo moves: pass any `mchammer.CanonicalEnsemble`
@@ -150,6 +159,41 @@ with CanonicalParallelTempering.process_pool(
 Spawn workers re-import the class by fully qualified name, so define
 the subclass in a `.py` module file rather than a Jupyter cell. See
 `examples/05_custom_ensemble.py` for a complete worked example.
+
+### Wang-Landau parallel tempering
+
+For Wang-Landau parallel tempering, build per-window starting
+configurations whose energies lie inside their assigned windows,
+then drive `WangLandauParallelTempering.from_bin_count` (or pass
+explicit `windows=` for non-uniform splits):
+
+```python
+from mchammer_pt import WangLandauParallelTempering
+
+# `per_window_atoms` is a list[Atoms], one per window, with each
+# entry's energy in the corresponding window. Generating these
+# is the user's responsibility — typically a short pilot MC run.
+pt = WangLandauParallelTempering.from_bin_count(
+    cluster_expansion=ce,
+    atoms=per_window_atoms,
+    n_bins=4,
+    energy_spacing=1.0,
+    minimum_energy=-32.0,
+    maximum_energy=32.0,
+    overlap=4,
+    block_size=len(per_window_atoms[0]) * 1000,
+    random_seed=0,
+)
+pt.run(n_cycles=500)
+```
+
+`pt.run(...)` exits early once every replica reports `converged`.
+`WangLandauParallelTempering.process_pool(...)` spawns one OS
+process per replica. `save_checkpoint(path)` / `resume(path, ...)`
+/ `resume_process_pool(path, ...)` mirror the canonical surface.
+REWL is not yet production-validated against the 2D Ising
+correctness gate; treat current output as exploratory until that
+gate flips.
 
 ## Examples
 
