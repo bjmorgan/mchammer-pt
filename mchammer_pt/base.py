@@ -219,15 +219,16 @@ class BaseParallelTempering(ABC):
         history: ExchangeHistory,
     ) -> None:
         log_r = self._log_prob_ratio(i, j)
-        if not np.isfinite(log_r):
+        if np.isnan(log_r) or log_r == np.inf:
             E_i = self._pool.current_energy(i)
             E_j = self._pool.current_energy(j)
             raise RuntimeError(
                 f"Non-finite log-probability ratio on cycle {cycle}, "
                 f"pair ({i}, {j}): log_r = {log_r}, "
                 f"E_i = {E_i}, E_j = {E_j}. "
-                f"Check for NaN/inf replica energies (diverged MC, "
-                f"bad cluster expansion, etc.)."
+                f"Check for NaN/+inf replica energies (diverged MC, "
+                f"bad cluster expansion, etc.). Negative-infinity ratios "
+                f"are legal (e.g. out-of-window swap in REWL)."
             )
         accepted = metropolis_accept(log_r, self._rng)
         pair_index = min(i, j)

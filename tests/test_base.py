@@ -403,3 +403,81 @@ def test_final_configurations_before_run(toy_ce, toy_atoms):
         np.testing.assert_array_equal(
             atoms.numbers, pool.current_occupations(i)
         )
+
+
+def test_try_exchange_accepts_minus_inf_log_ratio(toy_ce, toy_atoms):
+    """A -inf log-prob ratio rejects the swap cleanly, not raises."""
+    import numpy as np
+    from mchammer_pt.base import BaseParallelTempering
+    from mchammer_pt.parallel.serial import SerialPool
+    from mchammer_pt.replica import Replica
+
+    class _MinusInfPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, j):
+            return -np.inf
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _MinusInfPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+    history = pt.run(n_cycles=2)
+    assert history.swap_attempted.sum() > 0
+    assert history.swap_accepted.sum() == 0
+
+
+def test_try_exchange_still_rejects_plus_inf(toy_ce, toy_atoms):
+    """+inf log-ratio is still illegal."""
+    import numpy as np
+    import pytest
+    from mchammer_pt.base import BaseParallelTempering
+    from mchammer_pt.parallel.serial import SerialPool
+    from mchammer_pt.replica import Replica
+
+    class _PlusInfPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, j):
+            return np.inf
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _PlusInfPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+    with pytest.raises(RuntimeError, match="Non-finite"):
+        pt.run(n_cycles=1)
+
+
+def test_try_exchange_still_rejects_nan(toy_ce, toy_atoms):
+    """NaN log-ratio is still illegal."""
+    import numpy as np
+    import pytest
+    from mchammer_pt.base import BaseParallelTempering
+    from mchammer_pt.parallel.serial import SerialPool
+    from mchammer_pt.replica import Replica
+
+    class _NanPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, j):
+            return float("nan")
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _NanPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+    with pytest.raises(RuntimeError, match="Non-finite"):
+        pt.run(n_cycles=1)
