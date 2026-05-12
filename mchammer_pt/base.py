@@ -14,7 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from ase import Atoms
@@ -27,6 +27,9 @@ from .checkpoint import CheckpointWriter
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
 from .parallel.backend import ObservablePool, ReplicaPool
+
+if TYPE_CHECKING:
+    from .history import MetaValue
 
 
 class BaseParallelTempering(ABC):
@@ -208,6 +211,21 @@ class BaseParallelTempering(ABC):
     def _log_prob_ratio(self, i: int, j: int) -> float:
         """Log of the exchange acceptance ratio for adjacent replicas i, j."""
         ...
+
+    def _checkpoint_meta(self) -> dict[str, "MetaValue"]:
+        """Subclass-specific keys for the checkpoint meta dict.
+
+        Default: empty dict (subclass contributes nothing beyond the
+        shared keys). Canonical PT returns ``{"temperatures": ...}``;
+        Wang-Landau PT returns ``{"windows": ..., "energy_spacing": ...}``.
+        Shared keys (block_size, random_seed, identity hashes,
+        schema_version) live in `checkpoint._write_checkpoint`.
+
+        Not abstract because test helpers and minimal subclasses that
+        do not write checkpoints (e.g. the `_MinusInfPT` style stubs in
+        `tests/test_base.py`) should not be forced to override.
+        """
+        return {}
 
     # --- internals ----
 

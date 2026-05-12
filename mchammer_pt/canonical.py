@@ -267,6 +267,9 @@ class CanonicalParallelTempering(BaseParallelTempering):
         E_j = self._pool.current_energy(j)
         return float((self._beta[i] - self._beta[j]) * (E_i - E_j))
 
+    def _checkpoint_meta(self) -> dict[str, MetaValue]:
+        return {"temperatures": self._temperatures}
+
     def run(self, n_cycles: int) -> ExchangeHistory:
         """Run `n_cycles` PT cycles, optionally writing an HDF5 bundle.
 
