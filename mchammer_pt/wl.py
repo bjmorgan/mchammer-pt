@@ -8,6 +8,8 @@ log-density-of-states ratio for acceptance.
 
 from __future__ import annotations
 
+import tempfile
+import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,7 @@ from .checkpoint import (
 from .exchange import pair_set_for_cycle
 from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
+from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica
 
@@ -399,3 +402,55 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
         )
+
+    @classmethod
+    def process_pool(
+        cls,
+        cluster_expansion: ClusterExpansion,
+        atoms: Sequence[Atoms],
+        windows: Sequence[tuple[float | None, float | None]],
+        energy_spacing: float,
+        block_size: int,
+        random_seed: int,
+        data_container_file: Path | str | None = None,
+        *,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Construct a process-parallel REWL run in one call.
+
+        Owns CE-write to tempdir and worker spawn; the tempdir is
+        cleaned when the returned orchestrator is garbage-collected.
+        """
+        seed_sequence = np.random.SeedSequence(int(random_seed))
+        child_seeds = seed_sequence.spawn(len(windows) + 1)
+        replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
+
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            ce_path = Path(tmpdir.name) / "cluster_expansion.ce"
+            cluster_expansion.write(str(ce_path))
+            pool = ProcessWangLandauPool(
+                ce_path=ce_path,
+                initial_atoms=atoms,
+                windows=windows,
+                energy_spacing=energy_spacing,
+                seeds=replica_seeds,
+                ensemble_cls=ensemble_cls,
+                ensemble_kwargs=ensemble_kwargs,
+            )
+        except BaseException:
+            tmpdir.cleanup()
+            raise
+        pt = cls(
+            cluster_expansion=cluster_expansion,
+            atoms=atoms,
+            windows=windows,
+            energy_spacing=energy_spacing,
+            block_size=block_size,
+            random_seed=random_seed,
+            pool=pool,
+            data_container_file=data_container_file,
+        )
+        weakref.finalize(pt, tmpdir.cleanup)
+        return pt

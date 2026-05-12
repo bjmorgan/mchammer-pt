@@ -219,3 +219,18 @@ def test_wl_pt_from_bin_count_builds_overlapping_windows():
         random_seed=0,
     )
     assert pt.windows == expected
+
+
+def test_wl_pt_process_pool_round_trips():
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    with WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    ) as pt:
+        history = pt.run(n_cycles=3)
+    assert history.energies_per_cycle.shape == (4, 2)
