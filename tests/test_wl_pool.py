@@ -57,3 +57,38 @@ def test_serial_wl_pool_converged_flags_initial_false():
     flags = pool.converged_flags()
     assert flags.dtype == bool
     assert not flags.any()
+
+
+def _wl_pool_factory_kwargs(tmp_path):
+    """Common setup for ProcessWangLandauPool tests."""
+    from mchammer.calculators import ClusterExpansionCalculator
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    return ce_path, atoms, e0
+
+
+def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        e_i = pool.current_energy(0)
+        e_j = pool.current_energy(1)
+        result = pool.log_g_pair(0, 1, e_i, e_j)
+        assert len(result) == 4
+        # Unvisited bins in window default to 0.0.
+        assert all(x == 0.0 for x in result)
+        flags = pool.converged_flags()
+        assert flags.dtype == bool
+        assert not flags.any()

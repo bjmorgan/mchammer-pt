@@ -20,14 +20,20 @@ from ase import Atoms
 from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
     BaseDataContainer,
 )
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.ensembles import (  # type: ignore[import-untyped]
+    CanonicalEnsemble,
+    WangLandauEnsemble,
+)
+from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
+    OneOverTWangLandauEnsemble,
+)
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
 
 from ..replica import Replica
 from ._imports import _check_importable, _resolve_replicas
-from ._worker import _worker
+from ._worker import _wl_worker, _worker
 
 
 def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
@@ -578,4 +584,238 @@ class ProcessPool:
         exc: BaseException | None,
         tb: object,
     ) -> None:
+        self.shutdown()
+
+
+class ProcessWangLandauPool:
+    """Persistent-worker REWL pool.
+
+    One OS process per replica. Implements `WangLandauPool` but NOT
+    `WangLandauObservablePool` — REWL observer support is deferred
+    in v1 (see the spec's "Deviations from the spec" section). If
+    you need observer attach for REWL, use the canonical
+    `ProcessPool` patterns as a template and add the equivalent
+    methods here.
+
+    Args:
+        ce_path: path to a CE file readable by `ClusterExpansion.read`.
+        initial_atoms: one starting structure per window. Single-Atoms
+            broadcast is not supported (every window needs an initial
+            configuration whose energy lies in that window).
+        windows: per-replica energy windows.
+        energy_spacing: bin size shared across replicas.
+        seeds: one random seed per replica.
+        ensemble_cls: WL ensemble class. Spawned workers re-import by
+            FQN; interactive-`__main__` classes are not supported.
+        ensemble_kwargs: extra kwargs forwarded to ensemble construction.
+            Must be picklable for the spawn boundary.
+    """
+
+    def __init__(
+        self,
+        ce_path: Path | str,
+        initial_atoms: Sequence[Atoms],
+        windows: Sequence[tuple[float | None, float | None]],
+        energy_spacing: float,
+        seeds: Sequence[int],
+        *,
+        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> None:
+        _check_importable(ensemble_cls, kind="ensemble_cls")
+        windows_list = [tuple(w) for w in windows]
+        seeds_list = list(seeds)
+        atoms_list = list(initial_atoms)
+        if len(atoms_list) != len(windows_list):
+            raise ValueError(
+                f"initial_atoms has {len(atoms_list)} entries but "
+                f"windows has {len(windows_list)}"
+            )
+        if len(seeds_list) != len(windows_list):
+            raise ValueError("seeds and windows must be the same length")
+        self._windows: list[tuple[float | None, float | None]] = windows_list
+        self._energy_spacing = float(energy_spacing)
+        self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
+        atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
+        extra_kwargs: dict[str, Any] = (
+            dict(ensemble_kwargs) if ensemble_kwargs else {}
+        )
+        ctx = mp.get_context("spawn")
+        try:
+            for (lo, hi), seed, ad in zip(
+                windows_list, seeds_list, atoms_dicts, strict=True,
+            ):
+                parent_conn, child_conn = ctx.Pipe(duplex=True)
+                process = ctx.Process(
+                    target=_wl_worker,
+                    args=(
+                        child_conn,
+                        str(ce_path),
+                        ad,
+                        float(energy_spacing),
+                        lo,
+                        hi,
+                        int(seed),
+                        ensemble_cls,
+                        extra_kwargs,
+                    ),
+                    daemon=True,
+                )
+                process.start()
+                child_conn.close()
+                self._workers.append((process, parent_conn))
+            for _, conn in self._workers:
+                status, payload = conn.recv()
+                if status != "OK":
+                    raise RuntimeError(f"worker startup failed:\n{payload}")
+        except BaseException:
+            self.shutdown()
+            raise
+
+    def _check_open(self) -> None:
+        if not self._workers:
+            raise RuntimeError("pool is shut down")
+
+    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
+        """Receive a (status, payload) reply or raise a clear exception.
+
+        Mirrors `ProcessPool._recv_or_raise`; duplicated here for
+        clarity since `ProcessWangLandauPool` is self-contained.
+        Extract a shared helper if a third process pool lands.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly"
+            ) from exc
+        if status == "ERR_PICKLE":
+            raise TypeError(
+                f"reply from worker {op} (replica i={i}) could not be "
+                f"round-tripped through pickle: {payload}"
+            )
+        if status != "OK":
+            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
+        return payload
+
+    def __len__(self) -> int:
+        self._check_open()
+        return len(self._workers)
+
+    @property
+    def windows(self) -> list[tuple[float | None, float | None]]:
+        self._check_open()
+        return list(self._windows)
+
+    @property
+    def energy_spacing(self) -> float:
+        return self._energy_spacing
+
+    def advance_all(self, n_steps: int) -> None:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("ADVANCE", int(n_steps)))
+        for i, (_, conn) in enumerate(self._workers):
+            self._recv_or_raise(conn, "ADVANCE", i)
+
+    def current_energies(self) -> np.ndarray:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("ENERGY",))
+        result = np.empty(len(self._workers), dtype=np.float64)
+        for i, (_, conn) in enumerate(self._workers):
+            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
+        return result
+
+    def current_energy(self, i: int) -> float:
+        self._check_open()
+        _, conn = self._workers[i]
+        conn.send(("ENERGY",))
+        return float(self._recv_or_raise(conn, "ENERGY", i))
+
+    def current_occupations(self, i: int) -> np.ndarray:
+        self._check_open()
+        _, conn = self._workers[i]
+        conn.send(("GET_OCC",))
+        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
+
+    def swap_configurations(self, i: int, j: int) -> None:
+        self._check_open()
+        _, conn_i = self._workers[i]
+        _, conn_j = self._workers[j]
+        conn_i.send(("GET_OCC",))
+        conn_j.send(("GET_OCC",))
+        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
+        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
+        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
+        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        self._recv_or_raise(conn_i, "SET_OCC", i)
+        self._recv_or_raise(conn_j, "SET_OCC", j)
+
+    def log_g(self, i: int, energy: float) -> float:
+        self._check_open()
+        _, conn = self._workers[i]
+        conn.send(("LOG_G_AT", float(energy), float(energy)))
+        g_at_E, _ = self._recv_or_raise(conn, "LOG_G_AT", i)
+        return float(g_at_E)
+
+    def log_g_pair(
+        self, i: int, j: int, E_i: float, E_j: float,
+    ) -> tuple[float, float, float, float]:
+        self._check_open()
+        _, conn_i = self._workers[i]
+        _, conn_j = self._workers[j]
+        conn_i.send(("LOG_G_AT", float(E_i), float(E_j)))
+        conn_j.send(("LOG_G_AT", float(E_i), float(E_j)))
+        g_i_Ei, g_i_Ej = self._recv_or_raise(conn_i, "LOG_G_AT", i)
+        g_j_Ei, g_j_Ej = self._recv_or_raise(conn_j, "LOG_G_AT", j)
+        return (
+            float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
+        )
+
+    def converged_flags(self) -> np.ndarray:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("CONVERGED",))
+        result = np.empty(len(self._workers), dtype=bool)
+        for i, (_, conn) in enumerate(self._workers):
+            result[i] = bool(self._recv_or_raise(conn, "CONVERGED", i))
+        return result
+
+    def data_containers(self) -> list:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("GET_DC",))
+        return [
+            self._recv_or_raise(conn, "GET_DC", i)
+            for i, (_, conn) in enumerate(self._workers)
+        ]
+
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
+        return [
+            self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
+            for i, (_, conn) in enumerate(self._workers)
+        ]
+
+    def shutdown(self) -> None:
+        for _, conn in self._workers:
+            try:
+                conn.send(("SHUTDOWN",))
+                conn.recv()
+            except (EOFError, BrokenPipeError):
+                pass
+            conn.close()
+        for process, _ in self._workers:
+            process.join(timeout=5.0)
+            if process.is_alive():
+                process.terminate()
+        self._workers = []
+
+    def __enter__(self) -> ProcessWangLandauPool:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
         self.shutdown()
