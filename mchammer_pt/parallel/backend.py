@@ -35,9 +35,6 @@ class ReplicaPool(Protocol):
 
     def __len__(self) -> int: ...
 
-    @property
-    def temperatures(self) -> Sequence[float]: ...
-
     def advance_all(self, n_steps: int) -> None:
         """Advance every replica by ``n_steps`` MC trial steps."""
         ...
@@ -117,8 +114,23 @@ class ReplicaPool(Protocol):
 
 
 @runtime_checkable
-class ObservablePool(ReplicaPool, Protocol):
-    """A `ReplicaPool` that can have mchammer observers attached.
+class CanonicalPool(ReplicaPool, Protocol):
+    """A ReplicaPool that carries a temperature per replica.
+
+    Canonical-ensemble PT specialises on temperatures for the
+    Metropolis exchange ratio; this subprotocol pins that
+    expectation. Pools that drive non-canonical ensembles (e.g.
+    Wang-Landau) implement a different subprotocol with
+    ensemble-specific parameters instead.
+    """
+
+    @property
+    def temperatures(self) -> Sequence[float]: ...
+
+
+@runtime_checkable
+class ObservablePool(CanonicalPool, Protocol):
+    """A `CanonicalPool` that can have mchammer observers attached.
 
     Separate protocol because not every pool implementation can carry
     observer instances across its execution boundary. Pool implementations
