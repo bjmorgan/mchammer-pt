@@ -24,8 +24,10 @@ from .base import BaseParallelTempering
 from .checkpoint import (
     _compute_ce_identity,
     _compute_ensemble_kwargs_hash,
+    _write_checkpoint,
 )
-from .history import MetaValue
+from .exchange import pair_set_for_cycle
+from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica
@@ -206,3 +208,33 @@ class WangLandauParallelTempering(BaseParallelTempering):
             "windows": _windows_to_array(self._windows),
             "energy_spacing": float(self._energy_spacing),
         }
+
+    def run(self, n_cycles: int) -> ExchangeHistory:
+        """Advance until `n_cycles` reached or every replica converged.
+
+        Differs from `BaseParallelTempering.run` in only one place: at
+        the end of each cycle we query `pool.converged_flags()` and exit
+        early if every replica reports True. The returned history's
+        rows past the stopping cycle remain at their zero-initialised
+        values; `cycles_completed` records how far the run got.
+        """
+        n_replicas = len(self._pool)
+        history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
+        self._history = history
+        history.energies_per_cycle[0] = self._pool.current_energies()
+        history.replica_labels_per_cycle[0] = self._replica_labels
+        self.cycles_completed = 0
+        for c in range(n_cycles):
+            self._pool.advance_all(self._block_size)
+            for pair in pair_set_for_cycle(n_replicas, c):
+                self._try_exchange(int(pair), int(pair) + 1, c, history)
+            history.energies_per_cycle[c + 1] = self._pool.current_energies()
+            history.replica_labels_per_cycle[c + 1] = self._replica_labels
+            for cb in self._cycle_callbacks:
+                cb.on_cycle_end(c, n_cycles, history)
+            self.cycles_completed = c + 1
+            if self._pool.converged_flags().all():
+                break
+        if self._data_container_file is not None:
+            _write_checkpoint(self, Path(self._data_container_file))
+        return history

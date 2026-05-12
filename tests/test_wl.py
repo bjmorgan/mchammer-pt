@@ -98,3 +98,41 @@ def test_wl_pt_log_prob_ratio_uses_cross_bin_entropies(monkeypatch):
     # (g_i(E_j) - g_i(E_i)) + (g_j(E_i) - g_j(E_j))
     # = (2 - 1) + (4 - 7) = 1 + (-3) = -2
     assert log_r == pytest.approx(-2.0)
+
+
+def test_wl_pt_run_returns_history_with_expected_shape():
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+    history = pt.run(n_cycles=5)
+    assert history.energies_per_cycle.shape == (6, 2)
+    assert history.replica_labels_per_cycle.shape == (6, 2)
+    assert history.swap_attempted.shape == (1,)
+
+
+def test_wl_pt_run_stops_on_all_converged():
+    """If every replica reports converged, the loop terminates early."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=1,
+        random_seed=0,
+    )
+    # Force convergence after the first cycle by setting `_converged`
+    # on each underlying ensemble.
+    for r in pt.pool.replicas:
+        r.ensemble._converged = True
+    pt.run(n_cycles=10)
+    # Run should bail out after the first cycle's converged_flags check.
+    assert pt.cycles_completed == 1
