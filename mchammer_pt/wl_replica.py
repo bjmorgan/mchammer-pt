@@ -315,7 +315,7 @@ class WangLandauReplica:
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
-    ) -> "WangLandauReplica":
+    ) -> WangLandauReplica:
         """Construct a replica whose ensemble has been restored from `container`."""
         replica = cls(
             cluster_expansion=cluster_expansion,

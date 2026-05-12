@@ -112,7 +112,7 @@ def test_wl_replica_set_occupations_refreshes_potential():
 
 
 def test_wl_replica_advance_is_rng_isolated():
-    """Two replicas with the same seed advance to the same state when each runs alone."""
+    """Two replicas with the same seed advance identically when each runs alone."""
     from mchammer_pt.wl_replica import WangLandauReplica
     ce, atoms = make_wl_ce(), make_wl_atoms()
     from mchammer.calculators import ClusterExpansionCalculator
