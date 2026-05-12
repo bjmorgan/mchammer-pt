@@ -21,7 +21,7 @@ from .checkpoint import (
     _write_checkpoint,
 )
 from .history import ExchangeHistory, MetaValue
-from .parallel.backend import ReplicaPool
+from .parallel.backend import CanonicalPool
 from .parallel.processes import ProcessPool
 from .parallel.serial import SerialPool
 from .replica import Replica
@@ -91,7 +91,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         random_seed: master seed; each replica's MC RNG and the
             orchestrator's exchange-proposal RNG are deterministically
             spawned from it.
-        pool: optional `ReplicaPool` to use as the execution backend.
+        pool: optional `CanonicalPool` to use as the execution backend.
             If None (the default), a `SerialPool` is constructed from
             ``cluster_expansion``, ``atoms``, ``temperatures``, and the
             spawned per-replica seeds.
@@ -120,7 +120,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         temperatures: Sequence[float],
         block_size: int,
         random_seed: int,
-        pool: ReplicaPool | None = None,
+        pool: CanonicalPool | None = None,
         data_container_file: Path | str | None = None,
         *,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
