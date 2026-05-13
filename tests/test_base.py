@@ -342,7 +342,7 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
     pt = _AlwaysRejectPT(
         pool=pool, block_size=20, random_seed=0, template_atoms=toy_atoms,
     )
-    with pytest.raises(TypeError, match="ObservablePool"):
+    with pytest.raises(TypeError, match="observer attach"):
         pt.attach_observer(_DummyObs())
 
 
