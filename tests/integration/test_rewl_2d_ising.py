@@ -135,12 +135,15 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
 
     # Two overlapping windows covering the negative-half and
     # positive-half of the energy range with a generous overlap
-    # around zero. Using 2 windows keeps wall-time low; bump to 4
-    # if the recovered curve is too noisy.
+    # around zero. The physical energy range for the 4x4 AFM Ising
+    # is [-32, 32]; `None` edges leave the outer sides unbounded so
+    # icet's `WangLandauEnsemble` accepts any energy below the right
+    # edge (window 0) or above the left edge (window 1). Overlap
+    # [-12, 12] is 7 bins wide on the energy_spacing=4 grid.
     windows: list[tuple[float | None, float | None]] = [
-        (-64.0, 16.0),
-        (-16.0, 64.0),
-    ]  # overlap [-16, 16]
+        (None, 12.0),
+        (-12.0, None),
+    ]  # overlap [-12, 12]
 
     rng = np.random.default_rng(0)
     atoms_per_window = [
@@ -153,6 +156,13 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
     # by the time they converge. The 1/t variant declares convergence
     # on a step-count clock independent of coverage and is unsuitable
     # for a shape-comparison gate at this wall-time budget.
+    #
+    # `trial_move='flip'` (single-site composition-changing moves) is
+    # needed here: the exact DOS we compare against enumerates *all*
+    # 2^16 configurations across every composition, so the WL walkers
+    # must also explore across compositions. The default 'swap' move
+    # preserves composition and would lock each replica into the
+    # handful of energies reachable from its seed composition.
     pt = WangLandauParallelTempering(
         cluster_expansion=ce,
         atoms=atoms_per_window,
@@ -161,13 +171,17 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
         block_size=len(prototype) * 200,
         random_seed=42,
         ensemble_cls=WangLandauEnsemble,
-        ensemble_kwargs={"fill_factor_limit": 1e-3, "flatness_limit": 0.7},
+        ensemble_kwargs={
+            "fill_factor_limit": 1e-5,
+            "flatness_limit": 0.7,
+            "trial_move": "flip",
+        },
     )
     pt.run(n_cycles=5000)
     assert pt.cycles_in_segment < 5000, (
         f"failed to converge within 5000 cycles "
         f"(got {pt.cycles_in_segment}); raise the cap or relax "
-        f"fill_factor_limit"
+        f"fill_factor_limit (currently 1e-5)"
     )
 
     # Refresh each container's `_last_state` so the live container
@@ -209,18 +223,18 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
 
     # Tolerances chosen so a sign-error or stale-_potential bug
     # would fail loudly (those produce per-bin discrepancies of
-    # many ln-units); fill_factor_limit=1e-3 gives a converged-
-    # estimate noise of ~few * 1e-3 per bin, so the std-dev of
+    # many ln-units); fill_factor_limit=1e-5 gives a converged-
+    # estimate noise of ~few * 1e-5 per bin, so the std-dev of
     # the residual across the full range should be well under
-    # 0.5. The max-abs bound allows a single noisy bin to drift
-    # up to 1.5 ln-units.
-    assert std_dev < 0.5, (
+    # 0.3. The max-abs bound allows a single noisy bin to drift
+    # up to 1.0 ln-units.
+    assert std_dev < 0.3, (
         f"REWL-recovered DOS shape diverges from analytic 4x4 Ising "
         f"DOS: residual std = {std_dev:.3f} ln-units across "
         f"{len(shared_bins)} bins. residual_centred = "
         f"{residual_centred.tolist()}"
     )
-    assert max_dev < 1.5, (
+    assert max_dev < 1.0, (
         f"REWL-recovered DOS has a bin with large deviation from "
         f"analytic: max |residual| = {max_dev:.3f} ln-units. "
         f"residual_centred = {residual_centred.tolist()}"
