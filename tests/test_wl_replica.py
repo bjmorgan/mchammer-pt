@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pytest
 
@@ -223,7 +225,8 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     replica.data_container().write(str(dc_path))
     container = WangLandauDataContainer.read(str(dc_path))
 
-    # Confirm the 1/t-specific fields made it onto _last_state.
+    # Confirm schedule and 1/t-specific fields made it onto _last_state.
+    assert container._last_state["schedule"] == "1_over_t"
     assert "in_one_over_t_phase" in container._last_state
     assert "window_entry_step" in container._last_state
     assert "switch_mode" in container._last_state
@@ -248,3 +251,41 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
         == replica.ensemble._window_entry_step
     )
     assert restored.ensemble._switch_mode == replica.ensemble._switch_mode
+
+
+def test_wl_replica_restore_state_does_not_mutate_caller_container(tmp_path):
+    """restore_state deep-copies _last_state, so the caller's container
+    is unchanged and not aliased by the ensemble's internal state.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+    from mchammer.data_containers.base_data_container import (
+        BaseDataContainer,
+    )
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+
+    replica = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=42,
+    )
+    replica.advance(10)
+    replica.snapshot_for_checkpoint()
+    # Write and read back to get a separate container object,
+    # mirroring the real resume path through read_hdf5.
+    dc_path = tmp_path / "container.dc"
+    replica.data_container().write(str(dc_path))
+    container = BaseDataContainer.read(str(dc_path))
+
+    original_last_state = copy.deepcopy(container._last_state)
+    replica.restore_state(container)
+    # Caller's container must be value-equal and not aliased.
+    assert container._last_state == original_last_state
+    assert container._last_state is not replica._ensemble._data_container._last_state

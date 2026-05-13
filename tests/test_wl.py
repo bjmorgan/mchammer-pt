@@ -176,6 +176,34 @@ def test_wl_pt_run_stops_on_all_converged():
     assert pt.cycles_in_segment == 1
 
 
+def test_wl_pt_early_convergence_passes_effective_n_to_callbacks():
+    """Cycle callbacks receive effective_n = c + 1 on the convergence cycle."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=1,
+        random_seed=0,
+    )
+    for r in pt.pool.replicas:
+        r.ensemble._converged = True
+
+    received: list[tuple[int, int]] = []
+
+    class Recorder:
+        def on_cycle_end(self, cycle, n_cycles, history):
+            received.append((cycle, n_cycles))
+
+    pt.attach_cycle_callback(Recorder())
+    pt.run(n_cycles=10)
+    # Should converge after cycle 0; callback receives (0, 1) not (0, 10).
+    assert len(received) == 1
+    assert received[0] == (0, 1)
+
+
 def test_wl_pt_checkpoint_round_trip_is_bit_identical(tmp_path):
     """Checkpoint mid-run, resume, run M more cycles — bit-identical to a single run."""
     from mchammer_pt.wl import WangLandauParallelTempering

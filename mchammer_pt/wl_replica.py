@@ -9,6 +9,7 @@ orchestrator. To use the Belardinelli-Pereyra 1/t schedule, pass
 
 from __future__ import annotations
 
+import copy
 import os
 import random
 from collections.abc import Mapping
@@ -209,12 +210,8 @@ class WangLandauReplica:
     def log_g(self, energy: float) -> float:
         """Return ln g at the given energy, or -inf if outside the window.
 
-        Returns 0.0 (i.e. g = 1) for unvisited in-window bins. This is the
-        standard REWL convention: an unvisited bin is treated as singly-
-        degenerate, so a swap proposal that would target it incurs the
-        full WL acceptance bias. Returning -inf here would forbid the
-        swap until the bin is first visited by within-window MC, which
-        is the wrong physics for REWL exchange acceptance.
+        Returns 0.0 (i.e. g = 1) for unvisited in-window bins, treating
+        them as singly-degenerate for REWL exchange acceptance.
         """
         e = self._ensemble
         bin_idx = e._get_bin_index(energy)
@@ -292,7 +289,7 @@ class WangLandauReplica:
         (`last_step`, `occupations`, `accepted_trials`, `random_state`,
         `fill_factor`, `fill_factor_history`, `entropy_history`,
         `histogram`, `entropy`), plus the 1/t-schedule fields when the
-        ensemble subclass exposes them. Returns the
+        1/t schedule is selected. Returns the
         `sites_by_species` extras the orchestrator-side checkpoint code
         embeds alongside the container.
         """
@@ -314,8 +311,7 @@ class WangLandauReplica:
         # `_last_state` rather than via `_update_last_state`, mirroring
         # icet's `write_data_container`. `_restart_ensemble` validates
         # `schedule` on resume, so it must always be present.
-        if hasattr(e, "_schedule"):
-            e._data_container._last_state["schedule"] = e._schedule
+        e._data_container._last_state["schedule"] = e._schedule
         if hasattr(e, "_in_one_over_t_phase"):
             e._data_container._last_state[
                 "in_one_over_t_phase"
@@ -352,6 +348,13 @@ class WangLandauReplica:
         ensemble is preserved so WL-specific post-processing methods
         remain available after resume.
         """
+        # Deep-copy `_last_state` so that coercion and validation
+        # operate on our own dict rather than aliasing the caller's.
+        # Without the copy, `_coerce_wl_last_state_keys_to_int`
+        # would mutate the caller's container before validation runs,
+        # and post-restore mutations would leak back.
+        last_state = copy.deepcopy(container._last_state)
+
         # `BaseDataContainer.read` deserialises `_last_state` via JSON,
         # which coerces integer dict keys to strings.
         # `WangLandauDataContainer.read` overrides this and converts
@@ -360,12 +363,12 @@ class WangLandauReplica:
         # `BaseDataContainer`s (history.py does not own WL knowledge),
         # so the conversion has to happen here for `_restart_ensemble`
         # to find its integer-keyed bin lookups.
-        _coerce_wl_last_state_keys_to_int(container._last_state)
+        _coerce_wl_last_state_keys_to_int(last_state)
 
         # Validate the proposed configuration's energy before mutating
         # any ensemble state.
         proposed_occ = np.asarray(
-            container._last_state["occupations"], dtype=int
+            last_state["occupations"], dtype=int
         )
         proposed_potential = float(
             self._ensemble.calculator.calculate_total(occupations=proposed_occ)
@@ -383,7 +386,7 @@ class WangLandauReplica:
         # `BaseDataContainer` instances; assigning one to the ensemble
         # would lose the `WangLandauDataContainer` subclass and break
         # WL-specific post-processing.
-        self._ensemble._data_container._last_state = container._last_state
+        self._ensemble._data_container._last_state = last_state
         caller_state = random.getstate()
         random.setstate(self._rng_state)
         try:

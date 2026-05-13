@@ -45,6 +45,17 @@ class SerialPool:
         return list(self._replicas)
 
     @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully qualified name of the ensemble class used by replicas."""
+        cls = type(self._replicas[0]._ensemble)
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """Best-effort hash of ensemble kwargs. Sentinel for serial pools."""
+        return ""
+
+    @property
     def temperatures(self) -> list[float]:
         return [r.temperature for r in self._replicas]
 
@@ -65,7 +76,11 @@ class SerialPool:
         occ_i = self._replicas[i].current_occupations()
         occ_j = self._replicas[j].current_occupations()
         self._replicas[i].set_occupations(occ_j)
-        self._replicas[j].set_occupations(occ_i)
+        try:
+            self._replicas[j].set_occupations(occ_i)
+        except BaseException:
+            self._replicas[i].set_occupations(occ_i)
+            raise
 
     def attach_observer(
         self,
@@ -238,6 +253,17 @@ class SerialWangLandauPool:
         return list(self._replicas)
 
     @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully qualified name of the ensemble class used by replicas."""
+        cls = type(self._replicas[0]._ensemble)
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """Best-effort hash of ensemble kwargs. Sentinel for serial pools."""
+        return ""
+
+    @property
     def windows(self) -> list[tuple[float | None, float | None]]:
         return [r.energy_window for r in self._replicas]
 
@@ -264,7 +290,11 @@ class SerialWangLandauPool:
         occ_i = self._replicas[i].current_occupations()
         occ_j = self._replicas[j].current_occupations()
         self._replicas[i].set_occupations(occ_j)
-        self._replicas[j].set_occupations(occ_i)
+        try:
+            self._replicas[j].set_occupations(occ_i)
+        except BaseException:
+            self._replicas[i].set_occupations(occ_i)
+            raise
 
     def log_g(self, i: int, energy: float) -> float:
         return self._replicas[i].log_g(energy)

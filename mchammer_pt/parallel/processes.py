@@ -321,7 +321,6 @@ class ProcessPool:
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
-        # Interleaved send/recv to halve round-trip latency.
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
         conn_i.send(("GET_OCC",))
@@ -329,9 +328,14 @@ class ProcessPool:
         occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
         occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
         conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
         self._recv_or_raise(conn_i, "SET_OCC", i)
-        self._recv_or_raise(conn_j, "SET_OCC", j)
+        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        try:
+            self._recv_or_raise(conn_j, "SET_OCC", j)
+        except BaseException:
+            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+            self._recv_or_raise(conn_i, "SET_OCC", i)
+            raise
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
@@ -835,9 +839,14 @@ class ProcessWangLandauPool:
         occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
         occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
         conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
         self._recv_or_raise(conn_i, "SET_OCC", i)
-        self._recv_or_raise(conn_j, "SET_OCC", j)
+        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        try:
+            self._recv_or_raise(conn_j, "SET_OCC", j)
+        except BaseException:
+            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+            self._recv_or_raise(conn_i, "SET_OCC", i)
+            raise
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()

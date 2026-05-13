@@ -70,11 +70,9 @@ class ReplicaPool(Protocol):
         After a successful return, ``current_energy(i)`` yields what
         ``current_energy(j)`` returned before the call, and vice versa.
 
-        Failure semantics: if any worker-boundary operation raises
-        mid-swap, the pool is left in an undefined partial-swap state
-        and the enclosing run should abort. Resumable-from-partial-swap
-        is out of v0.1 scope; the orchestrator propagates the
-        exception unchanged.
+        On raise, the pool rolls back the first replica to its
+        pre-swap configuration so both replicas remain consistent.
+        The enclosing run propagates the exception unchanged.
         """
         ...
 
@@ -128,6 +126,16 @@ class CanonicalPool(ReplicaPool, Protocol):
     @property
     def temperatures(self) -> Sequence[float]: ...
 
+    @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully qualified name of the ensemble class driven by this pool."""
+        ...
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """Deterministic hash of extra ensemble kwargs, or ``""`` if unavailable."""
+        ...
+
 
 @runtime_checkable
 class WangLandauPool(ReplicaPool, Protocol):
@@ -145,6 +153,16 @@ class WangLandauPool(ReplicaPool, Protocol):
 
     @property
     def energy_spacing(self) -> float: ...
+
+    @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully qualified name of the ensemble class driven by this pool."""
+        ...
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """Deterministic hash of extra ensemble kwargs, or ``""`` if unavailable."""
+        ...
 
     def log_g(self, i: int, energy: float) -> float:
         """Return ln g at the given energy for replica i, or -inf out of window."""

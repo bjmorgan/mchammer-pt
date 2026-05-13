@@ -2,8 +2,9 @@
 
 `BaseParallelTempering` drives the cycle loop, records per-cycle
 observations, and coordinates exchange proposals. All replica state
-lives in the pool (`ReplicaPool` or `ObservablePool`); the orchestrator
-routes queries through it and never holds replica state directly.
+lives in the pool (`ReplicaPool`, `CanonicalPool`, `WangLandauPool`,
+or their observable variants); the orchestrator routes queries
+through it and never holds replica state directly.
 
 Ensemble-specific subclasses override exactly one method:
 `_log_prob_ratio(i, j)`.
@@ -36,8 +37,8 @@ class BaseParallelTempering(ABC):
     """Abstract PT orchestrator.
 
     Args:
-        pool: a `ReplicaPool` owning one replica per temperature, in
-            ascending-T order. If the pool satisfies `_ObserverAttach`
+        pool: a `ReplicaPool` owning one replica per ladder rung. If
+            the pool satisfies `_ObserverAttach`
             (i.e. it is an `ObservablePool` or
             `WangLandauObservablePool`), `attach_observer` will
             forward to it; otherwise calling `attach_observer` raises

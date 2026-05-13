@@ -196,17 +196,15 @@ class CanonicalParallelTempering(BaseParallelTempering):
         # CE-write-and-hash cost on every emission.
         self._random_seed = int(random_seed)
         self._ce_identity = _compute_ce_identity(cluster_expansion)
-        # Read identity from the pool when available (process pools
-        # carry it); otherwise compute from the constructor args (which
-        # are correct for the serial-build path where the guard
-        # ensures ensemble_cls/ensemble_kwargs are defaults).
-        pool_fqn = getattr(pool, "ensemble_cls_fqn", None)
-        pool_hash = getattr(pool, "ensemble_kwargs_hash", None)
-        self._ensemble_cls_fqn = pool_fqn if pool_fqn is not None else (
-            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
-        )
-        self._ensemble_kwargs_hash = pool_hash if pool_hash is not None else (
-            _compute_ensemble_kwargs_hash(ensemble_kwargs)
+        # All built-in pools carry ensemble identity. FQN is always
+        # correct (computed from the first replica's ensemble class).
+        # kwargs hash is a sentinel on serial pools (the kwargs are
+        # consumed during construction and not stored on replicas);
+        # fall back to computing from the constructor args.
+        self._ensemble_cls_fqn = pool.ensemble_cls_fqn
+        self._ensemble_kwargs_hash = (
+            pool.ensemble_kwargs_hash
+            or _compute_ensemble_kwargs_hash(ensemble_kwargs)
         )
 
     @property
