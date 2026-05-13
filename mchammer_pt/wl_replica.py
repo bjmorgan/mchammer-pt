@@ -1,8 +1,11 @@
 """Per-window Wang-Landau replica handle.
 
 Sibling of `mchammer_pt.replica.Replica`. Wraps a single
-`icet.mchammer.ensembles.WangLandauEnsemble` (defaulting to
-`OneOverTWangLandauEnsemble`) for use inside the REWL orchestrator.
+`icet.mchammer.ensembles.WangLandauEnsemble` for use inside the REWL
+orchestrator. Defaults to the base `WangLandauEnsemble` shipped by
+mainline icet; pass `ensemble_cls=OneOverTWangLandauEnsemble`
+explicitly (from icet's patched fork at
+https://gitlab.com/bjmorgan/icet) to use the 1/t schedule.
 """
 
 from __future__ import annotations
@@ -22,9 +25,6 @@ from mchammer.data_containers.wang_landau_data_container import (  # type: ignor
     WangLandauDataContainer,
 )
 from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped]
-from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
-    OneOverTWangLandauEnsemble,
-)
 from mchammer.observers.base_observer import (
     BaseObserver,  # type: ignore[import-untyped]
 )
@@ -103,8 +103,10 @@ class WangLandauReplica:
         energy_limit_right: upper window edge, or None for unbounded.
         random_seed: seed for this replica's MC random generator.
         ensemble_cls: WL ensemble class. Defaults to
-            `OneOverTWangLandauEnsemble`; any `WangLandauEnsemble`
-            subclass works.
+            `WangLandauEnsemble` (base; icet's mainline halving-phase
+            variant). To use the 1/t schedule, pass
+            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
+            patched fork explicitly.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Reserved names (see `_RESERVED_ENSEMBLE_KWARGS`) cannot
             appear here — they are set by the wrapper.
@@ -126,7 +128,7 @@ class WangLandauReplica:
         energy_limit_right: float | None,
         random_seed: int,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
@@ -290,7 +292,7 @@ class WangLandauReplica:
         (`last_step`, `occupations`, `accepted_trials`, `random_state`,
         `fill_factor`, `fill_factor_history`, `entropy_history`,
         `histogram`, `entropy`), plus the 1/t-schedule fields when the
-        ensemble is a `OneOverTWangLandauEnsemble`. Returns the
+        ensemble subclass exposes them. Returns the
         `sites_by_species` extras the orchestrator-side checkpoint code
         embeds alongside the container.
         """
@@ -312,7 +314,15 @@ class WangLandauReplica:
         # rather than via `_update_last_state`, mirroring the inline
         # writes performed by
         # `OneOverTWangLandauEnsemble.write_data_container`.
-        if isinstance(e, OneOverTWangLandauEnsemble):
+        # 1/t-schedule subclasses (e.g. icet's
+        # `OneOverTWangLandauEnsemble` in the patched fork) carry
+        # these extra fields on `_last_state`. Detect via `hasattr`
+        # rather than `isinstance` so the package works against any
+        # `WangLandauEnsemble` subclass without importing it
+        # directly. The check is icet-1/t-specific: a future
+        # unrelated subclass defining `_in_one_over_t_phase` with
+        # different semantics would be silently mis-handled here.
+        if hasattr(e, "_in_one_over_t_phase"):
             e._data_container._last_state[
                 "in_one_over_t_phase"
             ] = e._in_one_over_t_phase
@@ -396,7 +406,7 @@ class WangLandauReplica:
         energy_limit_left: float | None,
         energy_limit_right: float | None,
         random_seed: int,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,

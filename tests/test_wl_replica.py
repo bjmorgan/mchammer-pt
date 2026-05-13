@@ -177,3 +177,78 @@ def test_wl_replica_snapshot_and_restore_round_trip(tmp_path):
         restored.current_occupations(), replica.current_occupations()
     )
     assert restored.current_energy() == pytest.approx(replica.current_energy())
+
+
+def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
+    """1/t-schedule fields round-trip through snapshot/restore.
+
+    Requires icet's `OneOverTWangLandauEnsemble`, which lives in the
+    patched icet fork at https://gitlab.com/bjmorgan/icet. Skips
+    cleanly when running against mainline icet.
+    """
+    one_over_t = pytest.importorskip(
+        "mchammer.ensembles.one_over_t_wang_landau_ensemble",
+        reason=(
+            "requires icet's OneOverTWangLandauEnsemble; install "
+            "the patched icet from "
+            "https://gitlab.com/bjmorgan/icet"
+        ),
+    )
+    OneOverTWangLandauEnsemble = one_over_t.OneOverTWangLandauEnsemble
+
+    from mchammer.calculators import (  # type: ignore[import-untyped]
+        ClusterExpansionCalculator,
+    )
+    from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+        WangLandauDataContainer,
+    )
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers))
+
+    replica = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=7,
+        ensemble_cls=OneOverTWangLandauEnsemble,
+    )
+    # Advance enough to enter the window (so _window_entry_step is set).
+    replica.advance(100)
+    extras = replica.snapshot_for_checkpoint()
+    assert "sites_by_species" in extras
+
+    dc_path = tmp_path / "wl_one_over_t.dc"
+    replica.data_container().write(str(dc_path))
+    container = WangLandauDataContainer.read(str(dc_path))
+
+    # Confirm the 1/t-specific fields made it onto _last_state.
+    assert "in_one_over_t_phase" in container._last_state
+    assert "window_entry_step" in container._last_state
+    assert "switch_mode" in container._last_state
+
+    restored = WangLandauReplica.restart_from(
+        container,
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=7,
+        ensemble_cls=OneOverTWangLandauEnsemble,
+        sites_by_species=extras["sites_by_species"],
+    )
+    assert (
+        restored.ensemble._in_one_over_t_phase
+        == replica.ensemble._in_one_over_t_phase
+    )
+    assert (
+        restored.ensemble._window_entry_step
+        == replica.ensemble._window_entry_step
+    )
+    assert restored.ensemble._switch_mode == replica.ensemble._switch_mode

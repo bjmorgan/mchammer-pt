@@ -413,7 +413,22 @@ def test_wl_pt_resume_rejects_mismatched_ce(tmp_path):
 
 
 def test_wl_pt_resume_rejects_mismatched_ensemble_cls(tmp_path):
-    from mchammer.ensembles import WangLandauEnsemble
+    """Resume with a different `ensemble_cls` than was used to save fails.
+
+    Requires icet's `OneOverTWangLandauEnsemble` (in the patched fork
+    at https://gitlab.com/bjmorgan/icet) so we have a second class to
+    mismatch against the base `WangLandauEnsemble` default. Skips
+    cleanly on mainline icet.
+    """
+    one_over_t = pytest.importorskip(
+        "mchammer.ensembles.one_over_t_wang_landau_ensemble",
+        reason=(
+            "requires icet's OneOverTWangLandauEnsemble; install "
+            "the patched icet from "
+            "https://gitlab.com/bjmorgan/icet"
+        ),
+    )
+    OneOverTWangLandauEnsemble = one_over_t.OneOverTWangLandauEnsemble
 
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
@@ -424,16 +439,17 @@ def test_wl_pt_resume_rejects_mismatched_ensemble_cls(tmp_path):
         energy_spacing=0.1,
         block_size=5,
         random_seed=0,
+        ensemble_cls=OneOverTWangLandauEnsemble,
     )
     pt.run(n_cycles=2)
     cp = tmp_path / "wl.hdf5"
     pt.save_checkpoint(cp)
-    # The original used OneOverTWangLandauEnsemble; resume with the plain
-    # WangLandauEnsemble should be rejected by the FQN mismatch.
+    # Original used OneOverTWangLandauEnsemble; resume with the
+    # default (base WangLandauEnsemble) should be rejected by the
+    # FQN mismatch.
     with pytest.raises(ValueError, match="ensemble_cls FQN"):
         WangLandauParallelTempering.resume(
             cp, cluster_expansion=make_wl_ce(),
-            ensemble_cls=WangLandauEnsemble,
         )
 
 

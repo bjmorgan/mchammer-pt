@@ -264,14 +264,7 @@ class SerialWangLandauPool:
         occ_i = self._replicas[i].current_occupations()
         occ_j = self._replicas[j].current_occupations()
         self._replicas[i].set_occupations(occ_j)
-        try:
-            self._replicas[j].set_occupations(occ_i)
-        except Exception:
-            # Roll replica i back to its original occupations so the
-            # pool stays consistent. Restoring occ_i cannot fail because
-            # it was i's in-window state before the swap.
-            self._replicas[i].set_occupations(occ_i)
-            raise
+        self._replicas[j].set_occupations(occ_i)
 
     def log_g(self, i: int, energy: float) -> float:
         return self._replicas[i].log_g(energy)

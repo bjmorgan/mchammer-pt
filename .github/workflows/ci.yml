@@ -21,6 +21,7 @@ jobs:
       - name: Install package
         run: |
           python -m pip install --upgrade pip
+          pip install "icet @ git+https://gitlab.com/bjmorgan/icet.git@add-one-over-t-wang-landau-ensemble"
           pip install -e '.[dev]'
       - name: Run pytest
         run: pytest -q

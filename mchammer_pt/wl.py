@@ -18,9 +18,6 @@ import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion  # type: ignore[import-untyped]
 from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped]
-from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
-    OneOverTWangLandauEnsemble,
-)
 
 from .base import BaseParallelTempering
 from .checkpoint import (
@@ -96,7 +93,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         data_container_file: optional path; if given, `run` writes a
             schema-3 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
-            `OneOverTWangLandauEnsemble`.
+            `WangLandauEnsemble` (base; icet's mainline halving-phase
+            variant). To use the 1/t schedule, pass
+            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
+            patched fork explicitly.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
 
     Raises:
@@ -115,7 +115,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         if isinstance(atoms, Atoms):
@@ -141,7 +141,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
         if pool is not None and (
-            ensemble_cls is not OneOverTWangLandauEnsemble or ensemble_kwargs
+            ensemble_cls is not WangLandauEnsemble or ensemble_kwargs
         ):
             raise ValueError(
                 "ensemble_cls / ensemble_kwargs cannot be combined with an "
@@ -283,7 +283,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
@@ -380,7 +380,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
@@ -474,7 +474,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         bin_size_exponent: float = 1.0,
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
@@ -529,7 +529,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         random_seed: int,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.

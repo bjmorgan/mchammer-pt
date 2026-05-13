@@ -24,9 +24,6 @@ from mchammer.ensembles import (  # type: ignore[import-untyped]
     CanonicalEnsemble,
     WangLandauEnsemble,
 )
-from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
-    OneOverTWangLandauEnsemble,
-)
 from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
     BaseObserver,
 )
@@ -605,7 +602,11 @@ class ProcessWangLandauPool:
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per replica.
-        ensemble_cls: WL ensemble class. Spawned workers re-import by
+        ensemble_cls: WL ensemble class. Defaults to
+            `WangLandauEnsemble` (base; icet's mainline halving-phase
+            variant). To use the 1/t schedule, pass
+            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
+            patched fork explicitly. Spawned workers re-import by
             FQN; interactive-`__main__` classes are not supported.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Must be picklable for the spawn boundary.
@@ -619,7 +620,7 @@ class ProcessWangLandauPool:
         energy_spacing: float,
         seeds: Sequence[int],
         *,
-        ensemble_cls: type[WangLandauEnsemble] = OneOverTWangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
@@ -794,29 +795,14 @@ class ProcessWangLandauPool:
         self._check_open()
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
-        # Fetch both current occupations (still interleaved).
         conn_i.send(("GET_OCC",))
         conn_j.send(("GET_OCC",))
-        occ_i = np.asarray(
-            self._recv_or_raise(conn_i, "GET_OCC", i), dtype=np.int64
-        )
-        occ_j = np.asarray(
-            self._recv_or_raise(conn_j, "GET_OCC", j), dtype=np.int64
-        )
-        # Apply to i first; if it fails, j has not been touched.
-        conn_i.send(("SET_OCC", occ_j))
+        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
+        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
+        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
+        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
         self._recv_or_raise(conn_i, "SET_OCC", i)
-        # Then apply to j; roll back i if j fails.
-        try:
-            conn_j.send(("SET_OCC", occ_i))
-            self._recv_or_raise(conn_j, "SET_OCC", j)
-        except Exception:
-            # Restore replica i to its original occupations. occ_i was
-            # i's in-window state before the swap, so this cannot fail
-            # on the validate-before-mutate path.
-            conn_i.send(("SET_OCC", occ_i))
-            self._recv_or_raise(conn_i, "SET_OCC", i)
-            raise
+        self._recv_or_raise(conn_j, "SET_OCC", j)
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()

@@ -18,11 +18,16 @@ paths to the colder chains.
 - `CanonicalParallelTempering` — canonical-ensemble PT with an
   arbitrary temperature ladder.
 - `WangLandauParallelTempering` — single-walker replica-exchange
-  Wang-Landau (REWL) on top of icet's `OneOverTWangLandauEnsemble`.
-  Each replica owns a fixed energy window; adjacent windows attempt
-  configuration swaps with a within-window density-of-states ratio
-  for acceptance. Serial and process-parallel backends as for the
-  canonical orchestrator; checkpoint/resume into either pool kind.
+  Wang-Landau (REWL) on top of icet's `WangLandauEnsemble`. The
+  default `ensemble_cls` is the base `WangLandauEnsemble` (shipped
+  by mainline icet). To use the 1/t schedule, pass
+  `ensemble_cls=OneOverTWangLandauEnsemble` explicitly; that
+  subclass is only available in icet's patched fork at
+  https://gitlab.com/bjmorgan/icet. Each replica owns a fixed
+  energy window; adjacent windows attempt configuration swaps with
+  a within-window density-of-states ratio for acceptance. Serial
+  and process-parallel backends as for the canonical orchestrator;
+  checkpoint/resume into either pool kind.
   An analytic-DOS integration test
   (`tests/integration/test_rewl_2d_ising.py`, marked `slow`)
   exercises REWL end-to-end on a 4x4 2D Ising fixture: the stitched
