@@ -220,10 +220,6 @@ class BaseParallelTempering(ABC):
         Wang-Landau PT returns ``{"windows": ..., "energy_spacing": ...}``.
         Shared keys (block_size, random_seed, identity hashes,
         schema_version) live in `checkpoint._write_checkpoint`.
-
-        Not abstract because test helpers and minimal subclasses that
-        do not write checkpoints (e.g. the `_MinusInfPT` style stubs in
-        `tests/test_base.py`) should not be forced to override.
         """
         return {}
 

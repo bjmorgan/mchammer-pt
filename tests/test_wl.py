@@ -99,7 +99,8 @@ def test_wl_pt_log_prob_ratio_uses_cross_bin_entropies(monkeypatch):
     # log_r = (g_i(E_i) - g_i(E_j)) + (g_j(E_j) - g_j(E_i))
     #       = (1 - 2) + (7 - 4)
     #       = -1 + 3 = +2
-    # (Standard REWL detailed balance: ln A = ln g_i(E_i)/g_i(E_j) + ln g_j(E_j)/g_j(E_i))
+    # (Standard REWL detailed balance:
+    #  ln A = ln g_i(E_i)/g_i(E_j) + ln g_j(E_j)/g_j(E_i))
     assert log_r == pytest.approx(2.0)
 
 
@@ -338,6 +339,7 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
 
 def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
     import h5py
+
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
     pt = WangLandauParallelTempering(
@@ -435,3 +437,33 @@ def test_wl_pt_resume_rejects_mismatched_ensemble_kwargs_hash(tmp_path):
             cp, cluster_expansion=make_wl_ce(),
             ensemble_kwargs={"flatness_limit": 0.5},
         )
+
+
+def test_wl_pt_process_pool_records_actual_ensemble_identity():
+    """process_pool's checkpoint metadata reflects the workers' actual ensemble."""
+    from mchammer.ensembles import (  # type: ignore[import-untyped]
+        WangLandauEnsemble,
+    )
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=WangLandauEnsemble,
+        ensemble_kwargs={"fill_factor_limit": 1e-3},
+    ) as pt:
+        expected_fqn = (
+            f"{WangLandauEnsemble.__module__}."
+            f"{WangLandauEnsemble.__qualname__}"
+        )
+        assert pt._ensemble_cls_fqn == expected_fqn
+
+        from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+        empty_hash = _compute_ensemble_kwargs_hash({})
+        assert pt._ensemble_kwargs_hash != empty_hash

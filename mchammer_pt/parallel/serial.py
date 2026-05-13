@@ -209,9 +209,9 @@ class SerialWangLandauPool:
     """In-process pool of `WangLandauReplica` instances.
 
     Mirrors `SerialPool` for canonical replicas. Implements
-    `WangLandauPool`. Observer attachment is not supported in v1
-    (REWL observer usage is out of scope; see the spec deviation
-    note in `docs/superpowers/plans/2026-05-12-rewl-extension.md`).
+    `WangLandauPool`. REWL observer attach is deferred in v1; the
+    canonical attach surface is unchanged. A follow-up would add the
+    parent-side attach methods plus the corresponding subprotocol.
     """
 
     def __init__(

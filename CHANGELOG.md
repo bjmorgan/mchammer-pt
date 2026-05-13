@@ -29,11 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spawns one OS process per replica with a new ``_wl_worker``
   entry point and two REWL-specific opcodes (``LOG_G_AT``,
   ``CONVERGED``) on top of the canonical-shared set.
-- A ``slow`` pytest marker and a placeholder 2D Ising integration
-  test (``tests/integration/test_rewl_2d_ising.py``) marking the
-  correctness gate for REWL. The test xfails up front pending a
-  stitching post-processor; once that lands the body becomes the
-  real validation against the analytic 2D Ising DOS.
+- A ``slow``-marked integration test
+  (``tests/integration/test_rewl_2d_ising.py``) exercising REWL
+  overlap-consistency on a 4x4 2D Ising fixture. After convergence,
+  two adjacent windows must agree on ln g(E) within their overlap up
+  to a single additive constant; a sign error or systematic bias in
+  the swap formula would push the two curves apart and the test would
+  fail. A full "REWL recovers analytic DOS" comparison via icet's
+  ``get_density_of_states_wl`` is a natural next step but is not
+  required for the current regression gate.
 
 ### Changed
 

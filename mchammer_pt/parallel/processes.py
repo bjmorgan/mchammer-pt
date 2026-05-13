@@ -590,11 +590,10 @@ class ProcessPool:
 class ProcessWangLandauPool:
     """Persistent-worker REWL pool.
 
-    One OS process per replica. Implements `WangLandauPool`. Observer
-    attach is deliberately not part of the v1 REWL surface (see the
-    spec's "Deviations from the spec" section); a follow-up that adds
-    WL observer support would introduce both the parent-side attach
-    methods here and the corresponding subprotocol on `_worker.py`.
+    One OS process per replica. Implements `WangLandauPool`. REWL
+    observer attach is deferred in v1; the canonical attach surface
+    is unchanged. A follow-up would add the parent-side attach
+    methods here plus the corresponding subprotocol on `_worker.py`.
 
     Args:
         ce_path: path to a CE file readable by `ClusterExpansion.read`.
@@ -680,7 +679,6 @@ class ProcessWangLandauPool:
 
         Mirrors `ProcessPool._recv_or_raise`; duplicated here for
         clarity since `ProcessWangLandauPool` is self-contained.
-        Extract a shared helper if a third process pool lands.
         """
         try:
             status, payload = conn.recv()

@@ -623,6 +623,17 @@ class CanonicalParallelTempering(BaseParallelTempering):
             pool=pool,
             data_container_file=data_container_file,
         )
+        # The constructor's pool-plus-ensemble-kwargs guard prevents
+        # forwarding `ensemble_cls`/`ensemble_kwargs` past `pool=`, so
+        # the call above leaves the orchestrator's identity hashes
+        # computed from the defaults — not from the kwargs the workers
+        # actually received. Re-stamp from the real values now, so a
+        # checkpoint written by this run records what ran rather than
+        # what the constructor's defaults would have been.
+        pt._ensemble_cls_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        pt._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
         # Tie tempdir lifetime to the orchestrator: cleaned when `pt`
         # is garbage-collected (or when its finalizer runs explicitly).
         # The CE file is only read by workers during their own

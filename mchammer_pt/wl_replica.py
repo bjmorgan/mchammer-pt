@@ -3,12 +3,6 @@
 Sibling of `mchammer_pt.replica.Replica`. Wraps a single
 `icet.mchammer.ensembles.WangLandauEnsemble` (defaulting to
 `OneOverTWangLandauEnsemble`) for use inside the REWL orchestrator.
-
-The two replica classes duplicate the RNG-isolation pattern, the
-`set_occupations`/`restore_state` machinery, and the checkpoint
-snapshot. Duplication is accepted for clarity per CLAUDE.md's
-clarity-over-DRY priority; a third ensemble type can drive a future
-extraction of a shared base.
 """
 
 from __future__ import annotations

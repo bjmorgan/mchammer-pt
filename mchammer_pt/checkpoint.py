@@ -3,25 +3,24 @@
 This module owns the serialisation side of `mchammer-pt`'s
 checkpoint format: identity hashes for the CE and ensemble kwargs,
 the `CheckpointWriter` `CycleCallback`, and the writer/reader
-helpers used by `CanonicalParallelTempering.save_checkpoint`,
-`CanonicalParallelTempering.resume`, and the existing
-`data_container_file=` write path.
+helpers used by every `BaseParallelTempering` subclass that
+supports checkpoint and resume (`CanonicalParallelTempering` and
+`WangLandauParallelTempering` as of schema version ``"3"``).
 
 The on-disk schema (version ``"3"``) is HDF5 with these top-level
 groups: ``meta`` (run metadata as attrs; six shared keys —
 ``schema_version``, ``block_size``, ``random_seed``,
 ``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
-plus ladder-specific keys contributed by the orchestrator subclass
-via ``_checkpoint_meta()`` such as ``temperatures`` for canonical
-PT or ``windows`` + ``energy_spacing`` for REWL);
+plus ladder-specific keys contributed by each orchestrator
+subclass via ``_checkpoint_meta()``: ``temperatures`` for canonical
+PT, ``windows`` + ``energy_spacing`` for REWL);
 ``exchanges`` (per-cycle history arrays); ``replicas`` (one opaque
-tarball per replica, the native
-mchammer ``BaseDataContainer`` format); ``orchestrator`` (the
-exchange-proposal RNG state and the replica-label permutation);
-and ``sites_by_species`` (one JSON dataset per replica carrying
-the path-dependent ``ConfigurationManager._sites_by_species``
-cache that bit-identical resume requires alongside
-``_last_state``).
+tarball per replica, the native mchammer ``BaseDataContainer``
+format); ``orchestrator`` (the exchange-proposal RNG state and the
+replica-label permutation); and ``sites_by_species`` (one JSON
+dataset per replica carrying the path-dependent
+``ConfigurationManager._sites_by_species`` cache that bit-identical
+resume requires alongside ``_last_state``).
 """
 
 from __future__ import annotations
@@ -254,16 +253,26 @@ def _serialise_rng_state(rng: np.random.Generator) -> str:
 def _write_checkpoint(pt: object, path: Path | str) -> None:
     """Write a full checkpoint of `pt` to `path` atomically.
 
-    Used by `CanonicalParallelTempering.save_checkpoint`,
-    `CheckpointWriter`, and the `data_container_file=` write path.
-    `pt` must be a `CanonicalParallelTempering` instance whose
-    `run()` has been called at least once.
+    Used by every orchestrator's ``save_checkpoint`` method, the
+    ``data_container_file=`` write path inside ``run()``, and
+    `CheckpointWriter`. `pt` must be a `BaseParallelTempering`
+    subclass that:
 
-    The function reads the identity hashes the orchestrator cached
-    at construction (`_ce_identity`, `_ensemble_cls_fqn`,
-    `_ensemble_kwargs_hash`, `_random_seed`) and the live state
-    (`_history`, `_replica_labels`, `_rng`) and packs them into the
-    schema-``"3"`` HDF5 layout described in this module's docstring.
+    - carries the identity attributes set during construction
+      (`_ce_identity`, `_ensemble_cls_fqn`, `_ensemble_kwargs_hash`,
+      `_random_seed`, `_block_size`);
+    - carries the live orchestrator state (`_history`,
+      `_replica_labels`, `_rng`);
+    - implements `_checkpoint_meta()` returning any ladder-specific
+      keys (canonical PT contributes ``temperatures``; REWL
+      contributes ``windows`` and ``energy_spacing``).
+
+    Requires `run()` to have been called at least once, so that
+    each replica's `_last_state` is populated and the on-disk
+    container round-trips through ``_restart_ensemble``.
+
+    The function packs these into the schema-``"3"`` HDF5 layout
+    described in this module's docstring.
     """
     from .history import write_hdf5
 

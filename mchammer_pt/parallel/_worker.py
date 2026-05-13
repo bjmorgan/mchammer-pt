@@ -1,8 +1,13 @@
-"""Worker-side implementation of the persistent multiprocessing pool.
+"""Worker-side implementation of the persistent multiprocessing pools.
 
-Each worker process starts by building a `Replica`, sending a single
-("OK", None) ready-handshake to the parent, then entering the
-following command loop:
+Two worker entry points live here: `_worker` for canonical replicas
+(driven by `ProcessPool`) and `_wl_worker` for Wang-Landau replicas
+(driven by `ProcessWangLandauPool`). Each builds its replica,
+sends a single ``("OK", None)`` ready-handshake to the parent, and
+then enters a command loop reading ``(opcode, *args)`` tuples and
+replying with ``(status, payload)`` tuples.
+
+Shared opcodes (both workers):
 
 - ``("ADVANCE", n_steps)`` -> replies ``("OK", None)`` after the run
 - ``("ENERGY",)`` -> replies ``("OK", float)`` with total CE energy
@@ -18,6 +23,10 @@ following command loop:
   ``_restart_ensemble``, and (if ``sites_by_species`` is non-None)
   restores the ``ConfigurationManager._sites_by_species`` cache;
   replies ``("OK", None)``
+- ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
+
+Canonical-only opcodes (`_worker` only):
+
 - ``("ATTACH_OBS", pickled_blob)`` -> deserialises and attaches an
   observer; replies ``("OK", None)``
 - ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
@@ -26,7 +35,17 @@ following command loop:
   and attaches; replies ``("OK", None)``
 - ``("GET_OBSERVERS",)`` -> replies ``("OK", dict[str, BaseObserver])``
   with the replica's currently-attached observers (pickled on send)
-- ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
+
+REWL-only opcodes (`_wl_worker` only):
+
+- ``("LOG_G_AT", E_i, E_j)`` -> replies ``("OK", (g_at_E_i, g_at_E_j))``
+  with the replica's `log_g` evaluated at both energies
+- ``("CONVERGED",)`` -> replies ``("OK", bool)`` with the replica's
+  converged flag
+
+The REWL worker does not handle the observer-attach opcodes:
+parent-side WL observer attach is not part of the v1 REWL surface,
+so no caller would ever send those messages to a `_wl_worker`.
 
 Every reply is of the form ``(status, payload)``. ``status`` is one
 of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply

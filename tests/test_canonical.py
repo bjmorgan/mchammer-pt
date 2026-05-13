@@ -483,3 +483,31 @@ def test_per_temperature_atoms_geometry_mismatch_raises(toy_ce, toy_atoms):
             block_size=10,
             random_seed=0,
         )
+
+
+def test_process_pool_records_actual_ensemble_identity(toy_ce, toy_atoms):
+    """process_pool's checkpoint metadata reflects the workers' actual ensemble."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "regression-test"},
+    ) as pt:
+        # Identity stamps reflect the actual ensemble, not the defaults.
+        expected_fqn = (
+            f"{TaggedCanonicalEnsemble.__module__}."
+            f"{TaggedCanonicalEnsemble.__qualname__}"
+        )
+        assert pt._ensemble_cls_fqn == expected_fqn
+
+        # Hash should be non-empty (real kwargs hashed cleanly) and
+        # different from the empty-kwargs hash.
+        from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
+        empty_hash = _compute_ensemble_kwargs_hash({})
+        assert pt._ensemble_kwargs_hash != ""
+        assert pt._ensemble_kwargs_hash != empty_hash
