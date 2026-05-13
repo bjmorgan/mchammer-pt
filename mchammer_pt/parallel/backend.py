@@ -70,9 +70,9 @@ class ReplicaPool(Protocol):
         After a successful return, ``current_energy(i)`` yields what
         ``current_energy(j)`` returned before the call, and vice versa.
 
-        On raise, the pool rolls back the first replica to its
-        pre-swap configuration so both replicas remain consistent.
-        The enclosing run propagates the exception unchanged.
+        On raise, the pool rolls back replica *i* to its pre-swap
+        configuration so both replicas remain consistent. The
+        enclosing run propagates the exception unchanged.
         """
         ...
 

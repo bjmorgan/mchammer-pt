@@ -47,7 +47,7 @@ class SerialPool:
     @property
     def ensemble_cls_fqn(self) -> str:
         """Fully qualified name of the ensemble class used by replicas."""
-        cls = type(self._replicas[0]._ensemble)
+        cls = type(self._replicas[0].ensemble)
         return f"{cls.__module__}.{cls.__qualname__}"
 
     @property
@@ -255,7 +255,7 @@ class SerialWangLandauPool:
     @property
     def ensemble_cls_fqn(self) -> str:
         """Fully qualified name of the ensemble class used by replicas."""
-        cls = type(self._replicas[0]._ensemble)
+        cls = type(self._replicas[0].ensemble)
         return f"{cls.__module__}.{cls.__qualname__}"
 
     @property
