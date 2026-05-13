@@ -7,9 +7,10 @@ data containers at end-of-run.
 
 Pool implementations vary in whether they can carry user-supplied
 `mchammer.BaseObserver` instances across their execution boundary.
-Those that can implement the `ObservablePool` extension; those that
-cannot (e.g. process-parallel pools whose workers live in separate
-interpreters) satisfy only `ReplicaPool`.
+Those that can satisfy the `_ObserverAttach` mixin — combined with
+`CanonicalPool` this gives `ObservablePool`, combined with
+`WangLandauPool` it gives `WangLandauObservablePool`. Pools that
+cannot carry observers satisfy only the relevant base protocol.
 """
 
 from __future__ import annotations
@@ -166,14 +167,12 @@ class WangLandauPool(ReplicaPool, Protocol):
 
 
 @runtime_checkable
-class ObservablePool(CanonicalPool, Protocol):
-    """A `CanonicalPool` that can have mchammer observers attached.
+class _ObserverAttach(Protocol):
+    """Pool-agnostic observer-attach surface.
 
-    Separate protocol because not every pool implementation can carry
-    observer instances across its execution boundary. Pool implementations
-    that support observer forwarding implement this protocol; a future pool
-    type that does not would satisfy only `ReplicaPool` and require the user
-    to choose a different pool type to attach observers.
+    Both `ObservablePool` (canonical) and `WangLandauObservablePool`
+    (REWL) extend this. The orchestrator's `attach_observer` checks
+    against this protocol so it accepts either pool kind.
     """
 
     def attach_observer(
@@ -227,3 +226,29 @@ class ObservablePool(CanonicalPool, Protocol):
             IndexError: if ``replica_index`` is out of range.
         """
         ...
+
+
+@runtime_checkable
+class ObservablePool(CanonicalPool, _ObserverAttach, Protocol):
+    """A `CanonicalPool` that can have mchammer observers attached.
+
+    Separate protocol because not every pool implementation can carry
+    observer instances across its execution boundary. Implementations
+    that satisfy this protocol get observer-attach for free via the
+    `_ObserverAttach` mixin; those that don't (e.g. a hypothetical
+    pool whose workers can't serialise observers) satisfy only
+    `CanonicalPool`.
+    """
+
+
+@runtime_checkable
+class WangLandauObservablePool(WangLandauPool, _ObserverAttach, Protocol):
+    """A `WangLandauPool` that can have mchammer observers attached.
+
+    Mirrors `ObservablePool` for REWL. Observers fire inside each
+    replica's WL `run(block_size)` between exchange proposals, so a
+    user can record any per-step quantity over the WL trajectory and
+    feed it into post-processing (e.g. via
+    `mchammer.data_containers.wang_landau_data_container.get_average_observables_wl`
+    for thermodynamic averages against the stitched density of states).
+    """

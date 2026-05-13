@@ -95,6 +95,70 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
         assert not flags.any()
 
 
+def test_serial_wl_pool_satisfies_observable_protocol():
+    from mchammer_pt.parallel.backend import WangLandauObservablePool
+    pool = _make_serial_wl_pool()
+    assert isinstance(pool, WangLandauObservablePool)
+
+
+def test_serial_wl_pool_attach_observer_fires():
+    """Observer attached to a SerialWangLandauPool fires inside advance(...)."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial_wl_pool(n_replicas=2)
+    pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
+    pool.advance_all(50)
+    dcs = pool.data_containers()
+    assert "counter" in dcs[0].data.columns
+    assert "counter" in dcs[1].data.columns
+
+
+def test_serial_wl_pool_attach_observer_gives_independent_copies():
+    """Each replica gets its own deserialised counter, not a shared instance."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial_wl_pool(n_replicas=2)
+    template = StatefulCounter(interval=10)
+    pool.attach_observer(template, replicas="all")
+    pool.advance_all(50)
+    # The template never had `get_observable` called on it.
+    assert template.n_calls == 0
+    obs0 = pool.get_observers(0)
+    obs1 = pool.get_observers(1)
+    # Each replica's observer is a distinct object (pickle round-trip).
+    assert obs0["counter"] is not obs1["counter"]
+
+
+def test_serial_wl_pool_get_observers_round_trips():
+    """get_observers returns a pickle-roundtripped copy keyed by tag."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_serial_wl_pool(n_replicas=2)
+    pool.attach_observer(StatefulCounter(interval=10))
+    snapshot = pool.get_observers(0)
+    assert "counter" in snapshot
+    assert isinstance(snapshot["counter"], StatefulCounter)
+
+
+def test_process_wl_pool_attach_observer_fires(tmp_path):
+    """attach_observer on the process pool reaches each worker."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._observer_fixtures import StatefulCounter
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
+        snapshot = pool.get_observers(0)
+        assert "counter" in snapshot
+        assert isinstance(snapshot["counter"], StatefulCounter)
+
+
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
     """After a swap, each worker's _potential reflects the new configuration."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool

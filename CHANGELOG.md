@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spawns one OS process per replica with a new ``_wl_worker``
   entry point and two REWL-specific opcodes (``LOG_G_AT``,
   ``CONVERGED``) on top of the canonical-shared set.
+- Observer attach for REWL pools. ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool`` now satisfy a new
+  ``WangLandauObservablePool`` protocol (mirrors
+  ``ObservablePool`` for canonical) with ``attach_observer``,
+  ``attach_observer_class``, ``attach_observer_factory``, and
+  ``get_observers``. Use this to record per-step observable
+  trajectories during a REWL run, then feed the per-replica data
+  containers into icet's ``get_average_observables_wl`` for
+  thermodynamic averages against the stitched density of states.
 - A ``slow``-marked integration test
   (``tests/integration/test_rewl_2d_ising.py``) exercising REWL
   overlap-consistency on a 4x4 2D Ising fixture. After convergence,

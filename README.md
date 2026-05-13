@@ -195,6 +195,11 @@ pt.run(n_cycles=500)
 `WangLandauParallelTempering.process_pool(...)` spawns one OS
 process per replica. `save_checkpoint(path)` / `resume(path, ...)`
 / `resume_process_pool(path, ...)` mirror the canonical surface.
+Observers attach the same way as on the canonical pool (via
+`pt.attach_observer(...)` or, for the class and factory paths,
+directly on `pt.pool`); each replica's recorded observable
+trajectory ends up in its `WangLandauDataContainer`, ready for
+icet's `get_average_observables_wl` against the stitched ln g(E).
 
 Stitch the per-window ln g(E) curves into a single density of
 states via icet's existing `get_density_of_states_wl`:

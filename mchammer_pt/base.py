@@ -26,7 +26,7 @@ from .callbacks import CycleCallback, ExchangeCallback
 from .checkpoint import CheckpointWriter
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
-from .parallel.backend import ObservablePool, ReplicaPool
+from .parallel.backend import ReplicaPool, _ObserverAttach
 
 if TYPE_CHECKING:
     from .history import MetaValue
@@ -37,9 +37,11 @@ class BaseParallelTempering(ABC):
 
     Args:
         pool: a `ReplicaPool` owning one replica per temperature, in
-            ascending-T order. If the pool is an `ObservablePool`,
-            `attach_observer` will forward to it; otherwise calling
-            `attach_observer` raises `TypeError`.
+            ascending-T order. If the pool satisfies `_ObserverAttach`
+            (i.e. it is an `ObservablePool` or
+            `WangLandauObservablePool`), `attach_observer` will
+            forward to it; otherwise calling `attach_observer` raises
+            `TypeError`.
         block_size: MC trial steps per replica per cycle.
         random_seed: master seed for the exchange-proposal RNG.
         template_atoms: reference structure whose cell, positions, and
@@ -160,9 +162,10 @@ class BaseParallelTempering(ABC):
     ) -> None:
         """Attach an mchammer observer to one or more replicas.
 
-        Requires the pool to satisfy `ObservablePool`. Any pool that
-        implements only `ReplicaPool` does not satisfy it; calling this
-        method with such a pool raises `TypeError`.
+        Requires the pool to satisfy the `_ObserverAttach` mixin
+        Protocol, which `ObservablePool` (canonical) and
+        `WangLandauObservablePool` (REWL) both extend. Pools that
+        don't expose observer attach raise `TypeError`.
 
         For ``attach_observer_class`` and ``attach_observer_factory``,
         reach the pool directly via ``self.pool``.
@@ -172,10 +175,10 @@ class BaseParallelTempering(ABC):
             replicas: either the string ``"all"``, or an explicit sequence
                 of replica indices to attach to.
         """
-        if not isinstance(self._pool, ObservablePool):
+        if not isinstance(self._pool, _ObserverAttach):
             raise TypeError(
-                f"attach_observer requires an ObservablePool; "
-                f"{type(self._pool).__name__} does not satisfy it."
+                f"attach_observer requires a pool that supports observer "
+                f"attach; {type(self._pool).__name__} does not."
             )
         self._pool.attach_observer(observer, replicas)
 

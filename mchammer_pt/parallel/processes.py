@@ -590,10 +590,12 @@ class ProcessPool:
 class ProcessWangLandauPool:
     """Persistent-worker REWL pool.
 
-    One OS process per replica. Implements `WangLandauPool`. REWL
-    observer attach is deferred in v1; the canonical attach surface
-    is unchanged. A follow-up would add the parent-side attach
-    methods here plus the corresponding subprotocol on `_worker.py`.
+    One OS process per replica. Satisfies `WangLandauObservablePool`:
+    observers can be attached via the same three paths as
+    `ProcessPool` — `attach_observer`, `attach_observer_class`,
+    `attach_observer_factory` — and snapshotted back via
+    `get_observers`. Observers fire inside each WL replica's
+    `advance(...)` between exchange proposals.
 
     Args:
         ce_path: path to a CE file readable by `ClusterExpansion.read`.
@@ -678,7 +680,10 @@ class ProcessWangLandauPool:
         """Receive a (status, payload) reply or raise a clear exception.
 
         Mirrors `ProcessPool._recv_or_raise`; duplicated here for
-        clarity since `ProcessWangLandauPool` is self-contained.
+        clarity since `ProcessWangLandauPool` is self-contained. A
+        future refactor extracting the parent-side pipe plumbing
+        would consolidate this and the abort/drain helpers across
+        both pool classes.
         """
         try:
             status, payload = conn.recv()
@@ -694,6 +699,55 @@ class ProcessWangLandauPool:
         if status != "OK":
             raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
         return payload
+
+    def _drain_remaining_replies(self, indices: list[int]) -> None:
+        """Read pending replies on the given worker connections, ignoring contents."""
+        for i in indices:
+            _, conn = self._workers[i]
+            try:
+                conn.recv()
+            except (EOFError, BrokenPipeError):
+                pass
+
+    def _abort_partial_attach(
+        self,
+        op: str,
+        payload: str,
+        remaining: list[int],
+    ) -> NoReturn:
+        """Shut the pool down after a worker reports ERR during attach.
+
+        Mirrors `ProcessPool._abort_partial_attach`. Partial-attach
+        state is unrecoverable — mchammer has no detach API — so the
+        pool is shut down and further operations refuse via
+        `_check_open`. The drain step prevents the SHUTDOWN handshake
+        from racing against unread attach replies.
+        """
+        self._drain_remaining_replies(remaining)
+        self.shutdown()
+        raise RuntimeError(f"worker {op} failed: {payload}")
+
+    def _recv_or_abort_attach(
+        self,
+        conn: Connection,
+        op: str,
+        i: int,
+        remaining: list[int],
+    ) -> None:
+        """Receive an attach reply or abort the pool with full cleanup.
+
+        Mirrors `ProcessPool._recv_or_abort_attach`.
+        """
+        try:
+            status, payload = conn.recv()
+        except EOFError as exc:
+            self._drain_remaining_replies(remaining)
+            self.shutdown()
+            raise RuntimeError(
+                f"worker {op} (replica i={i}) exited unexpectedly during attach"
+            ) from exc
+        if status != "OK":
+            self._abort_partial_attach(op, payload, remaining)
 
     def __len__(self) -> int:
         self._check_open()
@@ -841,6 +895,145 @@ class ProcessWangLandauPool:
             )
         for i, (_, conn) in enumerate(self._workers):
             self._recv_or_raise(conn, "RESTORE_STATE", i)
+
+    def attach_observer(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an mchammer observer to selected REWL workers.
+
+        Mirrors `ProcessPool.attach_observer`. Each selected worker
+        receives its own deserialised copy via a pickle round-trip;
+        the parent eagerly validates picklability before contacting
+        any worker.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS", blob))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS", i, target_indices[offset + 1:]
+            )
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to selected REWL workers.
+
+        Mirrors `ProcessPool.attach_observer_class`. Eager
+        parent-side checks: importability of ``cls``, picklability
+        of ``(args, kwargs)``, and a dry-run construction that
+        asserts the result is a ``BaseObserver``.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        _check_importable(cls, kind="observer class")
+        try:
+            pickle.dumps((args, kwargs))
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_class: args/kwargs for "
+                f"{cls.__name__} are not picklable ({exc})"
+            ) from exc
+        probe = cls(*args, **kwargs)
+        if not isinstance(probe, BaseObserver):
+            raise TypeError(
+                f"attach_observer_class: {cls.__name__}(...) returned "
+                f"{type(probe).__name__}, not a BaseObserver"
+            )
+        del probe
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
+            )
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[Replica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed inside each REWL worker.
+
+        Mirrors `ProcessPool.attach_observer_factory`. Eager
+        parent-side checks: importability of ``factory`` and
+        picklability of ``factory``. Worker-side construction
+        failures (factory raising, or returning a non-``BaseObserver``)
+        surface as ``RuntimeError`` with the worker traceback, and
+        the pool shuts down so subsequent operations raise via
+        ``_check_open``.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._workers))
+        if not target_indices:
+            return
+        _check_importable(factory, kind="observer factory")
+        try:
+            pickle.dumps(factory)
+        except Exception as exc:
+            raise TypeError(
+                f"attach_observer_factory: factory "
+                f"{getattr(factory, '__name__', repr(factory))!r} "
+                f"is not picklable ({exc})"
+            ) from exc
+        for i in target_indices:
+            _, conn = self._workers[i]
+            conn.send(("ATTACH_OBS_FACTORY", factory))
+        for offset, i in enumerate(target_indices):
+            _, conn = self._workers[i]
+            self._recv_or_abort_attach(
+                conn, "ATTACH_OBS_FACTORY", i, target_indices[offset + 1:]
+            )
+
+    def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
+        """Return a snapshot of the observers attached to one REWL worker.
+
+        Mirrors `ProcessPool.get_observers`. The returned dict is
+        keyed by observer tag; values are independent copies via a
+        worker-side pickle on send and a parent-side unpickle.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
+            RuntimeError: if the pool is shut down, the worker
+                exited unexpectedly, or the worker reports any
+                other ERR.
+        """
+        self._check_open()
+        n = len(self._workers)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        _, conn = self._workers[replica_index]
+        conn.send(("GET_OBSERVERS",))
+        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
 
     def shutdown(self) -> None:
         for _, conn in self._workers:

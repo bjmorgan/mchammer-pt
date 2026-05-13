@@ -208,10 +208,11 @@ class SerialPool:
 class SerialWangLandauPool:
     """In-process pool of `WangLandauReplica` instances.
 
-    Mirrors `SerialPool` for canonical replicas. Implements
-    `WangLandauPool`. REWL observer attach is deferred in v1; the
-    canonical attach surface is unchanged. A follow-up would add the
-    parent-side attach methods plus the corresponding subprotocol.
+    Mirrors `SerialPool` for canonical replicas. Satisfies
+    `WangLandauObservablePool`: the same observer-attach surface as
+    `SerialPool` (`attach_observer`, `attach_observer_class`,
+    `attach_observer_factory`, `get_observers`) is exposed so users
+    can record per-step observables during a REWL run.
     """
 
     def __init__(
@@ -281,6 +282,125 @@ class SerialWangLandauPool:
 
     def converged_flags(self) -> np.ndarray:
         return np.array([r.converged for r in self._replicas], dtype=bool)
+
+    def attach_observer(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an mchammer observer to selected WL replicas.
+
+        Mirrors `SerialPool.attach_observer`: each replica receives
+        its own deserialised copy of ``observer`` via a pickle
+        round-trip; the ``observer`` argument itself is never
+        registered on any replica. If ``observer`` is not picklable,
+        raises ``TypeError`` immediately and points at
+        ``attach_observer_class`` as the escape hatch.
+        """
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
+        for i in target_indices:
+            self._replicas[i].attach_mchammer_observer(pickle.loads(blob))
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        replicas: Sequence[int] | Literal["all"] = "all",
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to selected WL replicas.
+
+        Mirrors `SerialPool.attach_observer_class`: a parent-side
+        dry-run construction validates the arguments and the
+        ``BaseObserver`` return type before any replica is touched.
+        The constructor must be free of externally-visible side
+        effects (it fires once in the parent plus once per selected
+        replica).
+        """
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
+        if not target_indices:
+            return
+        probe = cls(*args, **kwargs)
+        if not isinstance(probe, BaseObserver):
+            raise TypeError(
+                f"attach_observer_class: {cls.__name__}(...) returned "
+                f"{type(probe).__name__}, not a BaseObserver"
+            )
+        del probe
+        for i in target_indices:
+            self._replicas[i].attach_mchammer_observer(cls(*args, **kwargs))
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+        *,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer constructed locally per WL replica.
+
+        Mirrors `SerialPool.attach_observer_factory`. The factory
+        runs once per selected replica with that replica as its sole
+        argument and must return a fresh ``BaseObserver``. Use this
+        for observers whose constructors take icet objects
+        (``ClusterSpace``, ``ClusterExpansion``) that do not pickle;
+        reload the CE from disk inside the factory via
+        ``ClusterExpansion.read(replica.cluster_expansion_path)``.
+
+        On ``SerialWangLandauPool``,
+        ``replica.cluster_expansion_path`` is ``None`` unless you
+        passed ``cluster_expansion_path=`` to
+        ``WangLandauReplica.__init__``. ``ProcessWangLandauPool``
+        auto-populates the path on every worker.
+        """
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
+        if not target_indices:
+            return
+        for i in target_indices:
+            observer = factory(self._replicas[i])
+            if not isinstance(observer, BaseObserver):
+                raise TypeError(
+                    f"attach_observer_factory: factory returned "
+                    f"{type(observer).__name__}, not a BaseObserver"
+                )
+            self._replicas[i].attach_mchammer_observer(observer)
+
+    def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
+        """Return a snapshot of the observers attached to one WL replica.
+
+        Mirrors `SerialPool.get_observers`: the returned dict is
+        keyed by observer tag; values are independent copies via
+        ``pickle`` round-trip so mutations on the returned objects
+        do not affect the pool's running state.
+
+        Raises:
+            IndexError: if ``replica_index`` is out of range.
+            TypeError: if the observer dict cannot be round-tripped
+                through pickle.
+        """
+        n = len(self._replicas)
+        if not 0 <= replica_index < n:
+            raise IndexError(
+                f"replica index {replica_index} out of range "
+                f"for pool of size {n}"
+            )
+        live = self._replicas[replica_index].ensemble.observers
+        try:
+            return pickle.loads(pickle.dumps(live))
+        except Exception as exc:
+            raise TypeError(
+                f"observer dict for replica {replica_index} could not be "
+                f"round-tripped through pickle ({exc})"
+            ) from exc
 
     def data_containers(self) -> list[WangLandauDataContainer]:
         return [r.data_container() for r in self._replicas]
