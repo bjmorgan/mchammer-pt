@@ -19,8 +19,8 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion, ClusterSpace  # type: ignore[import-untyped]
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from icet import ClusterExpansion, ClusterSpace
+from mchammer.ensembles import CanonicalEnsemble
 
 from .replica import Replica
 

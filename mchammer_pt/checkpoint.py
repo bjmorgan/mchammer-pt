@@ -33,9 +33,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import h5py  # type: ignore[import-untyped]
+import h5py
 import numpy as np
-from icet import ClusterExpansion  # type: ignore[import-untyped]
+from icet import ClusterExpansion
 
 from .history import ExchangeHistory, MetaValue
 

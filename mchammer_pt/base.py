@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from ase import Atoms
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 

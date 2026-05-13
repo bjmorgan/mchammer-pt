@@ -20,6 +20,7 @@ from .parallel.backend import (
     CanonicalPool,
     ObservablePool,
     ReplicaPool,
+    WangLandauObservablePool,
     WangLandauPool,
 )
 from .parallel.processes import ProcessPool, ProcessWangLandauPool
@@ -48,6 +49,7 @@ __all__ = [
     "SerialPool",
     "SerialWangLandauPool",
     "SwapRateTracker",
+    "WangLandauObservablePool",
     "WangLandauParallelTempering",
     "WangLandauPool",
     "WangLandauReplica",

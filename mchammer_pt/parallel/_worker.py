@@ -65,12 +65,12 @@ from multiprocessing.connection import Connection
 from typing import Any
 
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.ensembles import (  # type: ignore[import-untyped]
+from icet import ClusterExpansion
+from mchammer.ensembles import (
     CanonicalEnsemble,
     WangLandauEnsemble,
 )
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 

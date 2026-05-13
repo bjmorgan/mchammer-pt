@@ -18,12 +18,11 @@ paths to the colder chains.
 - `CanonicalParallelTempering` — canonical-ensemble PT with an
   arbitrary temperature ladder.
 - `WangLandauParallelTempering` — single-walker replica-exchange
-  Wang-Landau (REWL) on top of icet's `WangLandauEnsemble`. The
-  default `ensemble_cls` is the base `WangLandauEnsemble` (shipped
-  by mainline icet). To use the 1/t schedule, pass
-  `ensemble_cls=OneOverTWangLandauEnsemble` explicitly; that
-  subclass is only available in icet's patched fork at
-  https://gitlab.com/bjmorgan/icet. Each replica owns a fixed
+  Wang-Landau (REWL) on top of icet's `WangLandauEnsemble`. To use
+  the Belardinelli-Pereyra 1/t schedule, pass
+  `ensemble_kwargs={'schedule': '1_over_t'}`; the default
+  `schedule='halving'` gives the standard WL fill-factor scheme.
+  Each replica owns a fixed
   energy window; adjacent windows attempt configuration swaps with
   a within-window density-of-states ratio for acceptance. Serial
   and process-parallel backends as for the canonical orchestrator;
@@ -215,7 +214,7 @@ states via icet's existing `get_density_of_states_wl`:
 from mchammer.data_containers.wang_landau_data_container import (
     get_density_of_states_wl,
 )
-dcs = {i: r.data_container() for i, r in enumerate(pt.pool.replicas)}
+dcs = dict(enumerate(pt.pool.data_containers()))
 df, errors = get_density_of_states_wl(dcs)
 # df.energy and df.entropy carry the stitched ln g(E).
 ```

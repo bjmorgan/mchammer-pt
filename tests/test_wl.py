@@ -413,24 +413,10 @@ def test_wl_pt_resume_rejects_mismatched_ce(tmp_path):
 
 
 def test_wl_pt_resume_rejects_mismatched_ensemble_cls(tmp_path):
-    """Resume with a different `ensemble_cls` than was used to save fails.
-
-    Requires icet's `OneOverTWangLandauEnsemble` (in the patched fork
-    at https://gitlab.com/bjmorgan/icet) so we have a second class to
-    mismatch against the base `WangLandauEnsemble` default. Skips
-    cleanly on mainline icet.
-    """
-    one_over_t = pytest.importorskip(
-        "mchammer.ensembles.one_over_t_wang_landau_ensemble",
-        reason=(
-            "requires icet's OneOverTWangLandauEnsemble; install "
-            "the patched icet from "
-            "https://gitlab.com/bjmorgan/icet"
-        ),
-    )
-    OneOverTWangLandauEnsemble = one_over_t.OneOverTWangLandauEnsemble
-
+    """Resume with a different `ensemble_cls` than was used to save fails."""
     from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._ensemble_fixtures import TaggedWangLandauEnsemble
+
     e0 = _initial_energy()
     pt = WangLandauParallelTempering(
         cluster_expansion=make_wl_ce(),
@@ -439,12 +425,13 @@ def test_wl_pt_resume_rejects_mismatched_ensemble_cls(tmp_path):
         energy_spacing=0.1,
         block_size=5,
         random_seed=0,
-        ensemble_cls=OneOverTWangLandauEnsemble,
+        ensemble_cls=TaggedWangLandauEnsemble,
+        ensemble_kwargs={"tag": "mismatch-test"},
     )
     pt.run(n_cycles=2)
     cp = tmp_path / "wl.hdf5"
     pt.save_checkpoint(cp)
-    # Original used OneOverTWangLandauEnsemble; resume with the
+    # Original used TaggedWangLandauEnsemble; resume with the
     # default (base WangLandauEnsemble) should be rejected by the
     # FQN mismatch.
     with pytest.raises(ValueError, match="ensemble_cls FQN"):
@@ -506,3 +493,42 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         from mchammer_pt.checkpoint import _compute_ensemble_kwargs_hash
         empty_hash = _compute_ensemble_kwargs_hash({})
         assert pt._ensemble_kwargs_hash != empty_hash
+
+
+def test_wl_pt_process_pool_resume_round_trip_preserves_non_default_ensemble(
+    tmp_path,
+):
+    """Full process_pool checkpoint/resume round-trip with non-default ensemble."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._ensemble_fixtures import TaggedWangLandauEnsemble
+
+    e0 = _initial_energy()
+    cp = tmp_path / "wl_ckpt.hdf5"
+
+    with WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=TaggedWangLandauEnsemble,
+        ensemble_kwargs={"tag": "round-trip-test"},
+    ) as pt_a:
+        pt_a.run(n_cycles=2)
+        pt_a.save_checkpoint(cp)
+        expected_fqn = pt_a._ensemble_cls_fqn
+        expected_hash = pt_a._ensemble_kwargs_hash
+
+    pt_b = WangLandauParallelTempering.resume_process_pool(
+        cp,
+        cluster_expansion=make_wl_ce(),
+        ensemble_cls=TaggedWangLandauEnsemble,
+        ensemble_kwargs={"tag": "round-trip-test"},
+    )
+    try:
+        assert pt_b._ensemble_cls_fqn == expected_fqn
+        assert pt_b._ensemble_kwargs_hash == expected_hash
+        pt_b.run(n_cycles=1)
+    finally:
+        pt_b._pool.shutdown()

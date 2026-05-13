@@ -95,6 +95,21 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
         assert not flags.any()
 
 
+def test_serial_wl_pool_swap_configurations_refreshes_window_flag():
+    """After a swap, each replica's _reached_energy_window is True."""
+    pool = _make_serial_wl_pool(n_replicas=2)
+    # Drive replicas to different occupations so swap is meaningful.
+    r0, r1 = pool._replicas[0], pool._replicas[1]
+    occ = r1.current_occupations().copy()
+    occ[[0, -1]] = occ[[-1, 0]]
+    r1.set_occupations(occ)
+
+    pool.swap_configurations(0, 1)
+
+    assert r0.ensemble._reached_energy_window is True
+    assert r1.ensemble._reached_energy_window is True
+
+
 def test_serial_wl_pool_satisfies_observable_protocol():
     from mchammer_pt.parallel.backend import WangLandauObservablePool
     pool = _make_serial_wl_pool()

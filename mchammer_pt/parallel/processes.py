@@ -17,18 +17,20 @@ from typing import Any, Literal, NoReturn
 
 import numpy as np
 from ase import Atoms
-from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (
     BaseDataContainer,
 )
-from mchammer.ensembles import (  # type: ignore[import-untyped]
+from mchammer.ensembles import (
     CanonicalEnsemble,
     WangLandauEnsemble,
 )
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
+from ..wl_replica import WangLandauReplica
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
@@ -167,10 +169,26 @@ class ProcessPool:
         except BaseException:
             self.shutdown()
             raise
+        self._ensemble_cls_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        self._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(
+            ensemble_kwargs
+        )
 
     def _check_open(self) -> None:
         if not self._workers:
             raise RuntimeError("pool is shut down")
+
+    @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully-qualified name of the ensemble class used by workers."""
+        return self._ensemble_cls_fqn
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """SHA-256 hash of the ensemble kwargs forwarded to workers."""
+        return self._ensemble_kwargs_hash
 
     def _drain_remaining_replies(self, indices: list[int]) -> None:
         """Read pending replies on the given worker connections, ignoring contents."""
@@ -603,11 +621,10 @@ class ProcessWangLandauPool:
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per replica.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble` (base; icet's mainline halving-phase
-            variant). To use the 1/t schedule, pass
-            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
-            patched fork explicitly. Spawned workers re-import by
-            FQN; interactive-`__main__` classes are not supported.
+            `WangLandauEnsemble`. To use the 1/t schedule, pass
+            ``ensemble_kwargs={'schedule': '1_over_t'}``. Spawned
+            workers re-import by FQN; interactive-``__main__``
+            classes are not supported.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Must be picklable for the spawn boundary.
     """
@@ -624,7 +641,9 @@ class ProcessWangLandauPool:
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
-        windows_list = [tuple(w) for w in windows]
+        windows_list: list[tuple[float | None, float | None]] = [
+            (lo, hi) for lo, hi in windows
+        ]
         seeds_list = list(seeds)
         atoms_list = list(initial_atoms)
         if len(atoms_list) != len(windows_list):
@@ -672,10 +691,26 @@ class ProcessWangLandauPool:
         except BaseException:
             self.shutdown()
             raise
+        self._ensemble_cls_fqn = (
+            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+        )
+        self._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(
+            ensemble_kwargs
+        )
 
     def _check_open(self) -> None:
         if not self._workers:
             raise RuntimeError("pool is shut down")
+
+    @property
+    def ensemble_cls_fqn(self) -> str:
+        """Fully-qualified name of the ensemble class used by workers."""
+        return self._ensemble_cls_fqn
+
+    @property
+    def ensemble_kwargs_hash(self) -> str:
+        """SHA-256 hash of the ensemble kwargs forwarded to workers."""
+        return self._ensemble_kwargs_hash
 
     def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
         """Receive a (status, payload) reply or raise a clear exception.
@@ -974,7 +1009,7 @@ class ProcessWangLandauPool:
 
     def attach_observer_factory(
         self,
-        factory: Callable[[Replica], BaseObserver],
+        factory: Callable[[WangLandauReplica], BaseObserver],
         *,
         replicas: Sequence[int] | Literal["all"] = "all",
     ) -> None:

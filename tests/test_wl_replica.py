@@ -182,24 +182,20 @@ def test_wl_replica_snapshot_and_restore_round_trip(tmp_path):
 def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     """1/t-schedule fields round-trip through snapshot/restore.
 
-    Requires icet's `OneOverTWangLandauEnsemble`, which lives in the
-    patched icet fork at https://gitlab.com/bjmorgan/icet. Skips
-    cleanly when running against mainline icet.
+    Requires icet with ``schedule`` parameter on
+    ``WangLandauEnsemble``. Skips cleanly on mainline icet.
     """
-    one_over_t = pytest.importorskip(
-        "mchammer.ensembles.one_over_t_wang_landau_ensemble",
-        reason=(
-            "requires icet's OneOverTWangLandauEnsemble; install "
-            "the patched icet from "
-            "https://gitlab.com/bjmorgan/icet"
-        ),
-    )
-    OneOverTWangLandauEnsemble = one_over_t.OneOverTWangLandauEnsemble
+    import inspect
 
-    from mchammer.calculators import (  # type: ignore[import-untyped]
+    from mchammer.ensembles import WangLandauEnsemble
+
+    if "schedule" not in inspect.signature(WangLandauEnsemble.__init__).parameters:
+        pytest.skip("requires icet with WangLandauEnsemble schedule parameter")
+
+    from mchammer.calculators import (
         ClusterExpansionCalculator,
     )
-    from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+    from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
     )
 
@@ -216,7 +212,7 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
         energy_limit_left=e0 - 100.0,
         energy_limit_right=e0 + 100.0,
         random_seed=7,
-        ensemble_cls=OneOverTWangLandauEnsemble,
+        ensemble_kwargs={"schedule": "1_over_t"},
     )
     # Advance enough to enter the window (so _window_entry_step is set).
     replica.advance(100)
@@ -240,7 +236,7 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
         energy_limit_left=e0 - 100.0,
         energy_limit_right=e0 + 100.0,
         random_seed=7,
-        ensemble_cls=OneOverTWangLandauEnsemble,
+        ensemble_kwargs={"schedule": "1_over_t"},
         sites_by_species=extras["sites_by_species"],
     )
     assert (

@@ -1,4 +1,4 @@
-"""Test fixtures: CanonicalEnsemble subclasses for issue-6 tests.
+"""Test fixtures: ensemble subclasses for identity and custom-move tests.
 
 These live in a module file (not inside test functions) so that
 ProcessPool spawn workers can re-import them by fully qualified name.
@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
+from mchammer.ensembles import (  # type: ignore[import-untyped]
+    CanonicalEnsemble,
+    WangLandauEnsemble,
+)
 
 
 class TaggedCanonicalEnsemble(CanonicalEnsemble):
@@ -34,3 +37,16 @@ class HighAcceptanceCanonicalEnsemble(CanonicalEnsemble):
 
     def _acceptance_condition(self, potential_diff: float) -> bool:
         return True
+
+
+class TaggedWangLandauEnsemble(WangLandauEnsemble):
+    """WangLandauEnsemble subclass that stores an extra ``tag`` kwarg.
+
+    Used to verify that ``ensemble_cls`` and ``ensemble_kwargs`` are
+    forwarded through WangLandauReplica / orchestrator / pool
+    construction sites unchanged.
+    """
+
+    def __init__(self, *, tag: str, **kwargs: Any) -> None:
+        self.tag = tag
+        super().__init__(**kwargs)

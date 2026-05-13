@@ -22,10 +22,10 @@ if TYPE_CHECKING:
     from ..replica import Replica
 
 import numpy as np
-from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (
     BaseDataContainer,
 )
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 

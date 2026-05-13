@@ -22,15 +22,15 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.calculators import (  # type: ignore[import-untyped]
+from icet import ClusterExpansion
+from mchammer.calculators import (
     ClusterExpansionCalculator,
 )
-from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (
     BaseDataContainer,
 )
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.ensembles import CanonicalEnsemble
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 

@@ -14,9 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window; adjacent windows attempt configuration swaps between
   cycles using a within-window log-density-of-states ratio for
   acceptance. The base ``WangLandauEnsemble`` from mainline icet is
-  the default; pass ``ensemble_cls=OneOverTWangLandauEnsemble``
-  explicitly (from icet's patched fork at
-  https://gitlab.com/bjmorgan/icet) to use the 1/t schedule.
+  the default; pass ``ensemble_kwargs={'schedule': '1_over_t'}``
+  to use the Belardinelli-Pereyra 1/t schedule.
 - ``WangLandauParallelTempering`` orchestrator with
   ``save_checkpoint``/``resume`` (serial pool) and
   ``resume_process_pool``. ``run()`` stops early when every replica
@@ -54,14 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Default ``ensemble_cls`` for ``WangLandauReplica`` and
-  ``WangLandauParallelTempering`` is now base ``WangLandauEnsemble``
-  rather than ``OneOverTWangLandauEnsemble``. The 1/t schedule is
-  available only in icet's patched fork at
-  https://gitlab.com/bjmorgan/icet; users wanting it now pass
-  ``ensemble_cls=OneOverTWangLandauEnsemble`` explicitly. This
-  decouples the package from the fork; mainline icet users can
-  install and use mchammer-pt directly.
+- The 1/t schedule is now selected via
+  ``ensemble_kwargs={'schedule': '1_over_t'}`` rather than by
+  passing a separate ``ensemble_cls``. This follows icet's
+  refactoring of the Belardinelli-Pereyra schedule into the base
+  ``WangLandauEnsemble`` class.
 - Lifted ``temperatures`` off the base ``ReplicaPool`` protocol
   into a new ``CanonicalPool`` subprotocol. Existing
   ``SerialPool``/``ProcessPool`` classes continue to satisfy

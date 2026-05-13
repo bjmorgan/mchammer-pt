@@ -16,8 +16,8 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped]
+from icet import ClusterExpansion
+from mchammer.ensembles import WangLandauEnsemble
 
 from .base import BaseParallelTempering
 from .checkpoint import (
@@ -93,16 +93,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
         data_container_file: optional path; if given, `run` writes a
             schema-3 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble` (base; icet's mainline halving-phase
-            variant). To use the 1/t schedule, pass
-            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
-            patched fork explicitly.
+            `WangLandauEnsemble`. To use the 1/t schedule, pass
+            ``ensemble_kwargs={'schedule': '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
         ValueError: on window validation or length-mismatch failures.
     """
+
+    _pool: WangLandauPool  # narrow from ReplicaPool
 
     def __init__(
         self,
@@ -189,16 +189,24 @@ class WangLandauParallelTempering(BaseParallelTempering):
             random_seed=master_seed,
             template_atoms=atoms_list[0],
         )
-        self._windows = [tuple(w) for w in windows]
+        self._windows: list[tuple[float | None, float | None]] = [
+            (lo, hi) for lo, hi in windows
+        ]
         self._energy_spacing = float(energy_spacing)
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
         self._ce_identity = _compute_ce_identity(cluster_expansion)
-        self._ensemble_cls_fqn = (
+        # Read identity from the pool when available (process pools
+        # carry it); otherwise compute from the constructor args (which
+        # are correct for the serial-build path where the guard
+        # ensures ensemble_cls/ensemble_kwargs are defaults).
+        pool_fqn = getattr(pool, "ensemble_cls_fqn", None)
+        pool_hash = getattr(pool, "ensemble_kwargs_hash", None)
+        self._ensemble_cls_fqn = pool_fqn if pool_fqn is not None else (
             f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
         )
-        self._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(
-            ensemble_kwargs
+        self._ensemble_kwargs_hash = pool_hash if pool_hash is not None else (
+            _compute_ensemble_kwargs_hash(ensemble_kwargs)
         )
         self.cycles_in_segment = 0
 
@@ -264,10 +272,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 self._try_exchange(int(pair), int(pair) + 1, c, history)
             history.energies_per_cycle[c + 1] = self._pool.current_energies()
             history.replica_labels_per_cycle[c + 1] = self._replica_labels
-            for cb in self._cycle_callbacks:
-                cb.on_cycle_end(c, n_cycles, history)
             self.cycles_in_segment = c + 1
-            if self._pool.converged_flags().all():
+            converged = self._pool.converged_flags().all()
+            effective_n = c + 1 if converged else n_cycles
+            for cb in self._cycle_callbacks:
+                cb.on_cycle_end(c, effective_n, history)
+            if converged:
                 break
         if self._data_container_file is not None:
             _write_checkpoint(self, Path(self._data_container_file))
@@ -483,7 +493,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         common case of an even split. Power users construct
         `windows` by hand.
         """
-        from mchammer.ensembles.wang_landau_ensemble import (  # type: ignore[import-untyped]
+        from mchammer.ensembles.wang_landau_ensemble import (
             get_bins_for_parallel_simulations,
         )
 
@@ -557,26 +567,20 @@ class WangLandauParallelTempering(BaseParallelTempering):
         except BaseException:
             tmpdir.cleanup()
             raise
-        pt = cls(
-            cluster_expansion=cluster_expansion,
-            atoms=atoms,
-            windows=windows,
-            energy_spacing=energy_spacing,
-            block_size=block_size,
-            random_seed=random_seed,
-            pool=pool,
-            data_container_file=data_container_file,
-        )
-        # The constructor's pool-plus-ensemble-kwargs guard prevents
-        # forwarding `ensemble_cls`/`ensemble_kwargs` past `pool=`, so
-        # the call above leaves the orchestrator's identity hashes
-        # computed from the defaults — not from the kwargs the workers
-        # actually received. Re-stamp from the real values now, so a
-        # checkpoint written by this run records what ran rather than
-        # what the constructor's defaults would have been.
-        pt._ensemble_cls_fqn = (
-            f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
-        )
-        pt._ensemble_kwargs_hash = _compute_ensemble_kwargs_hash(ensemble_kwargs)
+        try:
+            pt = cls(
+                cluster_expansion=cluster_expansion,
+                atoms=atoms,
+                windows=windows,
+                energy_spacing=energy_spacing,
+                block_size=block_size,
+                random_seed=random_seed,
+                pool=pool,
+                data_container_file=data_container_file,
+            )
+        except BaseException:
+            pool.shutdown()
+            tmpdir.cleanup()
+            raise
         weakref.finalize(pt, tmpdir.cleanup)
         return pt

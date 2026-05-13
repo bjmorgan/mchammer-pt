@@ -2,10 +2,9 @@
 
 Sibling of `mchammer_pt.replica.Replica`. Wraps a single
 `icet.mchammer.ensembles.WangLandauEnsemble` for use inside the REWL
-orchestrator. Defaults to the base `WangLandauEnsemble` shipped by
-mainline icet; pass `ensemble_cls=OneOverTWangLandauEnsemble`
-explicitly (from icet's patched fork at
-https://gitlab.com/bjmorgan/icet) to use the 1/t schedule.
+orchestrator. To use the Belardinelli-Pereyra 1/t schedule, pass
+``ensemble_kwargs={'schedule': '1_over_t'}``; the default
+``schedule='halving'`` gives the standard WL fill-factor scheme.
 """
 
 from __future__ import annotations
@@ -17,16 +16,19 @@ from typing import Any
 
 import numpy as np
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.calculators import (  # type: ignore[import-untyped]
+from icet import ClusterExpansion
+from mchammer.calculators import (
     ClusterExpansionCalculator,
 )
-from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (
+    BaseDataContainer,
+)
+from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
-from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped]
+from mchammer.ensembles import WangLandauEnsemble
 from mchammer.observers.base_observer import (
-    BaseObserver,  # type: ignore[import-untyped]
+    BaseObserver,
 )
 
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
@@ -103,10 +105,8 @@ class WangLandauReplica:
         energy_limit_right: upper window edge, or None for unbounded.
         random_seed: seed for this replica's MC random generator.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble` (base; icet's mainline halving-phase
-            variant). To use the 1/t schedule, pass
-            `ensemble_cls=OneOverTWangLandauEnsemble` from icet's
-            patched fork explicitly.
+            `WangLandauEnsemble`. To use the 1/t schedule, pass
+            ``ensemble_kwargs={'schedule': '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Reserved names (see `_RESERVED_ENSEMBLE_KWARGS`) cannot
             appear here — they are set by the wrapper.
@@ -310,18 +310,12 @@ class WangLandauReplica:
             histogram=OrderedDict(sorted(e._histogram.items())),
             entropy=OrderedDict(sorted(e._entropy.items())),
         )
-        # The 1/t schedule fields live directly on `_last_state`
-        # rather than via `_update_last_state`, mirroring the inline
-        # writes performed by
-        # `OneOverTWangLandauEnsemble.write_data_container`.
-        # 1/t-schedule subclasses (e.g. icet's
-        # `OneOverTWangLandauEnsemble` in the patched fork) carry
-        # these extra fields on `_last_state`. Detect via `hasattr`
-        # rather than `isinstance` so the package works against any
-        # `WangLandauEnsemble` subclass without importing it
-        # directly. The check is icet-1/t-specific: a future
-        # unrelated subclass defining `_in_one_over_t_phase` with
-        # different semantics would be silently mis-handled here.
+        # `schedule` and the 1/t-phase fields live directly on
+        # `_last_state` rather than via `_update_last_state`, mirroring
+        # icet's `write_data_container`. `_restart_ensemble` validates
+        # `schedule` on resume, so it must always be present.
+        if hasattr(e, "_schedule"):
+            e._data_container._last_state["schedule"] = e._schedule
         if hasattr(e, "_in_one_over_t_phase"):
             e._data_container._last_state[
                 "in_one_over_t_phase"
@@ -341,7 +335,7 @@ class WangLandauReplica:
 
     def restore_state(
         self,
-        container: WangLandauDataContainer,
+        container: BaseDataContainer,
         *,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> None:
@@ -350,6 +344,13 @@ class WangLandauReplica:
         Validates the proposed energy from the container's
         ``_last_state`` before touching any ensemble state, so a
         window violation leaves the replica untouched.
+
+        ``container`` is a `BaseDataContainer` (not a
+        `WangLandauDataContainer`) because `read_hdf5` deserialises
+        containers generically. Only ``_last_state`` is needed for
+        restoration; the existing `WangLandauDataContainer` on the
+        ensemble is preserved so WL-specific post-processing methods
+        remain available after resume.
         """
         # `BaseDataContainer.read` deserialises `_last_state` via JSON,
         # which coerces integer dict keys to strings.
@@ -377,8 +378,12 @@ class WangLandauReplica:
                 f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
 
-        # Validation passed; do the actual restoration.
-        self._ensemble._data_container = container
+        # Copy the saved state into the existing WL-typed container
+        # rather than replacing it wholesale. `read_hdf5` returns
+        # `BaseDataContainer` instances; assigning one to the ensemble
+        # would lose the `WangLandauDataContainer` subclass and break
+        # WL-specific post-processing.
+        self._ensemble._data_container._last_state = container._last_state
         caller_state = random.getstate()
         random.setstate(self._rng_state)
         try:
@@ -398,7 +403,7 @@ class WangLandauReplica:
     @classmethod
     def restart_from(
         cls,
-        container: WangLandauDataContainer,
+        container: BaseDataContainer,
         *,
         cluster_expansion: ClusterExpansion,
         atoms: Atoms,
