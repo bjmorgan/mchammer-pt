@@ -310,8 +310,11 @@ class WangLandauReplica:
         # `schedule` and the 1/t-phase fields live directly on
         # `_last_state` rather than via `_update_last_state`, mirroring
         # icet's `write_data_container`. `_restart_ensemble` validates
-        # `schedule` on resume, so it must always be present.
-        e._data_container._last_state["schedule"] = e._schedule
+        # `schedule` on resume, so it must always be present when the
+        # attribute exists (patched icet); mainline icet does not have
+        # `_schedule` and its `_restart_ensemble` does not check it.
+        if hasattr(e, "_schedule"):
+            e._data_container._last_state["schedule"] = e._schedule
         if hasattr(e, "_in_one_over_t_phase"):
             e._data_container._last_state[
                 "in_one_over_t_phase"
