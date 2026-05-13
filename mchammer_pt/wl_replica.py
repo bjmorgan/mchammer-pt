@@ -67,16 +67,32 @@ def _coerce_wl_last_state_keys_to_int(last_state: dict[str, Any]) -> None:
         first_key = next(iter(value))
         if isinstance(first_key, int):
             continue  # already int-keyed
-        converted: dict[int, Any] = {}
-        for key, val in value.items():
-            if isinstance(val, dict):
-                val = {int(k): v for k, v in val.items()}
-            converted[int(key)] = val
+        try:
+            converted: dict[int, Any] = {}
+            for key, val in value.items():
+                if isinstance(val, dict):
+                    val = {int(k): v for k, v in val.items()}
+                converted[int(key)] = val
+        except ValueError as exc:
+            raise ValueError(
+                f"WL `_last_state` field {tag!r} contains a non-integer "
+                f"bin key; the checkpoint is malformed. Original error: "
+                f"{exc}"
+            ) from exc
         last_state[tag] = converted
 
 
 class WangLandauReplica:
     """One Wang-Landau ensemble at one energy window, wrapped for REWL use.
+
+    Invariant: a `WangLandauReplica` always has a configuration whose
+    energy lies inside its assigned window. The constructor validates
+    this at startup, and both `set_occupations` and `restore_state`
+    validate the proposed energy before mutating any state so a
+    window-violating call leaves the replica untouched. The REWL
+    acceptance formula in `WangLandauParallelTempering._log_prob_ratio`
+    relies on this invariant to short-circuit cleanly when only the
+    "cross-bin" terms can be -inf.
 
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
@@ -214,22 +230,22 @@ class WangLandauReplica:
         the new configuration. Without this refresh, the next trial
         step would look up the wrong bin in `_entropy`, silently
         corrupting the entropy estimate.
+
+        Validates the proposed configuration's energy before mutating
+        any state, so a window violation leaves the replica untouched.
         """
         occ = np.asarray(occupations, dtype=int)
         e = self._ensemble
-        e.update_occupations(sites=list(range(len(occ))), species=list(occ))
-        e._potential = float(
-            e.calculator.calculate_total(occupations=e.configuration.occupations)
-        )
-        new_bin = e._get_bin_index(e._potential)
+        proposed_potential = float(e.calculator.calculate_total(occupations=occ))
+        new_bin = e._get_bin_index(proposed_potential)
         if new_bin is None or not e._inside_energy_window(new_bin):
             raise ValueError(
-                f"set_occupations would leave replica at energy {e._potential} "
-                f"(bin {new_bin}), outside window "
-                f"[{self._energy_limit_left}, {self._energy_limit_right}]. "
-                f"REWL swap callers must guard out-of-window energies upstream; "
-                f"reaching this path indicates a missing guard."
+                f"set_occupations would leave replica at energy "
+                f"{proposed_potential} (bin {new_bin}), outside window "
+                f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
+        e.update_occupations(sites=list(range(len(occ))), species=list(occ))
+        e._potential = proposed_potential
         e._reached_energy_window = True
 
     def advance(self, n_steps: int) -> None:
@@ -319,8 +335,12 @@ class WangLandauReplica:
         *,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> None:
-        """Mutate this replica to match a saved checkpoint."""
-        self._ensemble._data_container = container
+        """Mutate this replica to match a saved checkpoint.
+
+        Validates the proposed energy from the container's
+        ``_last_state`` before touching any ensemble state, so a
+        window violation leaves the replica untouched.
+        """
         # `BaseDataContainer.read` deserialises `_last_state` via JSON,
         # which coerces integer dict keys to strings.
         # `WangLandauDataContainer.read` overrides this and converts
@@ -330,6 +350,25 @@ class WangLandauReplica:
         # so the conversion has to happen here for `_restart_ensemble`
         # to find its integer-keyed bin lookups.
         _coerce_wl_last_state_keys_to_int(container._last_state)
+
+        # Validate the proposed configuration's energy before mutating
+        # any ensemble state.
+        proposed_occ = np.asarray(
+            container._last_state["occupations"], dtype=int
+        )
+        proposed_potential = float(
+            self._ensemble.calculator.calculate_total(occupations=proposed_occ)
+        )
+        new_bin = self._ensemble._get_bin_index(proposed_potential)
+        if new_bin is None or not self._ensemble._inside_energy_window(new_bin):
+            raise ValueError(
+                f"restore_state would leave replica at energy "
+                f"{proposed_potential} (bin {new_bin}), outside window "
+                f"[{self._energy_limit_left}, {self._energy_limit_right}]."
+            )
+
+        # Validation passed; do the actual restoration.
+        self._ensemble._data_container = container
         caller_state = random.getstate()
         random.setstate(self._rng_state)
         try:
@@ -339,20 +378,9 @@ class WangLandauReplica:
             random.setstate(caller_state)
         # After `_restart_ensemble`, configuration occupations match
         # the saved state; refresh the WL-cached potential and window
-        # flag the same way `set_occupations` does.
+        # flag (reusing the already-computed potential).
         e = self._ensemble
-        e._potential = float(
-            e.calculator.calculate_total(occupations=e.configuration.occupations)
-        )
-        new_bin = e._get_bin_index(e._potential)
-        if new_bin is None or not e._inside_energy_window(new_bin):
-            raise ValueError(
-                f"restore_state would leave replica at energy {e._potential} "
-                f"(bin {new_bin}), outside window "
-                f"[{self._energy_limit_left}, {self._energy_limit_right}]. "
-                f"REWL swap callers must guard out-of-window energies upstream; "
-                f"reaching this path indicates a missing guard."
-            )
+        e._potential = proposed_potential
         e._reached_energy_window = True
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species

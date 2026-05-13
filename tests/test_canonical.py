@@ -511,3 +511,42 @@ def test_process_pool_records_actual_ensemble_identity(toy_ce, toy_atoms):
         empty_hash = _compute_ensemble_kwargs_hash({})
         assert pt._ensemble_kwargs_hash != ""
         assert pt._ensemble_kwargs_hash != empty_hash
+
+
+def test_process_pool_resume_round_trip_preserves_non_default_ensemble(
+    toy_ce, toy_atoms, tmp_path,
+):
+    """Full process_pool checkpoint/resume round-trip with non-default ensemble."""
+    from tests._ensemble_fixtures import TaggedCanonicalEnsemble
+
+    cp = tmp_path / "ckpt.h5"
+
+    # First run: process_pool with non-default ensemble, save checkpoint.
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0],
+        block_size=10,
+        random_seed=0,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "round-trip-test"},
+    ) as pt_a:
+        pt_a.run(n_cycles=2)
+        pt_a.save_checkpoint(cp)
+        expected_fqn = pt_a._ensemble_cls_fqn
+        expected_hash = pt_a._ensemble_kwargs_hash
+
+    # Second run: resume_process_pool with the same ensemble; identity survives.
+    pt_b = CanonicalParallelTempering.resume_process_pool(
+        cp,
+        cluster_expansion=toy_ce,
+        ensemble_cls=TaggedCanonicalEnsemble,
+        ensemble_kwargs={"tag": "round-trip-test"},
+    )
+    try:
+        assert pt_b._ensemble_cls_fqn == expected_fqn
+        assert pt_b._ensemble_kwargs_hash == expected_hash
+        # Verify the resumed orchestrator can run another segment.
+        pt_b.run(n_cycles=1)
+    finally:
+        pt_b._pool.shutdown()

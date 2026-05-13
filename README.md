@@ -23,13 +23,15 @@ paths to the colder chains.
   configuration swaps with a within-window density-of-states ratio
   for acceptance. Serial and process-parallel backends as for the
   canonical orchestrator; checkpoint/resume into either pool kind.
-  An overlap-consistency integration test
-  (`tests/integration/test_rewl_2d_ising.py`, marked `slow`) exercises
-  REWL end-to-end on a 4x4 2D Ising fixture and would catch sign
-  errors or systematic biases in the swap formula. A full "REWL
-  recovers analytic DOS" comparison is still pending; production
-  users should plan to validate against ground truth on their own
-  system.
+  An analytic-DOS integration test
+  (`tests/integration/test_rewl_2d_ising.py`, marked `slow`)
+  exercises REWL end-to-end on a 4x4 2D Ising fixture: the stitched
+  ln g(E) curve is compared against the exact density of states
+  obtained by brute-force enumeration of all 2^16 configurations,
+  with the residual constrained in standard deviation and maximum
+  deviation. A sign error or systematic bias in the swap formula
+  would push the recovered curve away from the analytic result and
+  the test would fail.
 - Serial and multiprocessing backends, swappable via a single
   constructor argument.
 - Custom Monte Carlo moves: pass any `mchammer.CanonicalEnsemble`
@@ -213,11 +215,12 @@ df, errors = get_density_of_states_wl(dcs)
 # df.energy and df.entropy carry the stitched ln g(E).
 ```
 
-The `slow` integration test exercises a within-overlap consistency
-property as a regression gate; for production runs on a new system,
-plan to validate the recovered DOS against ground truth (e.g. by
-brute-force enumeration on a small case, or against an analytic
-result) before trusting downstream thermodynamic averages.
+The `slow` integration test compares the stitched ln g(E) on a
+4x4 2D Ising fixture against the analytic DOS from brute-force
+enumeration; for production runs on a new system, plan to validate
+the recovered DOS against ground truth (e.g. by brute-force
+enumeration on a small case, or against an analytic result) before
+trusting downstream thermodynamic averages.
 
 ## Examples
 

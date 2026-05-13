@@ -228,6 +228,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         E_i = self._pool.current_energy(i)
         E_j = self._pool.current_energy(j)
         g_i_Ei, g_i_Ej, g_j_Ei, g_j_Ej = self._pool.log_g_pair(i, j, E_i, E_j)
+        # Per the WangLandauReplica always-in-window invariant, the
+        # "same-bin" terms log g_i(E_i) and log g_j(E_j) are never
+        # -inf. Only the "cross-bin" terms can be -inf, which we
+        # short-circuit below.
         if g_i_Ej == -np.inf or g_j_Ei == -np.inf:
             # Swap would land at least one replica outside its window.
             return -float(np.inf)

@@ -196,3 +196,10 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         # The swap delivered configurations across; energies swap accordingly.
         assert e_after_0 == pytest.approx(e_before_1)
         assert e_after_1 == pytest.approx(e_before_0)
+
+        # After the swap, both replicas should be flagged in-window
+        # (their swapped-in energies were in the wide pool window).
+        # Probing log_g at the current energy returns finite iff
+        # _reached_energy_window is True and the bin is in-window.
+        assert pool.log_g(0, e_after_0) != -float("inf")
+        assert pool.log_g(1, e_after_1) != -float("inf")

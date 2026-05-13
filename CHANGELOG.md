@@ -40,13 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thermodynamic averages against the stitched density of states.
 - A ``slow``-marked integration test
   (``tests/integration/test_rewl_2d_ising.py``) exercising REWL
-  overlap-consistency on a 4x4 2D Ising fixture. After convergence,
-  two adjacent windows must agree on ln g(E) within their overlap up
-  to a single additive constant; a sign error or systematic bias in
-  the swap formula would push the two curves apart and the test would
-  fail. A full "REWL recovers analytic DOS" comparison via icet's
-  ``get_density_of_states_wl`` is a natural next step but is not
-  required for the current regression gate.
+  end-to-end on a 4x4 2D Ising fixture. After convergence, the
+  stitched ln g(E) curve from ``get_density_of_states_wl`` is
+  compared against the exact density of states obtained by
+  brute-force enumeration over all 2^16 configurations; the
+  residual is constrained in both standard deviation and maximum
+  deviation. A sign error or systematic bias in the swap formula
+  would push the recovered curve away from the analytic result and
+  the test would fail.
 
 ### Changed
 
@@ -60,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log-probability ratio as a clean swap rejection (legal in REWL
   when one replica's partner energy lies outside its window).
   ``+inf`` and ``NaN`` continue to raise.
+- ``WangLandauParallelTempering.cycles_completed`` renamed to
+  ``cycles_in_segment`` to reflect that it counts cycles in the
+  current ``run()`` call (resets to 0 on each call, including after
+  resume), not cumulative cycles across the full trajectory.
 - Bumped checkpoint schema to ``"3"``. Checkpoints written by
   v0.7.0 (schema ``"2"``) are not valid resume sources for this
   version; ``resume`` hard-errors with a clear message on the
