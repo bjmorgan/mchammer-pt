@@ -238,6 +238,8 @@ trusting downstream thermodynamic averages.
   long runs via `ProgressPrinter`.
 - `examples/07_resume.py` — checkpoint and resume a PT run, with
   bit-identical continuation.
+- `examples/08_rewl.py` — replica-exchange Wang-Landau on a 4x4
+  2D Ising model, with per-window seeding and DOS stitching.
 
 ## License
 
