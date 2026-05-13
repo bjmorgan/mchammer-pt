@@ -241,8 +241,9 @@ class BaseParallelTempering(ABC):
                 f"pair ({i}, {j}): log_r = {log_r}, "
                 f"E_i = {E_i}, E_j = {E_j}. "
                 f"Check for NaN/+inf replica energies (diverged MC, "
-                f"bad cluster expansion, etc.). Negative-infinity ratios "
-                f"are legal (e.g. out-of-window swap in REWL)."
+                f"bad cluster expansion, or a REWL replica that has "
+                f"drifted outside its own window). Negative-infinity ratios "
+                f"are legal (e.g. out-of-window partner energy in REWL)."
             )
         accepted = metropolis_accept(log_r, self._rng)
         pair_index = min(i, j)

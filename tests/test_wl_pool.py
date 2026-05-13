@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
@@ -92,3 +93,42 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
         flags = pool.converged_flags()
         assert flags.dtype == bool
         assert not flags.any()
+
+
+def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
+    """After a swap, each worker's _potential reflects the new configuration."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        # Drive the two replicas to different occupation vectors.
+        occ0 = pool.current_occupations(0).copy()
+        occ1 = occ0.copy()
+        occ1[[0, -1]] = occ1[[-1, 0]]  # swap first/last to differ
+
+        # Direct SET_OCC on worker 1 so its configuration is distinct.
+        _, conn1 = pool._workers[1]
+        conn1.send(("SET_OCC", np.asarray(occ1, dtype=np.int64)))
+        pool._recv_or_raise(conn1, "SET_OCC", 1)
+
+        e_before_0 = pool.current_energy(0)
+        e_before_1 = pool.current_energy(1)
+        assert e_before_0 != e_before_1, (
+            "test setup did not produce distinct energies"
+        )
+
+        # Now swap. Each worker should refresh its cached _potential
+        # to match the swapped-in configuration.
+        pool.swap_configurations(0, 1)
+        e_after_0 = pool.current_energy(0)
+        e_after_1 = pool.current_energy(1)
+
+        # The swap delivered configurations across; energies swap accordingly.
+        assert e_after_0 == pytest.approx(e_before_1)
+        assert e_after_1 == pytest.approx(e_before_0)

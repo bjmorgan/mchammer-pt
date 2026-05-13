@@ -1,16 +1,21 @@
-"""End-to-end REWL correctness gate: overlap consistency.
+"""End-to-end REWL correctness gate: recovers analytic 4x4 Ising DOS.
 
-Two adjacent windows that overlap should agree on ln g(E) within the
-overlap region, up to a single additive constant (each window's WL
-entropy is rebased periodically by icet). After alignment on a common
-anchor bin, the two curves must match within a tolerance set by the
-fill_factor_limit. This is the prerequisite the stitching procedure
-exploits; testing it directly does not require a stitching helper.
+Runs REWL with multiple overlapping windows on the 4x4 2D Ising
+system, stitches per-window ln g(E) curves via icet's
+`get_density_of_states_wl`, and compares against the analytic DOS
+computed by brute-force enumeration of all 2^16 = 65536 spin
+configurations. After aligning the stitched curve to the exact one
+by subtracting the mean residual (ln g is defined up to an
+additive constant), the residuals must lie within a tolerance set
+by the WL fill_factor_limit.
 
-A regression in `WangLandauParallelTempering._log_prob_ratio` (e.g. a
-sign error) would bias replica i toward one half of the overlap and
-replica j toward the other, and this test would diverge. Marked `slow`
-because it spins up two full WL ensembles and runs them to convergence.
+A regression in `_log_prob_ratio` (e.g. a sign error), in the WL
+ensemble state-refresh on swap (`_potential`,
+`_reached_energy_window`), or in how the orchestrator routes data
+containers, would all push the stitched curve off the exact one
+and this test would fail.
+
+Marked `slow` because it converges two-to-four full WL ensembles.
 
 Run manually:
 
@@ -19,30 +24,81 @@ Run manually:
 
 from __future__ import annotations
 
+from itertools import product
+
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.symbols import symbols2numbers
 from icet import ClusterExpansion, ClusterSpace  # type: ignore[import-untyped]
 from mchammer.calculators import (  # type: ignore[import-untyped]
     ClusterExpansionCalculator,
 )
+from mchammer.data_containers.wang_landau_data_container import (  # type: ignore[import-untyped]
+    get_density_of_states_wl,
+)
+
+
+def _build_4x4_ising() -> tuple[ClusterExpansion, Atoms]:
+    """Build the 4x4 AFM 2D Ising cluster expansion and prototype.
+
+    Same setup as icet's `WangLandauEnsemble` docstring example: a
+    single-layer FCC with `J=2` nearest-neighbour pair ECI on a
+    [Ag, Au] binary, repeated 4x4 in-plane.
+    """
+    primitive = Atoms(
+        "Au", positions=[[0.0, 0.0, 0.0]], cell=[1, 1, 10], pbc=True
+    )
+    cs = ClusterSpace(
+        structure=primitive,
+        cutoffs=[1.1],
+        chemical_symbols=["Ag", "Au"],
+    )
+    ce = ClusterExpansion(cluster_space=cs, parameters=[0, 0, 2])
+    prototype = primitive.repeat((4, 4, 1))
+    return ce, prototype
+
+
+def _exact_dos(
+    ce: ClusterExpansion,
+    prototype: Atoms,
+    energy_spacing: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Brute-force enumeration of the 4x4 Ising DOS.
+
+    Iterates over all 2^n_sites occupation vectors, evaluates the CE
+    energy of each, and bins by `energy_spacing`. Returns
+    `(energies, log_g)` arrays in ascending-energy order.
+    """
+    calc = ClusterExpansionCalculator(prototype.copy(), ce)
+    n_sites = len(prototype)
+    species_options = symbols2numbers(["Ag", "Au"])
+    counts: dict[int, int] = {}
+    for occupations in product(species_options, repeat=n_sites):
+        e = float(calc.calculate_total(occupations=np.array(occupations)))
+        bin_idx = int(round(e / energy_spacing))
+        counts[bin_idx] = counts.get(bin_idx, 0) + 1
+    bins = np.array(sorted(counts.keys()), dtype=int)
+    energies = bins * energy_spacing
+    log_g = np.log(np.array([counts[b] for b in bins], dtype=float))
+    return energies, log_g
 
 
 def _find_in_window_config(
     prototype: Atoms,
     ce: ClusterExpansion,
-    species_pair: tuple[str, str],
-    energy_range: tuple[float, float],
+    energy_range: tuple[float | None, float | None],
     rng: np.random.Generator,
     max_tries: int = 20_000,
 ) -> Atoms:
     """Random-search a configuration whose energy falls in `energy_range`.
 
-    Draws a random number of `species_pair[1]` atoms (the rest `[0]`)
-    and assigns them to random sites until the resulting energy lies
-    in the requested range, or `max_tries` is exhausted.
+    Draws a random number of `Au` atoms (rest `Ag`) at random sites
+    until the resulting energy lies in the requested window. Used to
+    seed each REWL replica with a configuration its
+    `_reached_energy_window` check accepts up front.
     """
-    species_a, species_b = species_pair
+    species_a, species_b = "Ag", "Au"
     n_sites = len(prototype)
     calc = ClusterExpansionCalculator(prototype.copy(), ce)
     lo, hi = energy_range
@@ -55,7 +111,7 @@ def _find_in_window_config(
         atoms = prototype.copy()
         atoms.set_chemical_symbols(symbols)
         e = float(calc.calculate_total(occupations=atoms.numbers))
-        if lo <= e <= hi:
+        if (lo is None or e >= lo) and (hi is None or e <= hi):
             return atoms
     raise RuntimeError(
         f"could not find config in {energy_range} after {max_tries} tries"
@@ -63,57 +119,40 @@ def _find_in_window_config(
 
 
 @pytest.mark.slow
-def test_rewl_overlap_consistency():
-    """Two overlapping windows agree on ln g(E) within the overlap.
-
-    Catches sign errors and other systematic biases in
-    `_log_prob_ratio`: a wrong sign would push replica 0's entropy
-    one direction and replica 1's the other across the overlap.
-    """
+def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
+    """Stitched REWL ln g(E) matches the exact 4x4 Ising DOS."""
     from mchammer.ensembles import (  # type: ignore[import-untyped]
         WangLandauEnsemble,
     )
 
     from mchammer_pt.wl import WangLandauParallelTempering
 
-    # 4x4 2D Ising on a single-layer FCC, AFM nearest-neighbour J=2.
-    # Same setup as icet's WangLandauEnsemble docstring example.
-    primitive = Atoms(
-        "Au", positions=[[0.0, 0.0, 0.0]], cell=[1, 1, 10], pbc=True
-    )
-    cs = ClusterSpace(
-        structure=primitive,
-        cutoffs=[1.1],
-        chemical_symbols=["Ag", "Au"],
-    )
-    ce = ClusterExpansion(cluster_space=cs, parameters=[0, 0, 2])
-
-    prototype = primitive.repeat((4, 4, 1))
-    rng = np.random.default_rng(0)
-
-    # Two overlapping windows. The 4x4 AFM Ising with J=2 has
-    # reachable energies on a grid of spacing 4 (each pair-flip costs
-    # one J-bond = 4 in our units), spanning [-32, 32]. We use
-    # energy_spacing=4.0 to match that natural grid: any finer
-    # produces large stretches of unreachable bins that the WL
-    # histogram cannot flatten over.
+    ce, prototype = _build_4x4_ising()
     energy_spacing = 4.0
-    windows = [(-32.0, 8.0), (-8.0, 32.0)]  # overlap is [-8, 8], 5 bins
-    overlap_lo, overlap_hi = -8.0, 8.0
 
-    # Per-window starting configurations whose energies fall in each window.
+    # Exact DOS by brute enumeration (cheap: 2^16 ~ 65k configurations).
+    exact_energies, exact_log_g = _exact_dos(ce, prototype, energy_spacing)
+
+    # Two overlapping windows covering the negative-half and
+    # positive-half of the energy range with a generous overlap
+    # around zero. Using 2 windows keeps wall-time low; bump to 4
+    # if the recovered curve is too noisy.
+    windows: list[tuple[float | None, float | None]] = [
+        (-64.0, 16.0),
+        (-16.0, 64.0),
+    ]  # overlap [-16, 16]
+
+    rng = np.random.default_rng(0)
     atoms_per_window = [
-        _find_in_window_config(prototype, ce, ("Ag", "Au"), w, rng)
-        for w in windows
+        _find_in_window_config(prototype, ce, w, rng) for w in windows
     ]
 
     # Use the base WangLandauEnsemble (halving-phase only). Its
     # convergence requires histogram flatness over the whole window
     # before each f halving, so both replicas must visit the overlap
-    # by the time they converge — which is exactly the regime in
-    # which overlap consistency is meaningful. The 1/t variant
-    # declares convergence on a step-count clock independent of
-    # coverage and is unsuitable for this gate.
+    # by the time they converge. The 1/t variant declares convergence
+    # on a step-count clock independent of coverage and is unsuitable
+    # for a shape-comparison gate at this wall-time budget.
     pt = WangLandauParallelTempering(
         cluster_expansion=ce,
         atoms=atoms_per_window,
@@ -124,48 +163,65 @@ def test_rewl_overlap_consistency():
         ensemble_cls=WangLandauEnsemble,
         ensemble_kwargs={"fill_factor_limit": 1e-3, "flatness_limit": 0.7},
     )
-    pt.run(n_cycles=2000)
-    assert pt.cycles_completed < 2000, (
-        f"failed to converge within 2000 cycles "
-        f"(got {pt.cycles_completed}); raise the cap or tighten the system"
+    pt.run(n_cycles=5000)
+    assert pt.cycles_in_segment < 5000, (
+        f"failed to converge within 5000 cycles "
+        f"(got {pt.cycles_in_segment}); raise the cap or relax "
+        f"fill_factor_limit"
     )
 
-    # Extract overlap-region entropies from each replica.
-    e0 = pt.pool.replicas[0].ensemble._entropy
-    e1 = pt.pool.replicas[1].ensemble._entropy
+    # Refresh each container's `_last_state` so the live container
+    # carries the WL fields (`fill_factor`, `fill_factor_history`,
+    # `entropy`, ...) that `get_density_of_states_wl` reads. mchammer
+    # normally populates these inside `write_data_container`; the
+    # `snapshot_for_checkpoint` path on `WangLandauReplica` does the
+    # same refresh in place. Stitch via icet's combiner.
+    pt.pool.snapshot_for_checkpoint()
+    dcs = {i: r.data_container() for i, r in enumerate(pt.pool.replicas)}
+    stitched_df, _stitch_errors = get_density_of_states_wl(dcs)
 
-    bin_lo = int(round(overlap_lo / energy_spacing))
-    bin_hi = int(round(overlap_hi / energy_spacing))
-    overlap_bins = list(range(bin_lo, bin_hi + 1))
+    # Map stitched (energy, entropy) to a dict for bin-aligned compare.
+    stitched_log_g = dict(zip(
+        np.round(
+            stitched_df["energy"].to_numpy() / energy_spacing
+        ).astype(int),
+        stitched_df["entropy"].to_numpy(),
+        strict=True,
+    ))
+    exact_bins = np.round(exact_energies / energy_spacing).astype(int)
+    exact_log_g_by_bin = dict(zip(exact_bins, exact_log_g, strict=True))
 
-    # Use only bins visited by BOTH replicas (each has a strict
-    # overlap region but the histogram-flatness condition may not
-    # fill every bin uniformly at this fill_factor_limit).
-    shared_bins = [b for b in overlap_bins if b in e0 and b in e1]
-    assert len(shared_bins) >= 4, (
-        f"too few shared overlap bins: {shared_bins}. "
-        f"Likely a setup problem (replicas did not visit the overlap)."
+    shared_bins = sorted(set(stitched_log_g) & set(exact_log_g_by_bin))
+    assert len(shared_bins) >= 5, (
+        f"too few shared bins between stitched and exact DOS: "
+        f"{shared_bins}"
     )
 
-    # Align on the shared bin with the lowest visit imbalance — any
-    # shared bin works; pick the lowest energy in the shared set as
-    # a deterministic anchor.
-    anchor = min(shared_bins)
-    delta0 = np.array([e0[b] - e0[anchor] for b in shared_bins])
-    delta1 = np.array([e1[b] - e1[anchor] for b in shared_bins])
-    max_disagreement = float(np.max(np.abs(delta0 - delta1)))
+    stitched = np.array([stitched_log_g[b] for b in shared_bins])
+    exact = np.array([exact_log_g_by_bin[b] for b in shared_bins])
 
-    # Tolerance: fill_factor_limit=1e-3 means each entropy update
-    # adds at most ~1e-3, so noise in the converged estimate is
-    # several times that per bin. A tolerance of 0.5 natural-log
-    # units is generous; a wrong-sign bug would diverge by many
-    # entropy units across the overlap and the test would fail
-    # loudly.
-    assert max_disagreement < 0.5, (
-        f"REWL overlap-consistency violated: replica 0 and replica 1 "
-        f"ln g(E) disagree by up to {max_disagreement:.3f} natural-log "
-        f"units across the overlap region (anchor=bin {anchor}, "
-        f"shared_bins={shared_bins}). "
-        f"delta0={delta0.tolist()}, delta1={delta1.tolist()}. "
-        f"A wrong sign in _log_prob_ratio would produce this."
+    # ln g is only defined up to an additive constant, so subtract
+    # the mean residual before comparing the shapes.
+    residual = stitched - exact
+    residual_centred = residual - residual.mean()
+    max_dev = float(np.max(np.abs(residual_centred)))
+    std_dev = float(np.std(residual_centred))
+
+    # Tolerances chosen so a sign-error or stale-_potential bug
+    # would fail loudly (those produce per-bin discrepancies of
+    # many ln-units); fill_factor_limit=1e-3 gives a converged-
+    # estimate noise of ~few * 1e-3 per bin, so the std-dev of
+    # the residual across the full range should be well under
+    # 0.5. The max-abs bound allows a single noisy bin to drift
+    # up to 1.5 ln-units.
+    assert std_dev < 0.5, (
+        f"REWL-recovered DOS shape diverges from analytic 4x4 Ising "
+        f"DOS: residual std = {std_dev:.3f} ln-units across "
+        f"{len(shared_bins)} bins. residual_centred = "
+        f"{residual_centred.tolist()}"
+    )
+    assert max_dev < 1.5, (
+        f"REWL-recovered DOS has a bin with large deviation from "
+        f"analytic: max |residual| = {max_dev:.3f} ln-units. "
+        f"residual_centred = {residual_centred.tolist()}"
     )

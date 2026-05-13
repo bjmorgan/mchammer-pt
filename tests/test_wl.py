@@ -173,7 +173,7 @@ def test_wl_pt_run_stops_on_all_converged():
         r.ensemble._converged = True
     pt.run(n_cycles=10)
     # Run should bail out after the first cycle's converged_flags check.
-    assert pt.cycles_completed == 1
+    assert pt.cycles_in_segment == 1
 
 
 def test_wl_pt_checkpoint_round_trip_is_bit_identical(tmp_path):
@@ -355,6 +355,29 @@ def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
     pt.save_checkpoint(cp)
     with h5py.File(cp, "r+") as f:
         f["meta"].attrs["schema_version"] = "999"
+    with pytest.raises(ValueError, match="schema_version"):
+        WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
+
+
+def test_wl_pt_resume_rejects_legacy_schema_2(tmp_path):
+    """A schema-2 checkpoint (v0.7.0 era) cannot resume as a schema-3 reader."""
+    import h5py
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+    with h5py.File(cp, "r+") as f:
+        f["meta"].attrs["schema_version"] = "2"
     with pytest.raises(ValueError, match="schema_version"):
         WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
 

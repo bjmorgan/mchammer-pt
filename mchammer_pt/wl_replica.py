@@ -25,6 +25,9 @@ from mchammer.ensembles import WangLandauEnsemble  # type: ignore[import-untyped
 from mchammer.ensembles.one_over_t_wang_landau_ensemble import (  # type: ignore[import-untyped]
     OneOverTWangLandauEnsemble,
 )
+from mchammer.observers.base_observer import (
+    BaseObserver,  # type: ignore[import-untyped]
+)
 
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
     {
@@ -188,8 +191,12 @@ class WangLandauReplica:
     def log_g(self, energy: float) -> float:
         """Return ln g at the given energy, or -inf if outside the window.
 
-        Reads the live `_entropy` dict on the WL ensemble. Unvisited
-        in-window bins return 0.0 (icet's default for missing keys).
+        Returns 0.0 (i.e. g = 1) for unvisited in-window bins. This is the
+        standard REWL convention: an unvisited bin is treated as singly-
+        degenerate, so a swap proposal that would target it incurs the
+        full WL acceptance bias. Returning -inf here would forbid the
+        swap until the bin is first visited by within-window MC, which
+        is the wrong physics for REWL exchange acceptance.
         """
         e = self._ensemble
         bin_idx = e._get_bin_index(energy)
@@ -214,9 +221,16 @@ class WangLandauReplica:
         e._potential = float(
             e.calculator.calculate_total(occupations=e.configuration.occupations)
         )
-        e._reached_energy_window = e._inside_energy_window(
-            e._get_bin_index(e._potential)
-        )
+        new_bin = e._get_bin_index(e._potential)
+        if new_bin is None or not e._inside_energy_window(new_bin):
+            raise ValueError(
+                f"set_occupations would leave replica at energy {e._potential} "
+                f"(bin {new_bin}), outside window "
+                f"[{self._energy_limit_left}, {self._energy_limit_right}]. "
+                f"REWL swap callers must guard out-of-window energies upstream; "
+                f"reaching this path indicates a missing guard."
+            )
+        e._reached_energy_window = True
 
     def advance(self, n_steps: int) -> None:
         """Run `n_steps` WL trial steps, isolating this replica's RNG stream.
@@ -245,7 +259,7 @@ class WangLandauReplica:
         """The replica's live `WangLandauDataContainer`."""
         return self._ensemble.data_container
 
-    def attach_mchammer_observer(self, observer) -> None:
+    def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach an mchammer observer; fires inside `advance(...)`."""
         self._ensemble.attach_observer(observer)
 
@@ -330,9 +344,16 @@ class WangLandauReplica:
         e._potential = float(
             e.calculator.calculate_total(occupations=e.configuration.occupations)
         )
-        e._reached_energy_window = e._inside_energy_window(
-            e._get_bin_index(e._potential)
-        )
+        new_bin = e._get_bin_index(e._potential)
+        if new_bin is None or not e._inside_energy_window(new_bin):
+            raise ValueError(
+                f"restore_state would leave replica at energy {e._potential} "
+                f"(bin {new_bin}), outside window "
+                f"[{self._energy_limit_left}, {self._energy_limit_right}]. "
+                f"REWL swap callers must guard out-of-window energies upstream; "
+                f"reaching this path indicates a missing guard."
+            )
+        e._reached_energy_window = True
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 
