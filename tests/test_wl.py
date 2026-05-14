@@ -637,9 +637,10 @@ def test_wl_pt_process_pool_accepts_n_walkers_per_window():
     )
     try:
         assert isinstance(pt, WangLandauParallelTempering)
-        assert len(pt._pool) == 2
+        assert len(pt.pool) == 2
+        assert len(pt.pool._slots[0]) == 2
     finally:
-        pt._pool.shutdown()
+        pt.pool.shutdown()
 
 
 def test_wl_pt_n_walkers_2_run_returns_correct_history_shape():
