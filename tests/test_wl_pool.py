@@ -558,7 +558,8 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
         seeds=[0],
         n_walkers_per_window=2,
     ) as pool:
-        # Advance both workers directly so histograms accumulate without entropy-sync zeroing
+        # Advance both workers directly so histograms accumulate without
+        # entropy-sync zeroing
         _, conn0 = pool._slots[0][0]
         _, conn1 = pool._slots[0][1]
         conn0.send(("ADVANCE", 20))

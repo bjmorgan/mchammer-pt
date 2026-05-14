@@ -621,21 +621,25 @@ def test_wl_pt_n_walkers_per_window_wrong_length_raises():
         )
 
 
-def test_wl_pt_process_pool_rejects_n_walkers_per_window():
-    """process_pool raises NotImplementedError for n_walkers_per_window > 1."""
+def test_wl_pt_process_pool_accepts_n_walkers_per_window():
+    """process_pool with n_walkers_per_window=2 returns a valid orchestrator."""
     from mchammer_pt.wl import WangLandauParallelTempering
 
     e0 = _initial_energy()
-    with pytest.raises(NotImplementedError, match="n_walkers_per_window"):
-        WangLandauParallelTempering.process_pool(
-            cluster_expansion=make_wl_ce(),
-            atoms=[make_wl_atoms(), make_wl_atoms()],
-            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
-            energy_spacing=0.1,
-            block_size=5,
-            random_seed=0,
-            n_walkers_per_window=2,
-        )
+    pt = WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    try:
+        assert isinstance(pt, WangLandauParallelTempering)
+        assert len(pt._pool) == 2
+    finally:
+        pt._pool.shutdown()
 
 
 def test_wl_pt_n_walkers_2_run_returns_correct_history_shape():
