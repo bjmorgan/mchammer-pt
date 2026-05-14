@@ -715,7 +715,7 @@ class ProcessWangLandauPool:
                     rng_seed = int(children[W_w].generate_state(1)[0])
                 self._slot_rngs.append(np.random.default_rng(rng_seed))
 
-                slot = []
+                slot: list[tuple[mp.process.BaseProcess, Connection]] = []
                 for w_seed in walker_seeds:
                     parent_conn, child_conn = ctx.Pipe(duplex=True)
                     process = ctx.Process(
@@ -945,12 +945,14 @@ class ProcessWangLandauPool:
     def converged_flags(self) -> np.ndarray:
         self._check_open()
         for slot in self._slots:
-            _, conn = slot[0]
-            conn.send(("CONVERGED",))
+            for _, conn in slot:
+                conn.send(("CONVERGED",))
         result = np.empty(len(self._slots), dtype=bool)
         for i, slot in enumerate(self._slots):
-            _, conn = slot[0]
-            result[i] = bool(self._recv_or_raise(conn, "CONVERGED", i))
+            result[i] = all(
+                bool(self._recv_or_raise(conn, "CONVERGED", f"window {i} walker {w}"))
+                for w, (_, conn) in enumerate(slot)
+            )
         return result
 
     def data_containers(self) -> list[BaseDataContainer]:
@@ -967,16 +969,55 @@ class ProcessWangLandauPool:
     def per_window_stats(self) -> list[dict[str, Any]]:
         self._check_open()
         for slot in self._slots:
-            _, conn = slot[0]
-            conn.send(("WL_STATS",))
+            for _, conn in slot:
+                conn.send(("WL_STATS",))
         result = []
         for i, slot in enumerate(self._slots):
-            _, conn = slot[0]
-            result.append(self._recv_or_raise(conn, "WL_STATS", i))
+            slot_stats = [
+                self._recv_or_raise(conn, "WL_STATS", f"window {i} walker {w}")
+                for w, (_, conn) in enumerate(slot)
+            ]
+            if len(slot_stats) == 1:
+                result.append(slot_stats[0])
+            else:
+                combined_hist: dict[int, int] = {}
+                for s in slot_stats:
+                    for k, v in s["histogram"].items():
+                        combined_hist[k] = combined_hist.get(k, 0) + v
+                result.append({
+                    "fill_factor": slot_stats[0]["fill_factor"],
+                    "halvings": slot_stats[0]["halvings"],
+                    "histogram": combined_hist,
+                    "converged": all(s["converged"] for s in slot_stats),
+                })
         return result
+
+    def per_window_data_containers(self) -> list[list[BaseDataContainer]]:
+        """All data containers grouped by window slot.
+
+        Returns a list of length n_windows; each entry is a list of
+        ``WangLandauDataContainer`` instances, one per walker in that slot.
+        """
+        self._check_open()
+        for slot in self._slots:
+            for _, conn in slot:
+                conn.send(("GET_DC",))
+        return [
+            [
+                self._recv_or_raise(conn, "GET_DC", f"window {i} walker {w}")
+                for w, (_, conn) in enumerate(slot)
+            ]
+            for i, slot in enumerate(self._slots)
+        ]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
+        if any(len(slot) > 1 for slot in self._slots):
+            raise NotImplementedError(
+                "checkpointing is not yet supported for n_walkers_per_window > 1; "
+                "pass data_container_file=None and avoid save_checkpoint() / "
+                "attach_checkpoint_writer() when using multiple walkers per window."
+            )
         for slot in self._slots:
             _, conn = slot[0]
             conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
