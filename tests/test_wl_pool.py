@@ -503,32 +503,45 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         n_walkers_per_window=2,
         ensemble_kwargs={"flatness_check_interval": 1, "fill_factor_limit": 0.5},
     ) as pool:
-        # Neither walker is converged initially
-        assert not pool.converged_flags()[0]
+        _, conn0 = pool._slots[0][0]
+        _, conn1 = pool._slots[0][1]
+
+        def _query_converged(conn):
+            conn.send(("CONVERGED",))
+            _, val = conn.recv()
+            return bool(val)
+
+        # Neither walker is converged initially; query directly to avoid
+        # all()-short-circuit pipe leaks that would desync subsequent sends.
+        assert not _query_converged(conn0)
+        assert not _query_converged(conn1)
 
         # Force-converge walker 0 only by advancing until it converges.
         # With a single bin and per-step flatness checks, convergence is
         # reached quickly once the walker is inside its window.
-        _, conn0 = pool._slots[0][0]
+        converged_w0 = False
         for _ in range(200):
             conn0.send(("ADVANCE", 1))
             conn0.recv()
-            conn0.send(("CONVERGED",))
-            _, val = conn0.recv()
-            if val:
+            if _query_converged(conn0):
+                converged_w0 = True
                 break
-        # Walker 0 converged; walker 1 has not been advanced
+        assert converged_w0, "walker 0 did not converge — test is inconclusive"
+
+        # Walker 0 converged; walker 1 has not been advanced.
+        # Now conn0 and conn1 are both fully drained, so converged_flags()
+        # will consume both replies without leaving orphans.
         assert not pool.converged_flags()[0]
 
         # Now converge walker 1 the same way
-        _, conn1 = pool._slots[0][1]
+        converged_w1 = False
         for _ in range(200):
             conn1.send(("ADVANCE", 1))
             conn1.recv()
-            conn1.send(("CONVERGED",))
-            _, val = conn1.recv()
-            if val:
+            if _query_converged(conn1):
+                converged_w1 = True
                 break
+        assert converged_w1, "walker 1 did not converge — test is inconclusive"
         assert pool.converged_flags()[0]
 
 
@@ -545,11 +558,15 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
         seeds=[0],
         n_walkers_per_window=2,
     ) as pool:
-        pool.advance_all(20)
-
-        # Collect individual WL_STATS from both workers
+        # Advance both workers directly so histograms accumulate without entropy-sync zeroing
         _, conn0 = pool._slots[0][0]
         _, conn1 = pool._slots[0][1]
+        conn0.send(("ADVANCE", 20))
+        conn1.send(("ADVANCE", 20))
+        pool._recv_or_raise(conn0, "ADVANCE", "window 0 walker 0")
+        pool._recv_or_raise(conn1, "ADVANCE", "window 0 walker 1")
+
+        # Collect individual WL_STATS from both workers
         conn0.send(("WL_STATS",))
         conn1.send(("WL_STATS",))
         _, s0 = conn0.recv()
