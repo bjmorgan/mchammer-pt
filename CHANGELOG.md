@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-14
+
 ### Added
 
 - Single-walker replica-exchange Wang-Landau (REWL) on top of
@@ -29,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ``WangLandauPool`` protocol plus ``SerialWangLandauPool`` and
   ``ProcessWangLandauPool`` implementations. The process pool
   spawns one OS process per replica with a new ``_wl_worker``
-  entry point and two REWL-specific opcodes (``LOG_G_AT``,
-  ``CONVERGED``) on top of the canonical-shared set.
+  entry point and REWL-specific opcodes (``LOG_G_AT``,
+  ``CONVERGED``, ``WL_STATS``) on top of the canonical-shared set.
 - Observer attach for REWL pools. ``SerialWangLandauPool`` and
   ``ProcessWangLandauPool`` now satisfy a new
   ``WangLandauObservablePool`` protocol (mirrors
@@ -40,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trajectories during a REWL run, then feed the per-replica data
   containers into icet's ``get_average_observables_wl`` for
   thermodynamic averages against the stitched density of states.
+- ``WangLandauProgressPrinter`` built-in ``CycleCallback`` for
+  monitoring REWL runs. Emits every ``interval`` cycles: a header
+  line (timestamp, cycle, elapsed, ETA, swap rates) followed by a
+  compact table with one row per window reporting fill factor,
+  number of WL halvings, bins visited, histogram flatness
+  (``min(H)/mean(H)`` — compare against your ``flatness_limit``),
+  and convergence status. Reads from live ensemble state via a new
+  ``pool.per_window_stats()`` method, so values are always current
+  regardless of ``ensemble_data_write_interval``.
 - A ``slow``-marked integration test
   (``tests/integration/test_rewl_2d_ising.py``) exercising REWL
   end-to-end on a 4x4 2D Ising fixture. After convergence, the
@@ -47,9 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compared against the exact density of states obtained by
   brute-force enumeration over all 2^16 configurations; the
   residual is constrained in both standard deviation and maximum
-  deviation. A sign error or systematic bias in the swap formula
-  would push the recovered curve away from the analytic result and
-  the test would fail.
+  deviation.
+- ``examples/08_rewl.py`` — self-contained REWL example on the 4x4
+  2D Ising model: window construction, per-window seeding, a
+  convergence run with ``WangLandauProgressPrinter``, and DOS
+  stitching via ``get_density_of_states_wl``.
 
 ### Changed
 

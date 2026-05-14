@@ -30,7 +30,7 @@ from .replica import Replica
 from .wl import WangLandauParallelTempering
 from .wl_replica import WangLandauReplica
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "BaseParallelTempering",
