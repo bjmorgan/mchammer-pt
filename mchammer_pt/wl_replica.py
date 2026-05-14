@@ -288,7 +288,7 @@ class WangLandauReplica:
         return self._ensemble.data_container
 
     def all_data_containers(self) -> list[WangLandauDataContainer]:
-        """Wraps `data_container()` in a list for interface parity with `WangLandauWindowGroup`."""
+        """Returns a single-element list containing this replica's data container."""
         return [self.data_container()]
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
@@ -304,8 +304,7 @@ class WangLandauReplica:
     ) -> None:
         """Attach a freshly-constructed observer.
 
-        Constructs ``cls(*args, **kwargs)`` and attaches it. Mirrors the
-        method of the same name on `WangLandauWindowGroup`.
+        Constructs ``cls(*args, **kwargs)`` and attaches it.
         """
         self.attach_mchammer_observer(cls(*args, **kwargs))
 
@@ -315,7 +314,6 @@ class WangLandauReplica:
     ) -> None:
         """Attach an observer constructed via ``factory(self)``.
 
-        Mirrors the method of the same name on `WangLandauWindowGroup`.
         ``factory`` must return a ``BaseObserver``.
         """
         observer = factory(self)

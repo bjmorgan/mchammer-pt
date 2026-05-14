@@ -143,7 +143,7 @@ class WangLandauWindowGroup:
         return self._replicas[0].data_container()
 
     def all_data_containers(self) -> list[WangLandauDataContainer]:
-        """All W data containers for user analysis."""
+        """All per-walker data containers."""
         return [r.data_container() for r in self._replicas]
 
     def window_stats(self) -> dict[str, Any]:

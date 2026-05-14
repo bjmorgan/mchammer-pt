@@ -584,7 +584,7 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
 
 
 def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
-    """n_walkers_per_window=[1, 2] creates a plain replica for window 0 and a group for window 1."""
+    """n_walkers_per_window=[1, 2]: window 0 is a plain replica, window 1 is a group."""
     from mchammer_pt.wl import WangLandauParallelTempering
     from mchammer_pt.wl_replica import WangLandauReplica
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
