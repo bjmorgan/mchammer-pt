@@ -11,6 +11,12 @@ from mchammer.observers.base_observer import BaseObserver
 
 from .wl_replica import WangLandauReplica
 
+_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
+    "checkpointing is not yet supported for n_walkers_per_window > 1; "
+    "pass data_container_file=None and avoid save_checkpoint() / "
+    "attach_checkpoint_writer() when using multiple walkers per window."
+)
+
 if TYPE_CHECKING:
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
@@ -107,6 +113,9 @@ class WangLandauWindowGroup:
 
         Used by pool-level metadata queries (ensemble class, observer
         snapshot). All walkers share the same ensemble class and kwargs.
+        For read-only metadata queries only; use `attach_mchammer_observer`,
+        `attach_observer_class`, or `attach_observer_factory` to add
+        observers to all walkers.
         """
         return self._replicas[0].ensemble
 
@@ -165,11 +174,7 @@ class WangLandauWindowGroup:
         }
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        raise NotImplementedError(
-            "checkpointing is not yet supported for n_walkers_per_window > 1; "
-            "pass data_container_file=None and avoid save_checkpoint() / "
-            "attach_checkpoint_writer() when using multiple walkers per window."
-        )
+        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""

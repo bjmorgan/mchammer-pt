@@ -415,6 +415,11 @@ def test_serial_wl_pool_attach_observer_class_dispatches_to_all_walkers():
 
     for r in pool._replicas[0]._replicas:
         assert "counter" in r.ensemble.observers
+    observer_ids = {
+        id(r.ensemble.observers["counter"])
+        for r in pool._replicas[0]._replicas
+    }
+    assert len(observer_ids) == len(pool._replicas[0]._replicas)
 
 
 def test_serial_wl_pool_swap_configurations_with_window_groups():

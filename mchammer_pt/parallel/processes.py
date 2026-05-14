@@ -34,6 +34,12 @@ from ..wl_replica import WangLandauReplica
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
+_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
+    "checkpointing is not yet supported for n_walkers_per_window > 1; "
+    "pass data_container_file=None and avoid save_checkpoint() / "
+    "attach_checkpoint_writer() when using multiple walkers per window."
+)
+
 
 def _merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
     """Average bin-wise entropy estimates across multiple walkers.
@@ -43,6 +49,9 @@ def _merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
 
     Returns:
         Merged entropy dict with bin-wise averages; missing bins contribute 0.0.
+        Unvisited bins are deliberately suppressed: frontier regions entered by
+        only a subset of walkers contribute a reduced entropy estimate until all
+        walkers reach them.
     """
     all_bins: set[int] = set()
     for e in entropies:
@@ -862,27 +871,31 @@ class ProcessWangLandauPool:
                 self._recv_or_raise(conn, "ADVANCE", f"window {i} walker {w}")
 
         # Phase 2: entropy sync for multi-walker slots
-        for i, slot in enumerate(self._slots):
-            if len(slot) == 1:
-                continue
-            for _, conn in slot:
-                conn.send(("GET_ENTROPY_SYNC_STATE",))
-            states = [
-                self._recv_or_raise(
-                    conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}"
-                )
-                for w, (_, conn) in enumerate(slot)
-            ]
-            target_len = max(s["fill_factor_history_len"] for s in states)
-            merged = _merge_entropies([s["entropy"] for s in states])
-            for w, (_, conn) in enumerate(slot):
-                extra = target_len - states[w]["fill_factor_history_len"]
-                conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
-            for w, (_, conn) in enumerate(slot):
-                self._recv_or_raise(
-                    conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}"
-                )
-            self._exchange_idx[i] = int(self._slot_rngs[i].integers(0, len(slot)))
+        try:
+            for i, slot in enumerate(self._slots):
+                if len(slot) == 1:
+                    continue
+                for _, conn in slot:
+                    conn.send(("GET_ENTROPY_SYNC_STATE",))
+                states = [
+                    self._recv_or_raise(
+                        conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}"
+                    )
+                    for w, (_, conn) in enumerate(slot)
+                ]
+                target_len = max(s["fill_factor_history_len"] for s in states)
+                merged = _merge_entropies([s["entropy"] for s in states])
+                for w, (_, conn) in enumerate(slot):
+                    extra = target_len - states[w]["fill_factor_history_len"]
+                    conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
+                for w, (_, conn) in enumerate(slot):
+                    self._recv_or_raise(
+                        conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}"
+                    )
+                self._exchange_idx[i] = int(self._slot_rngs[i].integers(0, len(slot)))
+        except Exception:
+            self.shutdown()
+            raise
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
@@ -927,7 +940,8 @@ class ProcessWangLandauPool:
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()
-        _, conn = self._slots[i][0]   # walker 0; all equivalent after sync
+        # walker 0; all walkers' entropies are equal after advance_all returns
+        _, conn = self._slots[i][0]
         conn.send(("LOG_G_AT", float(energy), float(energy)))
         g_at_E, _ = self._recv_or_raise(conn, "LOG_G_AT", i)
         return float(g_at_E)
@@ -936,8 +950,9 @@ class ProcessWangLandauPool:
         self, i: int, j: int, E_i: float, E_j: float,
     ) -> tuple[float, float, float, float]:
         self._check_open()
-        _, conn_i = self._slots[i][0]  # walker 0; all equivalent after sync
-        _, conn_j = self._slots[j][0]  # walker 0; all equivalent after sync
+        # walker 0; all walkers' entropies are equal after advance_all returns
+        _, conn_i = self._slots[i][0]
+        _, conn_j = self._slots[j][0]
         conn_i.send(("LOG_G_AT", float(E_i), float(E_j)))
         conn_j.send(("LOG_G_AT", float(E_i), float(E_j)))
         g_i_Ei, g_i_Ej = self._recv_or_raise(conn_i, "LOG_G_AT", i)
@@ -1017,11 +1032,7 @@ class ProcessWangLandauPool:
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
         if any(len(slot) > 1 for slot in self._slots):
-            raise NotImplementedError(
-                "checkpointing is not yet supported for n_walkers_per_window > 1; "
-                "pass data_container_file=None and avoid save_checkpoint() / "
-                "attach_checkpoint_writer() when using multiple walkers per window."
-            )
+            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
         for slot in self._slots:
             _, conn = slot[0]
             conn.send(("SNAPSHOT_FOR_CHECKPOINT",))

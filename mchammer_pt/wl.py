@@ -28,7 +28,10 @@ from .checkpoint import (
 from .exchange import pair_set_for_cycle
 from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
-from .parallel.processes import ProcessWangLandauPool
+from .parallel.processes import (
+    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    ProcessWangLandauPool,
+)
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica
 
@@ -165,10 +168,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"got {walkers_per_window}"
             )
         if any(w > 1 for w in walkers_per_window) and data_container_file is not None:
-            raise NotImplementedError(
-                "checkpointing is not yet supported for n_walkers_per_window > 1; "
-                "pass data_container_file=None when using multiple walkers per window."
-            )
+            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
         seed_sequence = np.random.SeedSequence(int(random_seed))
         if all(w == 1 for w in walkers_per_window):
@@ -251,7 +251,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         walker_replicas = [
                             WangLandauReplica(
                                 cluster_expansion=cluster_expansion,
-                                atoms=atoms_list[w].copy(),  # type: ignore[no-untyped-call]
+                                atoms=atoms_list[w],
                                 energy_spacing=energy_spacing,
                                 energy_limit_left=lo,
                                 energy_limit_right=hi,
