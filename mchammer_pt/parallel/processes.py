@@ -968,10 +968,10 @@ class ProcessWangLandauPool:
                 conn.send(("CONVERGED",))
         result = np.empty(len(self._slots), dtype=bool)
         for i, slot in enumerate(self._slots):
-            result[i] = all(
+            result[i] = all([
                 bool(self._recv_or_raise(conn, "CONVERGED", f"window {i} walker {w}"))
                 for w, (_, conn) in enumerate(slot)
-            )
+            ])
         return result
 
     def data_containers(self) -> list[BaseDataContainer]:
