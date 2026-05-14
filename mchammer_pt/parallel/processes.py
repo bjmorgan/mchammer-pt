@@ -387,7 +387,7 @@ class ProcessPool:
         freshly-spawned process pool to the saved state.
 
         Args:
-            containers: one container per worker, in slot order.
+            containers: one container per slot, in window order.
                 Length must equal `len(self)`.
             replica_extras: one per-replica extras dict per worker.
                 Each must carry a ``"sites_by_species"`` key.
@@ -883,8 +883,8 @@ class ProcessWangLandauPool:
         self, i: int, j: int, E_i: float, E_j: float,
     ) -> tuple[float, float, float, float]:
         self._check_open()
-        _, conn_i = self._slots[i][0]
-        _, conn_j = self._slots[j][0]
+        _, conn_i = self._slots[i][0]  # walker 0; all equivalent after sync
+        _, conn_j = self._slots[j][0]  # walker 0; all equivalent after sync
         conn_i.send(("LOG_G_AT", float(E_i), float(E_j)))
         conn_j.send(("LOG_G_AT", float(E_i), float(E_j)))
         g_i_Ei, g_i_Ej = self._recv_or_raise(conn_i, "LOG_G_AT", i)
