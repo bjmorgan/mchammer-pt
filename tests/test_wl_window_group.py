@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
@@ -105,3 +106,71 @@ def test_merge_entropies_noop_on_empty_entropies():
 
     for r in replicas:
         assert r.ensemble._entropy == {}
+
+
+def test_advance_calls_all_replicas_and_updates_exchange_idx():
+    """advance() advances all replicas and leaves _exchange_idx in range."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(3)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.advance(n_steps=5)
+
+    assert 0 <= group._exchange_idx < 3
+
+
+def test_exchange_methods_target_same_replica():
+    """current_energy, current_occupations, set_occupations all target _exchange_idx."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._exchange_idx = 1
+
+    assert group.current_energy() == replicas[1].current_energy()
+    assert np.array_equal(
+        group.current_occupations(), replicas[1].current_occupations()
+    )
+
+
+def test_log_g_returns_merged_value():
+    """log_g delegates to replica 0 (all identical after merge)."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    e = replicas[0].current_energy()
+    assert group.log_g(e) == replicas[0].log_g(e)
+
+
+def test_converged_requires_all_replicas():
+    """converged is True only when every replica is converged."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    assert not group.converged
+
+    # Simulate convergence by setting mchammer's internal convergence flag.
+    for r in replicas:
+        r.ensemble._converged = True
+    assert group.converged
+
+
+def test_all_data_containers_returns_w_containers():
+    """all_data_containers() returns one container per walker."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(3)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    containers = group.all_data_containers()
+    assert len(containers) == 3
+
+
+def test_snapshot_for_checkpoint_raises():
+    """snapshot_for_checkpoint raises NotImplementedError."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+    with pytest.raises(NotImplementedError, match="checkpointing"):
+        group.snapshot_for_checkpoint()

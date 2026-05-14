@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import pickle
+from typing import TYPE_CHECKING
+
 import numpy as np
+from mchammer.observers.base_observer import BaseObserver
 
 from .wl_replica import WangLandauReplica
+
+if TYPE_CHECKING:
+    from mchammer.data_containers.wang_landau_data_container import (
+        WangLandauDataContainer,
+    )
 
 
 class WangLandauWindowGroup:
@@ -67,3 +76,87 @@ class WangLandauWindowGroup:
         }
         for r in self._replicas:
             r.ensemble._entropy = dict(merged)
+
+    def advance(self, n_steps: int) -> None:
+        """Advance all W replicas, sync fill factors, merge entropies.
+
+        Re-selects the exchange walker after each cycle.
+        """
+        for r in self._replicas:
+            r.advance(int(n_steps))
+        self._sync_fill_factors()
+        self._merge_entropies()
+        self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
+
+    @property
+    def energy_window(self) -> tuple[float | None, float | None]:
+        return self._replicas[0].energy_window
+
+    @property
+    def energy_spacing(self) -> float:
+        return self._replicas[0].energy_spacing
+
+    @property
+    def cluster_expansion_path(self) -> str | None:
+        return self._replicas[0].cluster_expansion_path
+
+    def current_energy(self) -> float:
+        return self._replicas[self._exchange_idx].current_energy()
+
+    def current_occupations(self) -> np.ndarray:
+        return self._replicas[self._exchange_idx].current_occupations()
+
+    def set_occupations(self, occupations: np.ndarray) -> None:
+        self._replicas[self._exchange_idx].set_occupations(occupations)
+
+    def log_g(self, energy: float) -> float:
+        return self._replicas[0].log_g(energy)
+
+    @property
+    def converged(self) -> bool:
+        return all(r.converged for r in self._replicas)
+
+    def data_container(self) -> WangLandauDataContainer:
+        """Data container for replica 0, used by pool's data_containers()."""
+        return self._replicas[0].data_container()
+
+    def all_data_containers(self) -> list[WangLandauDataContainer]:
+        """All W data containers for user analysis."""
+        return [r.data_container() for r in self._replicas]
+
+    def window_stats(self) -> dict:
+        """Per-window convergence metrics consumed by SerialWangLandauPool.
+
+        fill_factor and halvings are taken from replica 0 (all in sync after
+        advance); histogram is the sum across all walkers.
+        """
+        e0 = self._replicas[0].ensemble
+        combined_hist: dict[int, int] = {}
+        for r in self._replicas:
+            for k, v in r.ensemble._histogram.items():
+                combined_hist[k] = combined_hist.get(k, 0) + v
+        return {
+            "fill_factor": float(e0._fill_factor),
+            "halvings": len(e0._fill_factor_history),
+            "histogram": combined_hist,
+            "converged": self.converged,
+        }
+
+    def snapshot_for_checkpoint(self) -> dict:
+        raise NotImplementedError(
+            "checkpointing is not yet supported for n_walkers_per_window > 1; "
+            "pass data_container_file=None and avoid save_checkpoint() / "
+            "attach_checkpoint_writer() when using multiple walkers per window."
+        )
+
+    def attach_mchammer_observer(self, observer: BaseObserver) -> None:
+        """Attach observer to all W replicas; each receives its own copy."""
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc}); use attach_observer_class instead"
+            ) from exc
+        for r in self._replicas:
+            r.attach_mchammer_observer(pickle.loads(blob))
