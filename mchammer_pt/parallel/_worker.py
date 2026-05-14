@@ -47,8 +47,8 @@ REWL-only opcodes (`_wl_worker` only):
 - ``("GET_ENTROPY_SYNC_STATE",)`` -> replies ``("OK", dict)`` with
   entropy, fill_factor_history_len, and histogram for multi-walker sync
 - ``("APPLY_ENTROPY_SYNC", merged_entropy, extra_halvings)`` -> applies
-  ``extra_halvings`` modifications and updates entropy to the merged
-  value; replies ``("OK", None)``
+  ``extra_halvings`` fill-factor halvings and writes merged entropy to the
+  replica; replies ``("OK", None)``
 
 Every reply is of the form ``(status, payload)``. ``status`` is one
 of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply

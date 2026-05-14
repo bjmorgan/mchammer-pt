@@ -67,6 +67,7 @@ def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
         assert isinstance(payload["entropy"], dict)
         assert isinstance(payload["fill_factor_history_len"], int)
         assert isinstance(payload["histogram"], dict)
+        assert payload["fill_factor_history_len"] >= 1
     finally:
         conn.send(("SHUTDOWN",))
         conn.recv()
@@ -91,7 +92,7 @@ def test_wl_worker_apply_entropy_sync_halvings_and_entropy(tmp_path):
         assert after["fill_factor_history_len"] == initial_len + 2
         assert after["entropy"][0] == pytest.approx(1.5)
         assert after["entropy"][1] == pytest.approx(2.5)
-        # Histogram values must be zeroed (keys preserved from pre-sync)
+        # Histogram values must be zeroed after halvings
         assert all(v == 0 for v in after["histogram"].values())
     finally:
         conn.send(("SHUTDOWN",))
