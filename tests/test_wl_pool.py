@@ -332,3 +332,21 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
 
     assert np.array_equal(pool.current_occupations(0), occ1_before)
     assert np.array_equal(pool.current_occupations(1), occ0_before)
+
+
+def test_merge_entropies_averages_bins():
+    from mchammer_pt.parallel.processes import _merge_entropies
+    result = _merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
+    assert result[0] == pytest.approx(4.0)  # (2 + 6) / 2
+    assert result[1] == pytest.approx(2.0)  # (4 + 0) / 2 — bin missing from replica 1
+    assert result[2] == pytest.approx(4.0)  # (0 + 8) / 2 — bin missing from replica 0
+
+
+def test_merge_entropies_single_replica_is_identity():
+    from mchammer_pt.parallel.processes import _merge_entropies
+    assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {1: pytest.approx(3.0), 2: pytest.approx(5.0)}
+
+
+def test_merge_entropies_all_empty():
+    from mchammer_pt.parallel.processes import _merge_entropies
+    assert _merge_entropies([{}, {}]) == {}
