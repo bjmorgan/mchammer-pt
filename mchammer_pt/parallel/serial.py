@@ -254,10 +254,21 @@ class SerialWangLandauPool:
     def replicas(self) -> list[WangLandauReplica | WangLandauWindowGroup]:
         return list(self._replicas)
 
+    def _slot_ensemble(self, slot: WangLandauReplica | WangLandauWindowGroup) -> Any:
+        """Return the mchammer ensemble for a slot.
+
+        Works for both WangLandauReplica and WangLandauWindowGroup slots.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        if isinstance(slot, WangLandauWindowGroup):
+            return slot._replicas[0].ensemble
+        return slot.ensemble
+
     @property
     def ensemble_cls_fqn(self) -> str:
         """Fully qualified name of the ensemble class used by replicas."""
-        cls = type(self._replicas[0].ensemble)
+        cls = type(self._slot_ensemble(self._replicas[0]))
         return f"{cls.__module__}.{cls.__qualname__}"
 
     @property
@@ -372,8 +383,14 @@ class SerialWangLandauPool:
                 f"{type(probe).__name__}, not a BaseObserver"
             )
         del probe
+        from ..wl_window_group import WangLandauWindowGroup
+
         for i in target_indices:
-            self._replicas[i].attach_mchammer_observer(cls(*args, **kwargs))
+            slot = self._replicas[i]
+            if isinstance(slot, WangLandauWindowGroup):
+                slot.attach_observer_class(cls, *args, **kwargs)
+            else:
+                slot.attach_mchammer_observer(cls(*args, **kwargs))
 
     def attach_observer_factory(
         self,
@@ -391,6 +408,10 @@ class SerialWangLandauPool:
         reload the CE from disk inside the factory via
         ``ClusterExpansion.read(replica.cluster_expansion_path)``.
 
+        For ``WangLandauWindowGroup`` slots, the factory is called once
+        per walker (each inner ``WangLandauReplica``), so every walker
+        receives a freshly-constructed independent observer.
+
         On ``SerialWangLandauPool``,
         ``replica.cluster_expansion_path`` is ``None`` unless you
         passed ``cluster_expansion_path=`` to
@@ -400,14 +421,20 @@ class SerialWangLandauPool:
         target_indices = _resolve_replicas(replicas, len(self._replicas))
         if not target_indices:
             return
+        from ..wl_window_group import WangLandauWindowGroup
+
         for i in target_indices:
-            observer = factory(self._replicas[i])
-            if not isinstance(observer, BaseObserver):
-                raise TypeError(
-                    f"attach_observer_factory: factory returned "
-                    f"{type(observer).__name__}, not a BaseObserver"
-                )
-            self._replicas[i].attach_mchammer_observer(observer)
+            slot = self._replicas[i]
+            if isinstance(slot, WangLandauWindowGroup):
+                slot.attach_observer_factory(factory)
+            else:
+                observer = factory(slot)
+                if not isinstance(observer, BaseObserver):
+                    raise TypeError(
+                        f"attach_observer_factory: factory returned "
+                        f"{type(observer).__name__}, not a BaseObserver"
+                    )
+                slot.attach_mchammer_observer(observer)
 
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one WL replica.
@@ -428,7 +455,8 @@ class SerialWangLandauPool:
                 f"replica index {replica_index} out of range "
                 f"for pool of size {n}"
             )
-        live = self._replicas[replica_index].ensemble.observers
+        slot = self._replicas[replica_index]
+        live = self._slot_ensemble(slot).observers
         try:
             return pickle.loads(pickle.dumps(live))
         except Exception as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -160,3 +161,36 @@ class WangLandauWindowGroup:
             ) from exc
         for r in self._replicas:
             r.attach_mchammer_observer(pickle.loads(blob))
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer to every walker in the group.
+
+        Each of the W replicas receives its own ``cls(*args, **kwargs)``
+        instance, ensuring independent per-walker state.
+        """
+        for r in self._replicas:
+            r.attach_mchammer_observer(cls(*args, **kwargs))
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+    ) -> None:
+        """Attach an observer constructed per walker via ``factory``.
+
+        ``factory(replica)`` is called once per walker and must return a
+        fresh ``BaseObserver``.
+        """
+        for r in self._replicas:
+            observer = factory(r)
+            if not isinstance(observer, BaseObserver):
+                raise TypeError(
+                    f"attach_observer_factory: factory returned "
+                    f"{type(observer).__name__}, not a BaseObserver"
+                )
+            r.attach_mchammer_observer(observer)
