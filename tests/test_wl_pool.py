@@ -14,8 +14,10 @@ def _spawn_wl_worker(tmp_path):
     Caller is responsible for sending SHUTDOWN and joining.
     """
     import multiprocessing as mp
+
     from mchammer.calculators import ClusterExpansionCalculator
     from mchammer.ensembles import WangLandauEnsemble
+
     from mchammer_pt.parallel._worker import _wl_worker
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -63,7 +65,9 @@ def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
         conn.send(("GET_ENTROPY_SYNC_STATE",))
         status, payload = conn.recv()
         assert status == "OK"
-        assert set(payload.keys()) == {"entropy", "fill_factor_history_len", "histogram"}
+        assert set(payload.keys()) == {
+            "entropy", "fill_factor_history_len", "histogram"
+        }
         assert isinstance(payload["entropy"], dict)
         assert isinstance(payload["fill_factor_history_len"], int)
         assert isinstance(payload["histogram"], dict)
@@ -309,7 +313,7 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         occ1[[0, -1]] = occ1[[-1, 0]]  # swap first/last to differ
 
         # Direct SET_OCC on worker 1 so its configuration is distinct.
-        _, conn1 = pool._workers[1]
+        _, conn1 = pool._slots[1][0]
         conn1.send(("SET_OCC", np.asarray(occ1, dtype=np.int64)))
         pool._recv_or_raise(conn1, "SET_OCC", 1)
 
@@ -436,7 +440,9 @@ def test_merge_entropies_averages_bins():
 
 def test_merge_entropies_single_replica_is_identity():
     from mchammer_pt.parallel.processes import _merge_entropies
-    assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {1: pytest.approx(3.0), 2: pytest.approx(5.0)}
+    assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {
+        1: pytest.approx(3.0), 2: pytest.approx(5.0)
+    }
 
 
 def test_merge_entropies_all_empty():
