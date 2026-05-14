@@ -97,18 +97,20 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ``ensemble_kwargs={'schedule': '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
         n_walkers_per_window: number of independent WL walkers per
-            window. When 1 (default), each window is a plain
-            `WangLandauReplica`. When > 1, each window becomes a
+            window. Accepts either a single ``int`` applied uniformly
+            to all windows, or a ``Sequence[int]`` with one value per
+            window. Windows with a count of 1 use a plain
+            `WangLandauReplica`; windows with a count > 1 use a
             `WangLandauWindowGroup` that advances all walkers in
             sequence, synchronises fill factors, and averages
             entropies each cycle. Checkpointing is not supported for
-            n_walkers_per_window > 1.
+            any window with count > 1.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
         ValueError: on window validation or length-mismatch failures.
-        NotImplementedError: if ``n_walkers_per_window > 1`` and
-            ``data_container_file`` is not None.
+        NotImplementedError: if any ``n_walkers_per_window`` value is
+            > 1 and ``data_container_file`` is not None.
     """
 
     _pool: WangLandauPool  # narrow from ReplicaPool
@@ -126,7 +128,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         *,
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
-        n_walkers_per_window: int = 1,
+        n_walkers_per_window: int | Sequence[int] = 1,
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -138,37 +140,61 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
         atoms_list = list(atoms)
         _validate_windows(windows)
-        if len(atoms_list) != len(windows):
+        n_windows = len(windows)
+        if len(atoms_list) != n_windows:
             raise ValueError(
                 f"atoms has {len(atoms_list)} entries but windows has "
-                f"{len(windows)}; supply one Atoms per window."
+                f"{n_windows}; supply one Atoms per window."
             )
         if int(block_size) < 1:
             raise ValueError(f"block_size must be >= 1; got {block_size}")
-        if int(n_walkers_per_window) < 1:
+
+        if isinstance(n_walkers_per_window, int):
+            walkers_per_window = [int(n_walkers_per_window)] * n_windows
+        else:
+            walkers_per_window = [int(w) for w in n_walkers_per_window]
+            if len(walkers_per_window) != n_windows:
+                raise ValueError(
+                    f"n_walkers_per_window has {len(walkers_per_window)} entries "
+                    f"but windows has {n_windows}; supply one count per window "
+                    f"or a single int."
+                )
+        if any(w < 1 for w in walkers_per_window):
             raise ValueError(
-                f"n_walkers_per_window must be >= 1; got {n_walkers_per_window}"
+                f"all n_walkers_per_window values must be >= 1; "
+                f"got {walkers_per_window}"
             )
-        if int(n_walkers_per_window) > 1 and data_container_file is not None:
+        if any(w > 1 for w in walkers_per_window) and data_container_file is not None:
             raise NotImplementedError(
                 "checkpointing is not yet supported for n_walkers_per_window > 1; "
                 "pass data_container_file=None when using multiple walkers per window."
             )
-        W = int(n_walkers_per_window)
+
         seed_sequence = np.random.SeedSequence(int(random_seed))
-        if W == 1:
-            child_seeds = seed_sequence.spawn(len(windows) + 1)
+        if all(w == 1 for w in walkers_per_window):
+            # Original single-walker path — seed allocation is unchanged.
+            child_seeds = seed_sequence.spawn(n_windows + 1)
             replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
             master_seed = int(child_seeds[-1].generate_state(1)[0])
         else:
-            n_windows = len(windows)
-            child_seeds = seed_sequence.spawn(n_windows * (W + 1) + 1)
+            # Per-window path. Walker seeds are packed contiguously in
+            # window order, followed by one group seed per window.
+            total_walker_seeds = sum(walkers_per_window)
+            child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
+            offsets: list[int] = []
+            offset = 0
+            for ww in walkers_per_window:
+                offsets.append(offset)
+                offset += ww
             walker_seeds = [
-                [int(child_seeds[w * W + j].generate_state(1)[0]) for j in range(W)]
+                [
+                    int(child_seeds[offsets[w] + j].generate_state(1)[0])
+                    for j in range(walkers_per_window[w])
+                ]
                 for w in range(n_windows)
             ]
             group_seeds = [
-                int(child_seeds[n_windows * W + w].generate_state(1)[0])
+                int(child_seeds[total_walker_seeds + w].generate_state(1)[0])
                 for w in range(n_windows)
             ]
             master_seed = int(child_seeds[-1].generate_state(1)[0])
@@ -184,7 +210,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 "process_pool(...) which forwards them."
             )
         if pool is None:
-            if W == 1:
+            if all(w == 1 for w in walkers_per_window):
                 replicas = [
                     WangLandauReplica(
                         cluster_expansion=cluster_expansion,
@@ -204,27 +230,41 @@ class WangLandauParallelTempering(BaseParallelTempering):
             else:
                 from .wl_window_group import WangLandauWindowGroup
 
-                slots = []
+                slots: list[WangLandauReplica | WangLandauWindowGroup] = []
                 for w in range(n_windows):
                     lo, hi = windows[w]
-                    walker_replicas = [
-                        WangLandauReplica(
-                            cluster_expansion=cluster_expansion,
-                            atoms=atoms_list[w].copy(),  # type: ignore[no-untyped-call]
-                            energy_spacing=energy_spacing,
-                            energy_limit_left=lo,
-                            energy_limit_right=hi,
-                            random_seed=walker_seeds[w][j],
-                            ensemble_cls=ensemble_cls,
-                            ensemble_kwargs=ensemble_kwargs,
+                    W_w = walkers_per_window[w]
+                    if W_w == 1:
+                        slot: WangLandauReplica | WangLandauWindowGroup = (
+                            WangLandauReplica(
+                                cluster_expansion=cluster_expansion,
+                                atoms=atoms_list[w],
+                                energy_spacing=energy_spacing,
+                                energy_limit_left=lo,
+                                energy_limit_right=hi,
+                                random_seed=walker_seeds[w][0],
+                                ensemble_cls=ensemble_cls,
+                                ensemble_kwargs=ensemble_kwargs,
+                            )
                         )
-                        for j in range(W)
-                    ]
-                    slots.append(
-                        WangLandauWindowGroup(
+                    else:
+                        walker_replicas = [
+                            WangLandauReplica(
+                                cluster_expansion=cluster_expansion,
+                                atoms=atoms_list[w].copy(),  # type: ignore[no-untyped-call]
+                                energy_spacing=energy_spacing,
+                                energy_limit_left=lo,
+                                energy_limit_right=hi,
+                                random_seed=walker_seeds[w][j],
+                                ensemble_cls=ensemble_cls,
+                                ensemble_kwargs=ensemble_kwargs,
+                            )
+                            for j in range(W_w)
+                        ]
+                        slot = WangLandauWindowGroup(
                             walker_replicas, random_seed=group_seeds[w]
                         )
-                    )
+                    slots.append(slot)
                 pool = SerialWangLandauPool(slots, energy_spacing=energy_spacing)
         else:
             if len(pool) != len(windows):
@@ -543,7 +583,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         data_container_file: Path | str | None = None,
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
-        n_walkers_per_window: int = 1,
+        n_walkers_per_window: int | Sequence[int] = 1,
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
@@ -600,14 +640,19 @@ class WangLandauParallelTempering(BaseParallelTempering):
         *,
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
-        n_walkers_per_window: int = 1,
+        n_walkers_per_window: int | Sequence[int] = 1,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
         """
-        if int(n_walkers_per_window) > 1:
+        _multi = (
+            n_walkers_per_window > 1
+            if isinstance(n_walkers_per_window, int)
+            else any(w > 1 for w in n_walkers_per_window)
+        )
+        if _multi:
             raise NotImplementedError(
                 "process_pool does not support n_walkers_per_window > 1; "
                 "use WangLandauParallelTempering(...) directly for "

@@ -583,6 +583,44 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
         )
 
 
+def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
+    """n_walkers_per_window=[1, 2] creates a plain replica for window 0 and a group for window 1."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=[1, 2],
+    )
+    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
+    assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[1]._replicas) == 2
+
+
+def test_wl_pt_n_walkers_per_window_wrong_length_raises():
+    """n_walkers_per_window sequence with wrong length raises ValueError."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(ValueError, match="n_walkers_per_window"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=[2, 2, 2],
+        )
+
+
 def test_wl_pt_process_pool_rejects_n_walkers_per_window():
     """process_pool raises NotImplementedError for n_walkers_per_window > 1."""
     from mchammer_pt.wl import WangLandauParallelTempering

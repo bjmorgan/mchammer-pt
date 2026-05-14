@@ -194,6 +194,39 @@ def test_all_data_containers_returns_w_containers():
     assert len(containers) == 3
 
 
+def test_mismatched_windows_raises():
+    """Replicas with different energy windows cannot form a group."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    r0 = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=0,
+    )
+    r1 = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 50.0,  # different window
+        energy_limit_right=e0 + 50.0,
+        random_seed=1,
+    )
+    with pytest.raises(ValueError, match="energy window"):
+        WangLandauWindowGroup([r0, r1], random_seed=0)
+
+
 def test_snapshot_for_checkpoint_raises():
     """snapshot_for_checkpoint raises NotImplementedError."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup

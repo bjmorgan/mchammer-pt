@@ -40,6 +40,15 @@ class WangLandauWindowGroup:
             raise ValueError(
                 "WangLandauWindowGroup requires at least one replica"
             )
+        if len(replicas) > 1:
+            w0 = replicas[0].energy_window
+            s0 = replicas[0].energy_spacing
+            for r in replicas[1:]:
+                if r.energy_window != w0 or r.energy_spacing != s0:
+                    raise ValueError(
+                        "all replicas in a WangLandauWindowGroup must share "
+                        "the same energy window and spacing"
+                    )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
