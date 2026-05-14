@@ -444,6 +444,9 @@ class SerialWangLandauPool:
         ``pickle`` round-trip so mutations on the returned objects
         do not affect the pool's running state.
 
+        For ``WangLandauWindowGroup`` slots, only the observers from
+        the first walker in the group are returned.
+
         Raises:
             IndexError: if ``replica_index`` is out of range.
             TypeError: if the observer dict cannot be round-tripped

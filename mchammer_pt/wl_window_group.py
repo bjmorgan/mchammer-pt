@@ -18,14 +18,14 @@ if TYPE_CHECKING:
 
 
 class WangLandauWindowGroup:
-    """W WangLandauReplica instances sharing one energy window.
+    """A group of independent Wang-Landau walkers sharing one energy window.
 
-    Each cycle: all W replicas advance independently, fill factors are
+    Each cycle: all walkers advance independently, fill factors are
     synchronised (detect-and-resync), and entropies are averaged bin-wise
-    so every replica starts the next cycle from the best shared ln g estimate.
+    so every walker starts the next cycle from the best shared ln g estimate.
 
     Args:
-        replicas: W pre-constructed WangLandauReplica instances, all
+        replicas: pre-constructed WangLandauReplica instances, all
             with the same energy window and energy spacing.
         random_seed: seed for the exchange-walker selection RNG.
     """
@@ -50,16 +50,19 @@ class WangLandauWindowGroup:
         Detect-and-resync: after mchammer's per-walker auto-halving,
         replicas may be at different fill factors. We count halvings via
         len(_fill_factor_history) and force-halve any replica that is
-        behind the leader, mirroring mchammer's own halving logic
-        (append current fill factor to history, halve, clear histogram).
+        behind the leader, mirroring mchammer's own halving logic:
+        halve _fill_factor, record the post-halving value in
+        _fill_factor_history under a fresh key, and reset _histogram
+        to zero (preserving keys so the flatness check stays valid).
         """
         halvings = [len(r.ensemble._fill_factor_history) for r in self._replicas]
         target = max(halvings)
         for r, h in zip(self._replicas, halvings, strict=True):
             for _ in range(target - h):
-                r.ensemble._fill_factor_history.append(r.ensemble._fill_factor)
                 r.ensemble._fill_factor /= 2.0
-                r.ensemble._histogram.clear()
+                next_key = max(r.ensemble._fill_factor_history, default=-1) + 1
+                r.ensemble._fill_factor_history[next_key] = r.ensemble._fill_factor
+                r.ensemble._histogram = dict.fromkeys(r.ensemble._histogram, 0)
 
     def _merge_entropies(self) -> None:
         """Average ln g bin-wise across all replicas and write back to each.
@@ -118,7 +121,7 @@ class WangLandauWindowGroup:
         return all(r.converged for r in self._replicas)
 
     def data_container(self) -> WangLandauDataContainer:
-        """Data container for replica 0, used by pool's data_containers()."""
+        """Data container for the first walker in the group."""
         return self._replicas[0].data_container()
 
     def all_data_containers(self) -> list[WangLandauDataContainer]:

@@ -40,11 +40,11 @@ def test_sync_fill_factors_force_halves_lagging_replica():
     replicas = _make_replicas(2)
     # Replica 0: 2 halvings already done.
     replicas[0].ensemble._fill_factor = 0.25
-    replicas[0].ensemble._fill_factor_history = [1.0, 0.5]
-    replicas[0].ensemble._histogram.clear()
+    replicas[0].ensemble._fill_factor_history = {0: 0.5, 1: 0.25}
+    replicas[0].ensemble._histogram = {}
     # Replica 1: only 1 halving.
     replicas[1].ensemble._fill_factor = 0.5
-    replicas[1].ensemble._fill_factor_history = [1.0]
+    replicas[1].ensemble._fill_factor_history = {0: 0.5}
     replicas[1].ensemble._histogram = {0: 10, 1: 8}
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
@@ -52,8 +52,10 @@ def test_sync_fill_factors_force_halves_lagging_replica():
 
     assert replicas[1].ensemble._fill_factor == pytest.approx(0.25)
     assert len(replicas[1].ensemble._fill_factor_history) == 2
-    assert replicas[1].ensemble._fill_factor_history[1] == pytest.approx(0.5)
-    assert replicas[1].ensemble._histogram == {}
+    # Post-halving value (0.25) stored under the new key.
+    assert replicas[1].ensemble._fill_factor_history[1] == pytest.approx(0.25)
+    # Histogram keys preserved, values zeroed.
+    assert replicas[1].ensemble._histogram == {0: 0, 1: 0}
 
 
 def test_sync_fill_factors_noop_when_already_in_sync():
@@ -63,7 +65,7 @@ def test_sync_fill_factors_noop_when_already_in_sync():
     replicas = _make_replicas(2)
     for r in replicas:
         r.ensemble._fill_factor = 0.5
-        r.ensemble._fill_factor_history = [1.0]
+        r.ensemble._fill_factor_history = {0: 0.5}
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
     group._sync_fill_factors()
@@ -71,6 +73,31 @@ def test_sync_fill_factors_noop_when_already_in_sync():
     for r in replicas:
         assert r.ensemble._fill_factor == pytest.approx(0.5)
         assert len(r.ensemble._fill_factor_history) == 1
+
+
+def test_sync_fill_factors_multi_halving_gap():
+    """A replica with a 3-halving gap receives 3 halvings with unique keys."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    # Replica 0: 3 halvings.
+    replicas[0].ensemble._fill_factor = 0.125
+    replicas[0].ensemble._fill_factor_history = {0: 0.5, 1: 0.25, 2: 0.125}
+    replicas[0].ensemble._histogram = {}
+    # Replica 1: no halvings yet.
+    replicas[1].ensemble._fill_factor = 1.0
+    replicas[1].ensemble._fill_factor_history = {}
+    replicas[1].ensemble._histogram = {0: 5, 1: 3}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._sync_fill_factors()
+
+    assert replicas[1].ensemble._fill_factor == pytest.approx(0.125)
+    assert len(replicas[1].ensemble._fill_factor_history) == 3
+    # All three synthetic keys must be distinct integers.
+    keys = list(replicas[1].ensemble._fill_factor_history.keys())
+    assert len(set(keys)) == 3
+    assert replicas[1].ensemble._histogram == {0: 0, 1: 0}
 
 
 def test_merge_entropies_averages_all_bins():

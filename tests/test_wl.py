@@ -583,6 +583,23 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
         )
 
 
+def test_wl_pt_process_pool_rejects_n_walkers_per_window():
+    """process_pool raises NotImplementedError for n_walkers_per_window > 1."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(NotImplementedError, match="n_walkers_per_window"):
+        WangLandauParallelTempering.process_pool(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=2,
+        )
+
+
 def test_wl_pt_n_walkers_2_run_returns_correct_history_shape():
     """A multi-walker run returns ExchangeHistory with the expected shape."""
     from mchammer_pt.wl import WangLandauParallelTempering

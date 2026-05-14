@@ -100,7 +100,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             window. When 1 (default), each window is a plain
             `WangLandauReplica`. When > 1, each window becomes a
             `WangLandauWindowGroup` that advances all walkers in
-            parallel, synchronises fill factors, and averages
+            sequence, synchronises fill factors, and averages
             entropies each cycle. Checkpointing is not supported for
             n_walkers_per_window > 1.
 

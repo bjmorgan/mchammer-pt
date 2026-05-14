@@ -307,3 +307,28 @@ def test_per_window_stats_with_window_group_slots():
         assert "halvings" in s
         assert "histogram" in s
         assert "converged" in s
+
+
+def test_serial_wl_pool_attach_observer_class_dispatches_to_all_walkers():
+    """attach_observer_class gives each walker in a WindowGroup its own observer."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_wl_pool_with_groups(n_windows=1, n_walkers=2)
+    pool.attach_observer_class(StatefulCounter, interval=10)
+    pool.advance_all(30)
+
+    for r in pool._replicas[0]._replicas:
+        assert "counter" in r.ensemble.observers
+
+
+def test_serial_wl_pool_swap_configurations_with_window_groups():
+    """swap_configurations exchanges the exchange-walker's occupations across groups."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+
+    occ0_before = pool.current_occupations(0).copy()
+    occ1_before = pool.current_occupations(1).copy()
+
+    pool.swap_configurations(0, 1)
+
+    assert np.array_equal(pool.current_occupations(0), occ1_before)
+    assert np.array_equal(pool.current_occupations(1), occ0_before)
