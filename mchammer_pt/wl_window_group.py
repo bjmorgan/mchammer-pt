@@ -146,7 +146,7 @@ class WangLandauWindowGroup:
             "converged": self.converged,
         }
 
-    def snapshot_for_checkpoint(self) -> dict:
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
         raise NotImplementedError(
             "checkpointing is not yet supported for n_walkers_per_window > 1; "
             "pass data_container_file=None and avoid save_checkpoint() / "

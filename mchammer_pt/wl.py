@@ -210,7 +210,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     walker_replicas = [
                         WangLandauReplica(
                             cluster_expansion=cluster_expansion,
-                            atoms=atoms_list[w].copy(),
+                            atoms=atoms_list[w].copy(),  # type: ignore[no-untyped-call]
                             energy_spacing=energy_spacing,
                             energy_limit_left=lo,
                             energy_limit_right=hi,
