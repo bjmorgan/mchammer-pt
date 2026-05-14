@@ -657,6 +657,7 @@ class ProcessWangLandauPool:
         energy_spacing: float,
         seeds: Sequence[int],
         *,
+        n_walkers_per_window: int | Sequence[int] = 1,
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
@@ -673,46 +674,73 @@ class ProcessWangLandauPool:
             )
         if len(seeds_list) != len(windows_list):
             raise ValueError("seeds and windows must be the same length")
+        if isinstance(n_walkers_per_window, int):
+            walkers_per_window = [int(n_walkers_per_window)] * len(windows_list)
+        else:
+            walkers_per_window = [int(w) for w in n_walkers_per_window]
+            if len(walkers_per_window) != len(windows_list):
+                raise ValueError(
+                    f"n_walkers_per_window has {len(walkers_per_window)} entries "
+                    f"but windows has {len(windows_list)}"
+                )
+        if any(w < 1 for w in walkers_per_window):
+            raise ValueError(
+                f"all n_walkers_per_window values must be >= 1; "
+                f"got {walkers_per_window}"
+            )
         self._windows: list[tuple[float | None, float | None]] = windows_list
         self._energy_spacing = float(energy_spacing)
-        self._slots: list[list[tuple[mp.process.BaseProcess, Connection]]] = []
-        self._exchange_idx: list[int] = [0] * len(windows_list)
-        self._slot_rngs: list[np.random.Generator] = [
-            np.random.default_rng(s) for s in seeds_list
-        ]
         atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
+        self._slots: list[list[tuple[mp.process.BaseProcess, Connection]]] = []
+        self._exchange_idx: list[int] = [0] * len(windows_list)
+        self._slot_rngs: list[np.random.Generator] = []
+
         ctx = mp.get_context("spawn")
         try:
-            for (lo, hi), seed, ad in zip(
-                windows_list, seeds_list, atoms_dicts, strict=True,
+            for (lo, hi), window_seed, ad, W_w in zip(
+                windows_list, seeds_list, atoms_dicts, walkers_per_window, strict=True,
             ):
-                parent_conn, child_conn = ctx.Pipe(duplex=True)
-                process = ctx.Process(
-                    target=_wl_worker,
-                    args=(
-                        child_conn,
-                        str(ce_path),
-                        ad,
-                        float(energy_spacing),
-                        lo,
-                        hi,
-                        int(seed),
-                        ensemble_cls,
-                        extra_kwargs,
-                    ),
-                    daemon=True,
-                )
-                process.start()
-                child_conn.close()
-                self._slots.append([(process, parent_conn)])
+                if W_w == 1:
+                    walker_seeds = [int(window_seed)]
+                    rng_seed = int(window_seed)  # RNG is never called for W=1
+                else:
+                    sub = np.random.SeedSequence(int(window_seed))
+                    children = sub.spawn(W_w + 1)
+                    walker_seeds = [int(c.generate_state(1)[0]) for c in children[:W_w]]
+                    rng_seed = int(children[W_w].generate_state(1)[0])
+                self._slot_rngs.append(np.random.default_rng(rng_seed))
+
+                slot = []
+                for w_seed in walker_seeds:
+                    parent_conn, child_conn = ctx.Pipe(duplex=True)
+                    process = ctx.Process(
+                        target=_wl_worker,
+                        args=(
+                            child_conn,
+                            str(ce_path),
+                            ad,
+                            float(energy_spacing),
+                            lo,
+                            hi,
+                            int(w_seed),
+                            ensemble_cls,
+                            extra_kwargs,
+                        ),
+                        daemon=True,
+                    )
+                    process.start()
+                    child_conn.close()
+                    slot.append((process, parent_conn))
+                self._slots.append(slot)
+
             for slot in self._slots:
-                _, conn = slot[0]
-                status, payload = conn.recv()
-                if status != "OK":
-                    raise RuntimeError(f"worker startup failed:\n{payload}")
+                for _, conn in slot:
+                    status, payload = conn.recv()
+                    if status != "OK":
+                        raise RuntimeError(f"worker startup failed:\n{payload}")
         except BaseException:
             self.shutdown()
             raise
@@ -824,12 +852,32 @@ class ProcessWangLandauPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
+        # Phase 1: fan-out ADVANCE to all workers
         for slot in self._slots:
             for _, conn in slot:
                 conn.send(("ADVANCE", int(n_steps)))
         for i, slot in enumerate(self._slots):
             for w, (_, conn) in enumerate(slot):
                 self._recv_or_raise(conn, "ADVANCE", f"window {i} walker {w}")
+
+        # Phase 2: entropy sync for multi-walker slots
+        for i, slot in enumerate(self._slots):
+            if len(slot) == 1:
+                continue
+            for _, conn in slot:
+                conn.send(("GET_ENTROPY_SYNC_STATE",))
+            states = [
+                self._recv_or_raise(conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}")
+                for w, (_, conn) in enumerate(slot)
+            ]
+            target_len = max(s["fill_factor_history_len"] for s in states)
+            merged = _merge_entropies([s["entropy"] for s in states])
+            for w, (_, conn) in enumerate(slot):
+                extra = target_len - states[w]["fill_factor_history_len"]
+                conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
+            for w, (_, conn) in enumerate(slot):
+                self._recv_or_raise(conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}")
+            self._exchange_idx[i] = int(self._slot_rngs[i].integers(0, len(slot)))
 
     def current_energies(self) -> np.ndarray:
         self._check_open()

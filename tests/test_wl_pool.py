@@ -448,3 +448,65 @@ def test_merge_entropies_single_replica_is_identity():
 def test_merge_entropies_all_empty():
     from mchammer_pt.parallel.processes import _merge_entropies
     assert _merge_entropies([{}, {}]) == {}
+
+
+def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
+    """n_walkers_per_window=2 creates 2 workers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=2,
+    ) as pool:
+        assert len(pool) == 2                 # 2 windows
+        assert len(pool._slots[0]) == 2       # 2 walkers in window 0
+        assert len(pool._slots[1]) == 2       # 2 walkers in window 1
+
+
+def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
+    """n_walkers_per_window=[1, 2] gives 1 and 2 workers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[1, 2],
+    ) as pool:
+        assert len(pool._slots[0]) == 1
+        assert len(pool._slots[1]) == 2
+
+
+def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
+    """After advance_all, both walkers in a slot have identical entropy dicts."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(50)
+
+        # Directly query both workers for their post-sync entropy
+        _, conn0 = pool._slots[0][0]
+        _, conn1 = pool._slots[0][1]
+        conn0.send(("GET_ENTROPY_SYNC_STATE",))
+        conn1.send(("GET_ENTROPY_SYNC_STATE",))
+        _, s0 = conn0.recv()
+        _, s1 = conn1.recv()
+
+        assert s0["entropy"] == s1["entropy"]
+        assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
