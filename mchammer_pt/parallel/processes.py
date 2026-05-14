@@ -38,15 +38,11 @@ from ._worker import _wl_worker, _worker
 def _merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
     """Average bin-wise entropy estimates across multiple walkers.
 
-    Given a list of entropy dictionaries (one per walker, mapping bin index
-    to entropy value), compute the average entropy for each bin. Bins that
-    are missing from a walker's dictionary contribute 0.0 to the average.
-
     Args:
         entropies: list of {bin_index: entropy_value} dicts from each walker.
 
     Returns:
-        Merged entropy dict with bin-wise averages across all walkers.
+        Merged entropy dict with bin-wise averages; missing bins contribute 0.0.
     """
     all_bins: set[int] = set()
     for e in entropies:
