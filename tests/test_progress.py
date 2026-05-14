@@ -11,9 +11,15 @@ import numpy as np
 import pytest
 
 from mchammer_pt.base import BaseParallelTempering
-from mchammer_pt.callbacks import CycleCallback, ProgressPrinter, _format_duration
+from mchammer_pt.callbacks import (
+    CycleCallback,
+    ProgressPrinter,
+    WangLandauProgressPrinter,
+    _format_duration,
+)
 from mchammer_pt.parallel.serial import SerialPool
 from mchammer_pt.replica import Replica
+from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
 class _AlwaysAcceptPT(BaseParallelTempering):
@@ -233,3 +239,142 @@ def test_progress_printer_resets_clock_across_runs(
     # Run 2's two emissions: elapsed 0s, then 1s — clock was reset.
     assert _elapsed_seconds(lines[2]) == 0
     assert _elapsed_seconds(lines[3]) == 1
+
+
+# ---------------------------------------------------------------------------
+# WangLandauProgressPrinter tests
+# ---------------------------------------------------------------------------
+
+
+def _initial_energy() -> float:
+    from mchammer.calculators import ClusterExpansionCalculator
+    atoms = make_wl_atoms()
+    ce = make_wl_ce()
+    return float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers
+    ))
+
+
+def _wl_pt(n_cycles_hint: int = 5):
+    """Build a minimal 2-window REWL orchestrator on the toy WL CE."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = _initial_energy()
+    return WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+    )
+
+
+def _count_blocks(output: str) -> int:
+    """Count distinct emission blocks by counting '[REWL ' occurrences."""
+    return output.count("[REWL ")
+
+
+def _block_lines(output: str) -> list[list[str]]:
+    """Split output into per-block line lists, splitting on '[REWL ' headers."""
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("[REWL "):
+            if current:
+                blocks.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def test_wl_progress_printer_emits_at_interval_and_final():
+    """WangLandauProgressPrinter emits at every interval-th cycle plus the final."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+    printer = WangLandauProgressPrinter(pt.pool, interval=3, file=buf)
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=10)
+
+    cycle_nums = [
+        int(re.search(r"cycle (\d+)/", line).group(1))
+        for line in buf.getvalue().splitlines()
+        if line.startswith("[REWL ")
+    ]
+    assert cycle_nums == [3, 6, 9, 10]
+
+
+def test_wl_progress_printer_block_structure():
+    """Each emitted block has a header, a column header, and one row per window."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+    n_windows = len(pt.pool)
+    printer = WangLandauProgressPrinter(
+        pt.pool, interval=5, show_swap_rates=False, file=buf
+    )
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=5)
+
+    blocks = _block_lines(buf.getvalue())
+    assert len(blocks) == 1
+    block = blocks[0]
+    # Header line + column header + one row per window.
+    assert len(block) == 2 + n_windows
+    assert "win" in block[1] and "fill_factor" in block[1] and "converged" in block[1]
+    for i in range(n_windows):
+        assert re.search(rf"\b{i}\b", block[2 + i]) is not None
+
+
+def test_wl_progress_printer_rows_contain_metrics_after_advance():
+    """After at least one cycle, rows show numeric fill factor and halvings."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+    printer = WangLandauProgressPrinter(
+        pt.pool, interval=1, show_swap_rates=False, file=buf
+    )
+    pt.attach_cycle_callback(printer)
+    pt.run(n_cycles=1)
+
+    blocks = _block_lines(buf.getvalue())
+    assert blocks, "expected at least one emission"
+    for row in blocks[-1][2:]:
+        # fill_factor is always available via per_window_stats().
+        assert re.search(r"\d\.\d{3}e[+-]\d{2}", row) is not None, row
+
+
+def test_wl_progress_printer_empty_histogram_shows_zero_bins():
+    """Before any bins are visited (fresh replica), bins_visited shows 0."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    # Stub pool whose per_window_stats returns empty histograms.
+    class _StubPool:
+        def per_window_stats(self):
+            return [
+                {"fill_factor": 1.0, "halvings": 0, "histogram": {}, "converged": False}
+                for _ in range(len(pt.pool))
+            ]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    blocks = _block_lines(buf.getvalue())
+    assert blocks
+    for row in blocks[-1][2:]:
+        # bins_visited column should read "0", not "--".
+        assert re.search(r"\b0\b", row) is not None, row
+
+
+def test_wl_progress_printer_rejects_non_positive_interval():
+    pt = _wl_pt()
+    with pytest.raises(ValueError):
+        WangLandauProgressPrinter(pt.pool, interval=0)
+    with pytest.raises(ValueError):
+        WangLandauProgressPrinter(pt.pool, interval=-1)

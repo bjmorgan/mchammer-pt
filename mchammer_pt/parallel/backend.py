@@ -183,6 +183,20 @@ class WangLandauPool(ReplicaPool, Protocol):
         """Per-replica convergence (bool array, length len(self))."""
         ...
 
+    def per_window_stats(self) -> list[dict[str, Any]]:
+        """Per-window convergence metrics for monitoring callbacks.
+
+        Returns one dict per window with keys:
+
+        * ``"fill_factor"`` (float): current WL fill factor.
+        * ``"halvings"`` (int): number of fill-factor halvings
+          completed (each marks one flattened histogram phase).
+        * ``"histogram"`` (dict[int, int]): current-phase histogram
+          keyed by bin index.
+        * ``"converged"`` (bool): whether this window has converged.
+        """
+        ...
+
 
 @runtime_checkable
 class _ObserverAttach(Protocol):

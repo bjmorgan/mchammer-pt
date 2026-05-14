@@ -313,6 +313,18 @@ class SerialWangLandauPool:
     def converged_flags(self) -> np.ndarray:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
+    def per_window_stats(self) -> list[dict[str, Any]]:
+        result = []
+        for r in self._replicas:
+            e = r.ensemble
+            result.append({
+                "fill_factor": float(e._fill_factor),
+                "halvings": len(e._fill_factor_history),
+                "histogram": dict(e._histogram),
+                "converged": r.converged,
+            })
+        return result
+
     def attach_observer(
         self,
         observer: BaseObserver,

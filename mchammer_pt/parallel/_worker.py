@@ -42,6 +42,8 @@ REWL-only opcodes (`_wl_worker` only):
   with the replica's `log_g` evaluated at both energies
 - ``("CONVERGED",)`` -> replies ``("OK", bool)`` with the replica's
   converged flag
+- ``("WL_STATS",)`` -> replies ``("OK", dict)`` with lightweight
+  convergence metrics (fill_factor, halvings, histogram, converged)
 
 Every reply is of the form ``(status, payload)``. ``status`` is one
 of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply
@@ -267,6 +269,14 @@ def _wl_worker(
                 conn.send(("OK", (replica.log_g(E_i), replica.log_g(E_j))))
             elif op == "CONVERGED":
                 conn.send(("OK", replica.converged))
+            elif op == "WL_STATS":
+                e = replica.ensemble
+                conn.send(("OK", {
+                    "fill_factor": float(e._fill_factor),
+                    "halvings": len(e._fill_factor_history),
+                    "histogram": dict(e._histogram),
+                    "converged": replica.converged,
+                }))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

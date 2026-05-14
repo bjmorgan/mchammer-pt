@@ -887,6 +887,15 @@ class ProcessWangLandauPool:
             for i, (_, conn) in enumerate(self._workers)
         ]
 
+    def per_window_stats(self) -> list[dict[str, Any]]:
+        self._check_open()
+        for _, conn in self._workers:
+            conn.send(("WL_STATS",))
+        return [
+            self._recv_or_raise(conn, "WL_STATS", i)
+            for i, (_, conn) in enumerate(self._workers)
+        ]
+
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
         for _, conn in self._workers:

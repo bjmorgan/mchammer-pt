@@ -7,6 +7,7 @@ from .callbacks import (
     ExchangePrinter,
     ProgressPrinter,
     SwapRateTracker,
+    WangLandauProgressPrinter,
 )
 from .canonical import CanonicalParallelTempering
 from .checkpoint import CheckpointWriter
@@ -52,6 +53,7 @@ __all__ = [
     "WangLandauObservablePool",
     "WangLandauParallelTempering",
     "WangLandauPool",
+    "WangLandauProgressPrinter",
     "WangLandauReplica",
     "__version__",
     "energy_autocorrelation_time",
