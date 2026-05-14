@@ -243,3 +243,67 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         # _reached_energy_window is True and the bin is in-window.
         assert pool.log_g(0, e_after_0) != -float("inf")
         assert pool.log_g(1, e_after_1) != -float("inf")
+
+
+def _make_wl_pool_with_groups(n_windows: int = 2, n_walkers: int = 2):
+    """SerialWangLandauPool whose slots are WangLandauWindowGroup instances."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    groups = [
+        WangLandauWindowGroup(
+            [
+                WangLandauReplica(
+                    cluster_expansion=ce,
+                    atoms=atoms,
+                    energy_spacing=0.1,
+                    energy_limit_left=e0 - 100.0,
+                    energy_limit_right=e0 + 100.0,
+                    random_seed=w * n_walkers + j,
+                )
+                for j in range(n_walkers)
+            ],
+            random_seed=w,
+        )
+        for w in range(n_windows)
+    ]
+    return SerialWangLandauPool(groups, energy_spacing=0.1)
+
+
+def test_per_window_data_containers_single_replica_slots():
+    """per_window_data_containers wraps each WangLandauReplica in a single-item list."""
+    pool = _make_serial_wl_pool(n_replicas=2)
+    result = pool.per_window_data_containers()
+    assert len(result) == 2
+    assert len(result[0]) == 1
+    assert len(result[1]) == 1
+
+
+def test_per_window_data_containers_window_group_slots():
+    """per_window_data_containers returns W containers per WindowGroup slot."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=3)
+    result = pool.per_window_data_containers()
+    assert len(result) == 2
+    assert len(result[0]) == 3
+    assert len(result[1]) == 3
+
+
+def test_per_window_stats_with_window_group_slots():
+    """per_window_stats works when slots are WangLandauWindowGroup instances."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+    stats = pool.per_window_stats()
+    assert len(stats) == 2
+    for s in stats:
+        assert "fill_factor" in s
+        assert "halvings" in s
+        assert "histogram" in s
+        assert "converged" in s

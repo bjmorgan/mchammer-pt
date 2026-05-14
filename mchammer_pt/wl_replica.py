@@ -270,6 +270,19 @@ class WangLandauReplica:
         """True once the underlying WL ensemble has flagged convergence."""
         return bool(self._ensemble.converged or False)
 
+    def window_stats(self) -> dict[str, Any]:
+        """Per-window convergence metrics.
+
+        Returns fill_factor, halvings, histogram, and converged.
+        """
+        e = self._ensemble
+        return {
+            "fill_factor": float(e._fill_factor),
+            "halvings": len(e._fill_factor_history),
+            "histogram": dict(e._histogram),
+            "converged": self.converged,
+        }
+
     def data_container(self) -> WangLandauDataContainer:
         """The replica's live `WangLandauDataContainer`."""
         return self._ensemble.data_container

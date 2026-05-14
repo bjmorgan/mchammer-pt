@@ -272,13 +272,7 @@ def _wl_worker(
             elif op == "CONVERGED":
                 conn.send(("OK", replica.converged))
             elif op == "WL_STATS":
-                e = replica.ensemble
-                conn.send(("OK", {
-                    "fill_factor": float(e._fill_factor),
-                    "halvings": len(e._fill_factor_history),
-                    "histogram": dict(e._histogram),
-                    "converged": replica.converged,
-                }))
+                conn.send(("OK", replica.window_stats()))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

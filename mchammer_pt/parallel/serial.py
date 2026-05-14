@@ -23,6 +23,8 @@ if TYPE_CHECKING:
         WangLandauDataContainer,
     )
 
+    from ..wl_window_group import WangLandauWindowGroup
+
 
 class SerialPool:
     """Advances replicas sequentially in the calling process.
@@ -232,11 +234,11 @@ class SerialWangLandauPool:
 
     def __init__(
         self,
-        replicas: Sequence[WangLandauReplica],
+        replicas: Sequence[WangLandauReplica | WangLandauWindowGroup],
         *,
         energy_spacing: float,
     ) -> None:
-        self._replicas: list[WangLandauReplica] = list(replicas)
+        self._replicas: list[WangLandauReplica | WangLandauWindowGroup] = list(replicas)
         self._energy_spacing = float(energy_spacing)
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
@@ -249,7 +251,7 @@ class SerialWangLandauPool:
         return len(self._replicas)
 
     @property
-    def replicas(self) -> list[WangLandauReplica]:
+    def replicas(self) -> list[WangLandauReplica | WangLandauWindowGroup]:
         return list(self._replicas)
 
     @property
@@ -314,16 +316,7 @@ class SerialWangLandauPool:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
     def per_window_stats(self) -> list[dict[str, Any]]:
-        result = []
-        for r in self._replicas:
-            e = r.ensemble
-            result.append({
-                "fill_factor": float(e._fill_factor),
-                "halvings": len(e._fill_factor_history),
-                "histogram": dict(e._histogram),
-                "converged": r.converged,
-            })
-        return result
+        return [r.window_stats() for r in self._replicas]
 
     def attach_observer(
         self,
@@ -446,6 +439,21 @@ class SerialWangLandauPool:
 
     def data_containers(self) -> list[WangLandauDataContainer]:
         return [r.data_container() for r in self._replicas]
+
+    def per_window_data_containers(self) -> list[list[WangLandauDataContainer]]:
+        """All data containers grouped by window slot.
+
+        Returns a list of length n_windows; each entry is a list of
+        WangLandauDataContainer instances — one per walker for
+        WangLandauWindowGroup slots, one for WangLandauReplica slots.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        return [
+            r.all_data_containers() if isinstance(r, WangLandauWindowGroup)
+            else [r.data_container()]
+            for r in self._replicas
+        ]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         return [r.snapshot_for_checkpoint() for r in self._replicas]

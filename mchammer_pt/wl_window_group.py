@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pickle
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from mchammer.observers.base_observer import BaseObserver
@@ -124,8 +124,8 @@ class WangLandauWindowGroup:
         """All W data containers for user analysis."""
         return [r.data_container() for r in self._replicas]
 
-    def window_stats(self) -> dict:
-        """Per-window convergence metrics consumed by SerialWangLandauPool.
+    def window_stats(self) -> dict[str, Any]:
+        """Per-window convergence metrics: fill_factor, halvings, histogram, converged.
 
         fill_factor and halvings are taken from replica 0 (all in sync after
         advance); histogram is the sum across all walkers.
