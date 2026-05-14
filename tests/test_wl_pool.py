@@ -8,6 +8,97 @@ import pytest
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
+def _spawn_wl_worker(tmp_path):
+    """Spawn a single _wl_worker and return (process, parent_conn).
+
+    Caller is responsible for sending SHUTDOWN and joining.
+    """
+    import multiprocessing as mp
+    from mchammer.calculators import ClusterExpansionCalculator
+    from mchammer.ensembles import WangLandauEnsemble
+    from mchammer_pt.parallel._worker import _wl_worker
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    atoms_dict = {
+        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
+        "positions": np.asarray(atoms.positions, dtype=np.float64),
+        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
+        "pbc": np.asarray(atoms.pbc, dtype=bool),
+    }
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=True)
+    process = ctx.Process(
+        target=_wl_worker,
+        args=(
+            child_conn,
+            str(ce_path),
+            atoms_dict,
+            0.1,           # energy_spacing
+            e0 - 100.0,    # energy_limit_left
+            e0 + 100.0,    # energy_limit_right
+            42,            # seed
+            WangLandauEnsemble,
+            {},
+        ),
+        daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    status, _ = parent_conn.recv()   # ready handshake
+    assert status == "OK"
+    return process, parent_conn
+
+
+def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
+    """GET_ENTROPY_SYNC_STATE returns entropy, fill_factor_history_len, histogram."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        conn.send(("GET_ENTROPY_SYNC_STATE",))
+        status, payload = conn.recv()
+        assert status == "OK"
+        assert set(payload.keys()) == {"entropy", "fill_factor_history_len", "histogram"}
+        assert isinstance(payload["entropy"], dict)
+        assert isinstance(payload["fill_factor_history_len"], int)
+        assert isinstance(payload["histogram"], dict)
+    finally:
+        conn.send(("SHUTDOWN",))
+        conn.recv()
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_apply_entropy_sync_halvings_and_entropy(tmp_path):
+    """APPLY_ENTROPY_SYNC applies extra halvings and writes merged entropy."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        conn.send(("GET_ENTROPY_SYNC_STATE",))
+        _, initial = conn.recv()
+        initial_len = initial["fill_factor_history_len"]
+
+        merged_entropy = {0: 1.5, 1: 2.5}
+        conn.send(("APPLY_ENTROPY_SYNC", merged_entropy, 2))
+        status, _ = conn.recv()
+        assert status == "OK"
+
+        conn.send(("GET_ENTROPY_SYNC_STATE",))
+        _, after = conn.recv()
+        assert after["fill_factor_history_len"] == initial_len + 2
+        assert after["entropy"][0] == pytest.approx(1.5)
+        assert after["entropy"][1] == pytest.approx(2.5)
+        # Histogram values must be zeroed (keys preserved from pre-sync)
+        assert all(v == 0 for v in after["histogram"].values())
+    finally:
+        conn.send(("SHUTDOWN",))
+        conn.recv()
+        process.join(timeout=5.0)
+
+
 def _make_serial_wl_pool(n_replicas: int = 2):
     from mchammer.calculators import ClusterExpansionCalculator
 

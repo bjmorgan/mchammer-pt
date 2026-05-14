@@ -273,6 +273,23 @@ def _wl_worker(
                 conn.send(("OK", replica.converged))
             elif op == "WL_STATS":
                 conn.send(("OK", replica.window_stats()))
+            elif op == "GET_ENTROPY_SYNC_STATE":
+                e = replica.ensemble
+                conn.send(("OK", {
+                    "entropy": dict(e._entropy),
+                    "fill_factor_history_len": len(e._fill_factor_history),
+                    "histogram": dict(e._histogram),
+                }))
+            elif op == "APPLY_ENTROPY_SYNC":
+                _, merged_entropy, extra_halvings = cmd
+                e = replica.ensemble
+                for _ in range(extra_halvings):
+                    e._fill_factor /= 2.0
+                    next_key = max(e._fill_factor_history, default=-1) + 1
+                    e._fill_factor_history[next_key] = e._fill_factor
+                    e._histogram = dict.fromkeys(e._histogram, 0)
+                e._entropy = dict(merged_entropy)
+                conn.send(("OK", None))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)
