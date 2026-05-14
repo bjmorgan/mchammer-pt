@@ -640,6 +640,8 @@ class ProcessWangLandauPool:
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per replica.
+        n_walkers_per_window: walkers per energy window; > 1 enables
+            multi-walker entropy sync after each block.
         ensemble_cls: WL ensemble class. Defaults to
             `WangLandauEnsemble`. To use the 1/t schedule, pass
             ``ensemble_kwargs={'schedule': '1_over_t'}``. Spawned
@@ -852,7 +854,6 @@ class ProcessWangLandauPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        # Phase 1: fan-out ADVANCE to all workers
         for slot in self._slots:
             for _, conn in slot:
                 conn.send(("ADVANCE", int(n_steps)))

@@ -505,8 +505,10 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
         _, conn1 = pool._slots[0][1]
         conn0.send(("GET_ENTROPY_SYNC_STATE",))
         conn1.send(("GET_ENTROPY_SYNC_STATE",))
-        _, s0 = conn0.recv()
-        _, s1 = conn1.recv()
+        status0, s0 = conn0.recv()
+        status1, s1 = conn1.recv()
+        assert status0 == "OK"
+        assert status1 == "OK"
 
         assert s0["entropy"] == s1["entropy"]
         assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
