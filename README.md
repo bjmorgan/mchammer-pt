@@ -17,6 +17,25 @@ paths to the colder chains.
 
 - `CanonicalParallelTempering` — canonical-ensemble PT with an
   arbitrary temperature ladder.
+- `WangLandauParallelTempering` — single-walker replica-exchange
+  Wang-Landau (REWL) on top of icet's `WangLandauEnsemble`. To use
+  the Belardinelli-Pereyra 1/t schedule, pass
+  `ensemble_kwargs={'schedule': '1_over_t'}`; the default
+  `schedule='halving'` gives the standard WL fill-factor scheme.
+  Each replica owns a fixed
+  energy window; adjacent windows attempt configuration swaps with
+  a within-window density-of-states ratio for acceptance. Serial
+  and process-parallel backends as for the canonical orchestrator;
+  checkpoint/resume into either pool kind.
+  An analytic-DOS integration test
+  (`tests/integration/test_rewl_2d_ising.py`, marked `slow`)
+  exercises REWL end-to-end on a 4x4 2D Ising fixture: the stitched
+  ln g(E) curve is compared against the exact density of states
+  obtained by brute-force enumeration of all 2^16 configurations,
+  with the residual constrained in standard deviation and maximum
+  deviation. A sign error or systematic bias in the swap formula
+  would push the recovered curve away from the analytic result and
+  the test would fail.
 - Serial and multiprocessing backends, swappable via a single
   constructor argument.
 - Custom Monte Carlo moves: pass any `mchammer.CanonicalEnsemble`
@@ -151,6 +170,62 @@ Spawn workers re-import the class by fully qualified name, so define
 the subclass in a `.py` module file rather than a Jupyter cell. See
 `examples/05_custom_ensemble.py` for a complete worked example.
 
+### Wang-Landau parallel tempering
+
+For Wang-Landau parallel tempering, build per-window starting
+configurations whose energies lie inside their assigned windows,
+then drive `WangLandauParallelTempering.from_bin_count` (or pass
+explicit `windows=` for non-uniform splits):
+
+```python
+from mchammer_pt import WangLandauParallelTempering
+
+# `per_window_atoms` is a list[Atoms], one per window, with each
+# entry's energy in the corresponding window. Generating these
+# is the user's responsibility — typically a short pilot MC run.
+pt = WangLandauParallelTempering.from_bin_count(
+    cluster_expansion=ce,
+    atoms=per_window_atoms,
+    n_bins=4,
+    energy_spacing=1.0,
+    minimum_energy=-32.0,
+    maximum_energy=32.0,
+    overlap=4,
+    block_size=len(per_window_atoms[0]) * 1000,
+    random_seed=0,
+)
+pt.run(n_cycles=500)
+```
+
+`pt.run(...)` exits early once every replica reports `converged`.
+`WangLandauParallelTempering.process_pool(...)` spawns one OS
+process per replica. `save_checkpoint(path)` / `resume(path, ...)`
+/ `resume_process_pool(path, ...)` mirror the canonical surface.
+Observers attach the same way as on the canonical pool (via
+`pt.attach_observer(...)` or, for the class and factory paths,
+directly on `pt.pool`); each replica's recorded observable
+trajectory ends up in its `WangLandauDataContainer`, ready for
+icet's `get_average_observables_wl` against the stitched ln g(E).
+
+Stitch the per-window ln g(E) curves into a single density of
+states via icet's existing `get_density_of_states_wl`:
+
+```python
+from mchammer.data_containers.wang_landau_data_container import (
+    get_density_of_states_wl,
+)
+dcs = dict(enumerate(pt.pool.data_containers()))
+df, errors = get_density_of_states_wl(dcs)
+# df.energy and df.entropy carry the stitched ln g(E).
+```
+
+The `slow` integration test compares the stitched ln g(E) on a
+4x4 2D Ising fixture against the analytic DOS from brute-force
+enumeration; for production runs on a new system, plan to validate
+the recovered DOS against ground truth (e.g. by brute-force
+enumeration on a small case, or against an analytic result) before
+trusting downstream thermodynamic averages.
+
 ## Examples
 
 - `examples/01_basic_canonical.py` — self-contained run on a toy Cu/Au CE.
@@ -163,6 +238,8 @@ the subclass in a `.py` module file rather than a Jupyter cell. See
   long runs via `ProgressPrinter`.
 - `examples/07_resume.py` — checkpoint and resume a PT run, with
   bit-identical continuation.
+- `examples/08_rewl.py` — replica-exchange Wang-Landau on a 4x4
+  2D Ising model, with per-window seeding and DOS stitching.
 
 ## License
 

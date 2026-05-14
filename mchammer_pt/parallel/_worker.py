@@ -1,8 +1,13 @@
-"""Worker-side implementation of the persistent multiprocessing pool.
+"""Worker-side implementation of the persistent multiprocessing pools.
 
-Each worker process starts by building a `Replica`, sending a single
-("OK", None) ready-handshake to the parent, then entering the
-following command loop:
+Two worker entry points live here: `_worker` for canonical replicas
+(driven by `ProcessPool`) and `_wl_worker` for Wang-Landau replicas
+(driven by `ProcessWangLandauPool`). Each builds its replica,
+sends a single ``("OK", None)`` ready-handshake to the parent, and
+then enters a command loop reading ``(opcode, *args)`` tuples and
+replying with ``(status, payload)`` tuples.
+
+Shared opcodes (both workers):
 
 - ``("ADVANCE", n_steps)`` -> replies ``("OK", None)`` after the run
 - ``("ENERGY",)`` -> replies ``("OK", float)`` with total CE energy
@@ -18,6 +23,10 @@ following command loop:
   ``_restart_ensemble``, and (if ``sites_by_species`` is non-None)
   restores the ``ConfigurationManager._sites_by_species`` cache;
   replies ``("OK", None)``
+- ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
+
+Observer-attach opcodes (both workers):
+
 - ``("ATTACH_OBS", pickled_blob)`` -> deserialises and attaches an
   observer; replies ``("OK", None)``
 - ``("ATTACH_OBS_CLS", cls, args, kwargs)`` -> constructs
@@ -26,7 +35,15 @@ following command loop:
   and attaches; replies ``("OK", None)``
 - ``("GET_OBSERVERS",)`` -> replies ``("OK", dict[str, BaseObserver])``
   with the replica's currently-attached observers (pickled on send)
-- ``("SHUTDOWN",)`` -> replies ``("OK", None)`` then exits
+
+REWL-only opcodes (`_wl_worker` only):
+
+- ``("LOG_G_AT", E_i, E_j)`` -> replies ``("OK", (g_at_E_i, g_at_E_j))``
+  with the replica's `log_g` evaluated at both energies
+- ``("CONVERGED",)`` -> replies ``("OK", bool)`` with the replica's
+  converged flag
+- ``("WL_STATS",)`` -> replies ``("OK", dict)`` with lightweight
+  convergence metrics (fill_factor, halvings, histogram, converged)
 
 Every reply is of the form ``(status, payload)``. ``status`` is one
 of ``"OK"`` (payload is the result), ``"ERR_PICKLE"`` (the reply
@@ -50,13 +67,17 @@ from multiprocessing.connection import Connection
 from typing import Any
 
 from ase import Atoms
-from icet import ClusterExpansion  # type: ignore[import-untyped]
-from mchammer.ensembles import CanonicalEnsemble  # type: ignore[import-untyped]
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from icet import ClusterExpansion
+from mchammer.ensembles import (
+    CanonicalEnsemble,
+    WangLandauEnsemble,
+)
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
 from ..replica import Replica
+from ..wl_replica import WangLandauReplica
 
 
 def _worker(
@@ -128,6 +149,136 @@ def _worker(
                     container, sites_by_species=sites_by_species
                 )
                 conn.send(("OK", None))
+            elif op == "ATTACH_OBS":
+                observer = pickle.loads(cmd[1])
+                replica.attach_mchammer_observer(observer)
+                conn.send(("OK", None))
+            elif op == "ATTACH_OBS_CLS":
+                _, cls, args, kwargs = cmd
+                replica.attach_mchammer_observer(cls(*args, **kwargs))
+                conn.send(("OK", None))
+            elif op == "ATTACH_OBS_FACTORY":
+                factory = cmd[1]
+                observer = factory(replica)
+                if not isinstance(observer, BaseObserver):
+                    raise TypeError(
+                        f"attach_observer_factory: factory returned "
+                        f"{type(observer).__name__}, not a BaseObserver"
+                    )
+                replica.attach_mchammer_observer(observer)
+                conn.send(("OK", None))
+            elif op == "GET_OBSERVERS":
+                # Pickling the live observer dict is safe because the
+                # worker is single-threaded and idle here; a future
+                # refactor adding background work would need to copy.
+                observers = replica.ensemble.observers
+                try:
+                    pickle.dumps(observers)
+                except Exception:
+                    conn.send(("ERR_PICKLE", traceback.format_exc()))
+                else:
+                    conn.send(("OK", observers))
+            elif op == "SHUTDOWN":
+                conn.send(("OK", None))
+                conn.close()
+                return
+            else:
+                conn.send(("ERR", f"unknown command: {op!r}"))
+        except Exception:
+            conn.send(("ERR", traceback.format_exc()))
+
+
+def _wl_worker(
+    conn: Connection,
+    ce_path: str,
+    atoms_dict: dict[str, Any],
+    energy_spacing: float,
+    energy_limit_left: float | None,
+    energy_limit_right: float | None,
+    seed: int,
+    ensemble_cls: type[WangLandauEnsemble],
+    ensemble_kwargs: dict[str, Any],
+) -> None:
+    """REWL worker entry point: build a WangLandauReplica, then serve commands.
+
+    Recognises the data/state opcodes shared with the canonical worker
+    (ADVANCE, ENERGY, GET_OCC, SET_OCC, GET_DC, SNAPSHOT_FOR_CHECKPOINT,
+    RESTORE_STATE, SHUTDOWN) plus three REWL-specific ones:
+
+    - ``("LOG_G_AT", E_i, E_j)`` -> ``("OK", (g_at_E_i, g_at_E_j))``
+      The worker evaluates its replica's `log_g` at the two energies
+      in one round trip.
+    - ``("CONVERGED",)`` -> ``("OK", bool)`` the replica's `converged`
+      flag.
+    - ``("WL_STATS",)`` -> ``("OK", dict)`` lightweight convergence
+      metrics: fill_factor, halvings, histogram, converged.
+    """
+    try:
+        atoms = Atoms(
+            numbers=atoms_dict["numbers"],
+            positions=atoms_dict["positions"],
+            cell=atoms_dict["cell"],
+            pbc=atoms_dict["pbc"],
+        )
+        ce = ClusterExpansion.read(ce_path)
+        replica = WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=energy_spacing,
+            energy_limit_left=energy_limit_left,
+            energy_limit_right=energy_limit_right,
+            random_seed=seed,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            cluster_expansion_path=ce_path,
+        )
+    except BaseException:
+        conn.send(("ERR", traceback.format_exc()))
+        conn.close()
+        return
+
+    conn.send(("OK", None))
+
+    while True:
+        try:
+            cmd = conn.recv()
+        except EOFError:
+            return
+        op = cmd[0]
+        try:
+            if op == "ADVANCE":
+                replica.advance(cmd[1])
+                conn.send(("OK", None))
+            elif op == "ENERGY":
+                conn.send(("OK", replica.current_energy()))
+            elif op == "GET_OCC":
+                conn.send(("OK", replica.current_occupations()))
+            elif op == "SET_OCC":
+                replica.set_occupations(cmd[1])
+                conn.send(("OK", None))
+            elif op == "GET_DC":
+                conn.send(("OK", replica.data_container()))
+            elif op == "SNAPSHOT_FOR_CHECKPOINT":
+                conn.send(("OK", replica.snapshot_for_checkpoint()))
+            elif op == "RESTORE_STATE":
+                _, container, sites_by_species = cmd
+                replica.restore_state(
+                    container, sites_by_species=sites_by_species
+                )
+                conn.send(("OK", None))
+            elif op == "LOG_G_AT":
+                _, E_i, E_j = cmd
+                conn.send(("OK", (replica.log_g(E_i), replica.log_g(E_j))))
+            elif op == "CONVERGED":
+                conn.send(("OK", replica.converged))
+            elif op == "WL_STATS":
+                e = replica.ensemble
+                conn.send(("OK", {
+                    "fill_factor": float(e._fill_factor),
+                    "halvings": len(e._fill_factor_history),
+                    "histogram": dict(e._histogram),
+                    "converged": replica.converged,
+                }))
             elif op == "ATTACH_OBS":
                 observer = pickle.loads(cmd[1])
                 replica.attach_mchammer_observer(observer)

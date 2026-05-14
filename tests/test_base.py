@@ -288,8 +288,6 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
     future pool that implements only `ReplicaPool`. A small dummy
     pool that lacks the attach methods stands in for that case.
     """
-    from collections.abc import Sequence
-
     from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
         BaseDataContainer,
     )
@@ -309,10 +307,6 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
         def __len__(self) -> int:
             return 2
 
-        @property
-        def temperatures(self) -> Sequence[float]:
-            return [300.0, 400.0]
-
         def advance_all(self, n_steps: int) -> None:
             raise NotImplementedError
 
@@ -331,6 +325,9 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
         def data_containers(self) -> list[BaseDataContainer]:
             raise NotImplementedError
 
+        def snapshot_for_checkpoint(self) -> list[dict]:
+            raise NotImplementedError
+
         def shutdown(self) -> None:
             return None
 
@@ -345,7 +342,7 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
     pt = _AlwaysRejectPT(
         pool=pool, block_size=20, random_seed=0, template_atoms=toy_atoms,
     )
-    with pytest.raises(TypeError, match="ObservablePool"):
+    with pytest.raises(TypeError, match="observer attach"):
         pt.attach_observer(_DummyObs())
 
 
@@ -403,3 +400,48 @@ def test_final_configurations_before_run(toy_ce, toy_atoms):
         np.testing.assert_array_equal(
             atoms.numbers, pool.current_occupations(i)
         )
+
+
+def test_try_exchange_accepts_minus_inf_log_ratio(toy_ce, toy_atoms):
+    """A -inf log-prob ratio rejects the swap cleanly, not raises."""
+
+    class _MinusInfPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, j):
+            return -np.inf
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _MinusInfPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+    history = pt.run(n_cycles=2)
+    assert history.swap_attempted.sum() > 0
+    assert history.swap_accepted.sum() == 0
+
+
+def test_try_exchange_still_rejects_plus_inf(toy_ce, toy_atoms):
+    """+inf log-ratio is still illegal."""
+
+    class _PlusInfPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, j):
+            return np.inf
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _PlusInfPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+    with pytest.raises(RuntimeError, match="Non-finite"):
+        pt.run(n_cycles=1)
+
+

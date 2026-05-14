@@ -2,8 +2,9 @@
 
 `BaseParallelTempering` drives the cycle loop, records per-cycle
 observations, and coordinates exchange proposals. All replica state
-lives in the pool (`ReplicaPool` or `ObservablePool`); the orchestrator
-routes queries through it and never holds replica state directly.
+lives in the pool (`ReplicaPool`, `CanonicalPool`, `WangLandauPool`,
+or their observable variants); the orchestrator routes queries
+through it and never holds replica state directly.
 
 Ensemble-specific subclasses override exactly one method:
 `_log_prob_ratio(i, j)`.
@@ -14,11 +15,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from ase import Atoms
-from mchammer.observers.base_observer import (  # type: ignore[import-untyped]
+from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
@@ -26,17 +27,22 @@ from .callbacks import CycleCallback, ExchangeCallback
 from .checkpoint import CheckpointWriter
 from .exchange import metropolis_accept, pair_set_for_cycle
 from .history import ExchangeHistory
-from .parallel.backend import ObservablePool, ReplicaPool
+from .parallel.backend import ReplicaPool, _ObserverAttach
+
+if TYPE_CHECKING:
+    from .history import MetaValue
 
 
 class BaseParallelTempering(ABC):
     """Abstract PT orchestrator.
 
     Args:
-        pool: a `ReplicaPool` owning one replica per temperature, in
-            ascending-T order. If the pool is an `ObservablePool`,
-            `attach_observer` will forward to it; otherwise calling
-            `attach_observer` raises `TypeError`.
+        pool: a `ReplicaPool` owning one replica per ladder rung. If
+            the pool satisfies `_ObserverAttach`
+            (i.e. it is an `ObservablePool` or
+            `WangLandauObservablePool`), `attach_observer` will
+            forward to it; otherwise calling `attach_observer` raises
+            `TypeError`.
         block_size: MC trial steps per replica per cycle.
         random_seed: master seed for the exchange-proposal RNG.
         template_atoms: reference structure whose cell, positions, and
@@ -157,9 +163,10 @@ class BaseParallelTempering(ABC):
     ) -> None:
         """Attach an mchammer observer to one or more replicas.
 
-        Requires the pool to satisfy `ObservablePool`. Any pool that
-        implements only `ReplicaPool` does not satisfy it; calling this
-        method with such a pool raises `TypeError`.
+        Requires the pool to satisfy the `_ObserverAttach` mixin
+        Protocol, which `ObservablePool` (canonical) and
+        `WangLandauObservablePool` (REWL) both extend. Pools that
+        don't expose observer attach raise `TypeError`.
 
         For ``attach_observer_class`` and ``attach_observer_factory``,
         reach the pool directly via ``self.pool``.
@@ -169,10 +176,10 @@ class BaseParallelTempering(ABC):
             replicas: either the string ``"all"``, or an explicit sequence
                 of replica indices to attach to.
         """
-        if not isinstance(self._pool, ObservablePool):
+        if not isinstance(self._pool, _ObserverAttach):
             raise TypeError(
-                f"attach_observer requires an ObservablePool; "
-                f"{type(self._pool).__name__} does not satisfy it."
+                f"attach_observer requires a pool that supports observer "
+                f"attach; {type(self._pool).__name__} does not."
             )
         self._pool.attach_observer(observer, replicas)
 
@@ -209,6 +216,17 @@ class BaseParallelTempering(ABC):
         """Log of the exchange acceptance ratio for adjacent replicas i, j."""
         ...
 
+    def _checkpoint_meta(self) -> dict[str, MetaValue]:
+        """Subclass-specific keys for the checkpoint meta dict.
+
+        Default: empty dict (subclass contributes nothing beyond the
+        shared keys). Canonical PT returns ``{"temperatures": ...}``;
+        Wang-Landau PT returns ``{"windows": ..., "energy_spacing": ...}``.
+        Shared keys (block_size, random_seed, identity hashes,
+        schema_version) live in `checkpoint._write_checkpoint`.
+        """
+        return {}
+
     # --- internals ----
 
     def _try_exchange(
@@ -219,15 +237,17 @@ class BaseParallelTempering(ABC):
         history: ExchangeHistory,
     ) -> None:
         log_r = self._log_prob_ratio(i, j)
-        if not np.isfinite(log_r):
+        if np.isnan(log_r) or log_r == np.inf:
             E_i = self._pool.current_energy(i)
             E_j = self._pool.current_energy(j)
             raise RuntimeError(
                 f"Non-finite log-probability ratio on cycle {cycle}, "
                 f"pair ({i}, {j}): log_r = {log_r}, "
                 f"E_i = {E_i}, E_j = {E_j}. "
-                f"Check for NaN/inf replica energies (diverged MC, "
-                f"bad cluster expansion, etc.)."
+                f"Check for NaN/+inf replica energies (diverged MC, "
+                f"bad cluster expansion, or a REWL replica that has "
+                f"drifted outside its own window). Negative-infinity ratios "
+                f"are legal (e.g. out-of-window partner energy in REWL)."
             )
         accepted = metropolis_accept(log_r, self._rng)
         pair_index = min(i, j)

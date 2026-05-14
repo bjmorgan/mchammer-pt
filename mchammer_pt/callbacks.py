@@ -7,8 +7,9 @@ attempt/accept counters) and `ExchangePrinter` (stdout trace on a
 configurable cadence).
 
 `CycleCallback` fires once per PT cycle, after that cycle's history
-rows are written. Built-in: `ProgressPrinter` (periodic progress
-lines on stderr for long runs).
+rows are written. Built-ins: `ProgressPrinter` (periodic progress
+lines on stderr for canonical runs) and `WangLandauProgressPrinter`
+(per-window convergence table for REWL runs).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from .history import ExchangeHistory
+    from .parallel.backend import WangLandauPool
 
 
 class ExchangeCallback(Protocol):
@@ -222,3 +224,130 @@ class ProgressPrinter:
             )
             line += f"  acc {rate_str}"
         print(line, file=self._file, flush=True)
+
+
+class WangLandauProgressPrinter:
+    """Periodic per-window WL convergence summary on stderr.
+
+    A built-in `CycleCallback` for monitoring REWL runs. Emits one
+    block every ``interval`` cycles plus one at the final cycle: a
+    header line (timestamp, cycle, percent, elapsed, ETA, and
+    optionally cumulative swap-acceptance rates) followed by a compact
+    table with one row per window.
+
+    Each row reports the current fill factor, number of WL halvings
+    completed (each halving marks one successfully flattened
+    histogram), number of energy bins visited in the current
+    histogram phase, histogram flatness (``min(H) / mean(H)`` — compare
+    against your ``flatness_limit``), and whether the window has
+    converged.
+
+    Metrics are read from the live ensemble state via
+    ``pool.per_window_stats()``, so they are always current regardless
+    of ``ensemble_data_write_interval``.
+
+    Args:
+        pool: the `WangLandauPool` driving the REWL orchestrator.
+            Passed at construction so the callback can query per-
+            window convergence statistics via ``pool.per_window_stats()``
+            from ``on_cycle_end``. For process pools, each emission
+            triggers an IPC round-trip to collect the stats; keep
+            ``interval`` large enough that this overhead is acceptable.
+        interval: emit a block every ``interval`` completed cycles.
+            Must be ``>= 1``. The final cycle always emits.
+        show_swap_rates: include cumulative per-pair acceptance rates
+            in the header line. Defaults to ``True``.
+        file: stream to write to. Defaults to ``sys.stderr``.
+    """
+
+    def __init__(
+        self,
+        pool: WangLandauPool,
+        interval: int = 100,
+        *,
+        show_swap_rates: bool = True,
+        file: TextIO | None = None,
+    ) -> None:
+        if int(interval) < 1:
+            raise ValueError(f"interval must be >= 1, got {interval!r}")
+        self._pool = pool
+        self._interval = int(interval)
+        self._show_swap_rates = bool(show_swap_rates)
+        self._file: TextIO = sys.stderr if file is None else file
+        self._start: float | None = None
+
+    def on_cycle_end(
+        self,
+        cycle: int,
+        n_cycles: int,
+        history: ExchangeHistory,
+    ) -> None:
+        if cycle == 0:
+            self._start = time.monotonic()
+        if not ((cycle + 1) % self._interval == 0 or cycle == n_cycles - 1):
+            return
+        assert self._start is not None
+        elapsed = time.monotonic() - self._start
+        cycles_done = cycle + 1
+        fraction = cycles_done / n_cycles
+        eta = (
+            elapsed * (n_cycles / cycles_done - 1)
+            if cycles_done < n_cycles
+            else 0.0
+        )
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header = (
+            f"[REWL {timestamp}] "
+            f"cycle {cycles_done}/{n_cycles}  "
+            f"{100.0 * fraction:.1f}%  "
+            f"elapsed {_format_duration(elapsed)}  "
+            f"ETA {_format_duration(eta)}"
+        )
+        if self._show_swap_rates:
+            rates = np.where(
+                history.swap_attempted > 0,
+                history.swap_accepted / np.maximum(history.swap_attempted, 1),
+                np.nan,
+            )
+            rate_str = np.array2string(
+                rates,
+                precision=2,
+                suppress_small=True,
+                separator=" ",
+                max_line_width=10**9,
+            )
+            header += f"  acc {rate_str}"
+
+        stats = self._pool.per_window_stats()
+
+        col_hdr = (
+            f"  {'win':>3s}  {'fill_factor':>11s}  "
+            f"{'halvings':>8s}  {'bins_visited':>12s}  "
+            f"{'flat_min':>8s}  {'converged':>9s}"
+        )
+        rows: list[str] = []
+        for i, s in enumerate(stats):
+            ff_str = f"{s['fill_factor']:.3e}"
+            halvings_str = str(s["halvings"])
+
+            hist = s["histogram"]
+            if hist:
+                bins_visited_str = str(len(hist))
+                counts = np.array(list(hist.values()), dtype=float)
+                mean_c = float(counts.mean())
+                flat_str = f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
+            else:
+                bins_visited_str = "0"
+                flat_str = "--"
+
+            conv_str = "yes" if s["converged"] else "no"
+            rows.append(
+                f"  {i:>3d}  {ff_str:>11s}  {halvings_str:>8s}  "
+                f"{bins_visited_str:>12s}  {flat_str:>8s}  {conv_str:>9s}"
+            )
+
+        print(
+            "\n".join([header, col_hdr, *rows]),
+            file=self._file,
+            flush=True,
+        )

@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-14
+
+### Added
+
+- Single-walker replica-exchange Wang-Landau (REWL) on top of
+  icet's ``WangLandauEnsemble``. Each replica owns a fixed energy
+  window; adjacent windows attempt configuration swaps between
+  cycles using a within-window log-density-of-states ratio for
+  acceptance. The base ``WangLandauEnsemble`` from mainline icet is
+  the default; pass ``ensemble_kwargs={'schedule': '1_over_t'}``
+  to use the Belardinelli-Pereyra 1/t schedule.
+- ``WangLandauParallelTempering`` orchestrator with
+  ``save_checkpoint``/``resume`` (serial pool) and
+  ``resume_process_pool``. ``run()`` stops early when every replica
+  reports converged. ``from_bin_count`` convenience constructor
+  wraps icet's ``get_bins_for_parallel_simulations`` for a uniform
+  window split.
+- ``WangLandauReplica`` wrapper handle. Validates initial energy is
+  in window at construction; ``set_occupations`` refreshes the
+  cached ``_potential`` and ``_reached_energy_window`` so swap-
+  delivered configurations are bookkept correctly.
+- ``WangLandauPool`` protocol plus ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool`` implementations. The process pool
+  spawns one OS process per replica with a new ``_wl_worker``
+  entry point and REWL-specific opcodes (``LOG_G_AT``,
+  ``CONVERGED``, ``WL_STATS``) on top of the canonical-shared set.
+- Observer attach for REWL pools. ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool`` now satisfy a new
+  ``WangLandauObservablePool`` protocol (mirrors
+  ``ObservablePool`` for canonical) with ``attach_observer``,
+  ``attach_observer_class``, ``attach_observer_factory``, and
+  ``get_observers``. Use this to record per-step observable
+  trajectories during a REWL run, then feed the per-replica data
+  containers into icet's ``get_average_observables_wl`` for
+  thermodynamic averages against the stitched density of states.
+- ``WangLandauProgressPrinter`` built-in ``CycleCallback`` for
+  monitoring REWL runs. Emits every ``interval`` cycles: a header
+  line (timestamp, cycle, elapsed, ETA, swap rates) followed by a
+  compact table with one row per window reporting fill factor,
+  number of WL halvings, bins visited, histogram flatness
+  (``min(H)/mean(H)`` — compare against your ``flatness_limit``),
+  and convergence status. Reads from live ensemble state via a new
+  ``pool.per_window_stats()`` method, so values are always current
+  regardless of ``ensemble_data_write_interval``.
+- A ``slow``-marked integration test
+  (``tests/integration/test_rewl_2d_ising.py``) exercising REWL
+  end-to-end on a 4x4 2D Ising fixture. After convergence, the
+  stitched ln g(E) curve from ``get_density_of_states_wl`` is
+  compared against the exact density of states obtained by
+  brute-force enumeration over all 2^16 configurations; the
+  residual is constrained in both standard deviation and maximum
+  deviation.
+- ``examples/08_rewl.py`` — self-contained REWL example on the 4x4
+  2D Ising model: window construction, per-window seeding, a
+  convergence run with ``WangLandauProgressPrinter``, and DOS
+  stitching via ``get_density_of_states_wl``.
+
+### Changed
+
+- The 1/t schedule is now selected via
+  ``ensemble_kwargs={'schedule': '1_over_t'}`` rather than by
+  passing a separate ``ensemble_cls``. This follows icet's
+  refactoring of the Belardinelli-Pereyra schedule into the base
+  ``WangLandauEnsemble`` class.
+- Lifted ``temperatures`` off the base ``ReplicaPool`` protocol
+  into a new ``CanonicalPool`` subprotocol. Existing
+  ``SerialPool``/``ProcessPool`` classes continue to satisfy
+  ``CanonicalPool`` (and therefore ``ObservablePool``) without
+  caller changes. ``CanonicalParallelTempering.__init__`` now
+  types its ``pool`` parameter as ``CanonicalPool | None``.
+- ``BaseParallelTempering._try_exchange`` now accepts a ``-inf``
+  log-probability ratio as a clean swap rejection (legal in REWL
+  when one replica's partner energy lies outside its window).
+  ``+inf`` and ``NaN`` continue to raise.
+- ``WangLandauParallelTempering.cycles_completed`` renamed to
+  ``cycles_in_segment`` to reflect that it counts cycles in the
+  current ``run()`` call (resets to 0 on each call, including after
+  resume), not cumulative cycles across the full trajectory.
+- Bumped checkpoint schema to ``"3"``. Checkpoints written by
+  v0.7.0 (schema ``"2"``) are not valid resume sources for this
+  version; ``resume`` hard-errors with a clear message on the
+  version mismatch. The schema change accompanies a refactor that
+  moves ladder-specific meta keys (``temperatures`` for canonical
+  PT, ``windows`` + ``energy_spacing`` for Wang-Landau PT) behind
+  a per-subclass ``_checkpoint_meta()`` hook on
+  ``BaseParallelTempering``.
+
 ## [0.7.0] - 2026-05-08
 
 ### Added

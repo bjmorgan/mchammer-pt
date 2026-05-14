@@ -41,9 +41,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import h5py  # type: ignore[import-untyped]
+import h5py
 import numpy as np
-from mchammer.data_containers.base_data_container import (  # type: ignore[import-untyped]
+from mchammer.data_containers.base_data_container import (
     BaseDataContainer,
 )
 

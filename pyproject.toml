@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.7.0"
+version = "0.8.0"
 description = "Parallel tempering orchestrator for mchammer canonical Monte Carlo"
 readme = "README.md"
 authors = [
@@ -37,12 +37,20 @@ include = ["mchammer_pt*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: integration tests that take minutes (not run by default)",
+]
 
 [tool.mypy]
 python_version = "3.11"
 packages = ["mchammer_pt"]
 strict = true
 warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["icet", "icet.*", "mchammer", "mchammer.*", "h5py", "h5py.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py311"

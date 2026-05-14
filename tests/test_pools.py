@@ -1363,3 +1363,35 @@ def test_get_observers_matches_across_pools(
     for s, p in zip(serial_obs, process_obs, strict=True):
         assert set(s.keys()) == set(p.keys()) == {"counter"}
         assert s["counter"].n_calls == p["counter"].n_calls
+
+
+def test_canonical_pool_protocol_carries_temperatures(toy_ce, toy_atoms):
+    """SerialPool satisfies CanonicalPool and exposes `temperatures`."""
+    from mchammer_pt.parallel.backend import CanonicalPool, ReplicaPool
+    from mchammer_pt.parallel.serial import SerialPool
+    from mchammer_pt.replica import Replica
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pool = SerialPool(replicas)
+    assert isinstance(pool, ReplicaPool)
+    assert isinstance(pool, CanonicalPool)
+    assert list(pool.temperatures) == [300.0, 400.0]
+
+
+def test_replica_pool_protocol_does_not_carry_temperatures():
+    """Bare ReplicaPool protocol no longer declares `temperatures`."""
+    from mchammer_pt.parallel.backend import ReplicaPool
+
+    assert "temperatures" not in dir(ReplicaPool)
+
+
+def test_wang_landau_pool_protocol_exists():
+    """WangLandauPool is a runtime-checkable Protocol extending ReplicaPool."""
+    from mchammer_pt.parallel.backend import ReplicaPool, WangLandauPool
+
+    assert issubclass(WangLandauPool, ReplicaPool)
+    for name in ("windows", "energy_spacing", "log_g", "log_g_pair", "converged_flags"):
+        assert hasattr(WangLandauPool, name) or name in dir(WangLandauPool)

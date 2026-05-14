@@ -3,22 +3,24 @@
 This module owns the serialisation side of `mchammer-pt`'s
 checkpoint format: identity hashes for the CE and ensemble kwargs,
 the `CheckpointWriter` `CycleCallback`, and the writer/reader
-helpers used by `CanonicalParallelTempering.save_checkpoint`,
-`CanonicalParallelTempering.resume`, and the existing
-`data_container_file=` write path.
+helpers used by every `BaseParallelTempering` subclass that
+supports checkpoint and resume (`CanonicalParallelTempering` and
+`WangLandauParallelTempering` as of schema version ``"3"``).
 
-The on-disk schema (version ``"2"``) is HDF5 with these top-level
-groups: ``meta`` (run metadata as attrs, including
-``schema_version``, ``temperatures``, ``block_size``,
-``random_seed``, ``ce_identity``, ``ensemble_cls_fqn``, and
-``ensemble_kwargs_hash``); ``exchanges`` (per-cycle history
-arrays); ``replicas`` (one opaque tarball per replica, the native
-mchammer ``BaseDataContainer`` format); ``orchestrator`` (the
-exchange-proposal RNG state and the replica-label permutation);
-and ``sites_by_species`` (one JSON dataset per replica carrying
-the path-dependent ``ConfigurationManager._sites_by_species``
-cache that bit-identical resume requires alongside
-``_last_state``).
+The on-disk schema (version ``"3"``) is HDF5 with these top-level
+groups: ``meta`` (run metadata as attrs; six shared keys —
+``schema_version``, ``block_size``, ``random_seed``,
+``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
+plus ladder-specific keys contributed by each orchestrator
+subclass via ``_checkpoint_meta()``: ``temperatures`` for canonical
+PT, ``windows`` + ``energy_spacing`` for REWL);
+``exchanges`` (per-cycle history arrays); ``replicas`` (one opaque
+tarball per replica, the native mchammer ``BaseDataContainer``
+format); ``orchestrator`` (the exchange-proposal RNG state and the
+replica-label permutation); and ``sites_by_species`` (one JSON
+dataset per replica carrying the path-dependent
+``ConfigurationManager._sites_by_species`` cache that bit-identical
+resume requires alongside ``_last_state``).
 """
 
 from __future__ import annotations
@@ -26,15 +28,16 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import h5py  # type: ignore[import-untyped]
+import h5py
 import numpy as np
-from icet import ClusterExpansion  # type: ignore[import-untyped]
+from icet import ClusterExpansion
 
-from .history import ExchangeHistory
+from .history import ExchangeHistory, MetaValue
 
 
 def _compute_ce_identity(cluster_expansion: ClusterExpansion) -> str:
@@ -104,6 +107,44 @@ def _compute_ensemble_kwargs_hash(
     except Exception:
         return ""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_kwargs_hash(
+    path: Path | str,
+    meta: dict[str, MetaValue],
+    ensemble_kwargs: Mapping[str, Any] | None,
+    caller: str,
+) -> None:
+    """Resume-side guard for the ensemble-kwargs hash.
+
+    Hard-error on a real mismatch (both sides hashed cleanly and
+    differ). When either side returned the unpicklable-kwargs
+    sentinel ``""``, the hash carries no information and the guard
+    cannot enforce identity — emit a `UserWarning` rather than
+    silently skipping, so a user resuming with materially different
+    kwargs sees a signal that bit-identical resume isn't guaranteed.
+    """
+    expected = _compute_ensemble_kwargs_hash(ensemble_kwargs)
+    saved = meta.get("ensemble_kwargs_hash", "")
+    if expected and saved and expected != saved:
+        raise ValueError(
+            f"{path}: ensemble_kwargs hash mismatch. {caller} was "
+            f"called with kwargs that hash differently from the "
+            f"checkpoint."
+        )
+    if not expected or not saved:
+        side = "the supplied" if not expected else "the checkpoint's"
+        warnings.warn(
+            f"{path}: {side} ensemble_kwargs are not stably "
+            f"hashable (typically because they contain icet "
+            f"ClusterSpace, ClusterExpansion, or similar "
+            f"non-picklable objects). The kwargs-identity guard "
+            f"is being skipped; if {caller} was called with "
+            f"materially different kwargs from the original run, "
+            f"the resumed trajectory will diverge silently.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def _read_replica_extra(path: Path | str) -> list[dict[str, Any]]:
@@ -212,16 +253,26 @@ def _serialise_rng_state(rng: np.random.Generator) -> str:
 def _write_checkpoint(pt: object, path: Path | str) -> None:
     """Write a full checkpoint of `pt` to `path` atomically.
 
-    Used by `CanonicalParallelTempering.save_checkpoint`,
-    `CheckpointWriter`, and the `data_container_file=` write path.
-    `pt` must be a `CanonicalParallelTempering` instance whose
-    `run()` has been called at least once.
+    Used by every orchestrator's ``save_checkpoint`` method, the
+    ``data_container_file=`` write path inside ``run()``, and
+    `CheckpointWriter`. `pt` must be a `BaseParallelTempering`
+    subclass that:
 
-    The function reads the identity hashes the orchestrator cached
-    at construction (`_ce_identity`, `_ensemble_cls_fqn`,
-    `_ensemble_kwargs_hash`, `_random_seed`) and the live state
-    (`_history`, `_replica_labels`, `_rng`) and packs them into the
-    schema-``"2"`` HDF5 layout described in this module's docstring.
+    - carries the identity attributes set during construction
+      (`_ce_identity`, `_ensemble_cls_fqn`, `_ensemble_kwargs_hash`,
+      `_random_seed`, `_block_size`);
+    - carries the live orchestrator state (`_history`,
+      `_replica_labels`, `_rng`);
+    - implements `_checkpoint_meta()` returning any ladder-specific
+      keys (canonical PT contributes ``temperatures``; REWL
+      contributes ``windows`` and ``energy_spacing``).
+
+    Requires `run()` to have been called at least once, so that
+    each replica's `_last_state` is populated and the on-disk
+    container round-trips through ``_restart_ensemble``.
+
+    The function packs these into the schema-``"3"`` HDF5 layout
+    described in this module's docstring.
     """
     from .history import write_hdf5
 
@@ -231,15 +282,15 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
             "least once; the per-replica data containers do not have "
             "a populated `_last_state` until a run completes."
         )
-    meta: dict[str, Any] = {
-        "schema_version": "2",
-        "temperatures": pt._temperatures,  # type: ignore[attr-defined]
+    meta: dict[str, MetaValue] = {
+        "schema_version": "3",
         "block_size": int(pt._block_size),  # type: ignore[attr-defined]
         "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
         "ce_identity": pt._ce_identity,  # type: ignore[attr-defined]
         "ensemble_cls_fqn": pt._ensemble_cls_fqn,  # type: ignore[attr-defined]
         "ensemble_kwargs_hash": pt._ensemble_kwargs_hash,  # type: ignore[attr-defined]
     }
+    meta.update(pt._checkpoint_meta())  # type: ignore[attr-defined]
     orchestrator_state: dict[str, np.ndarray | str] = {
         "replica_labels": pt._replica_labels.copy(),  # type: ignore[attr-defined]
         "rng_state": _serialise_rng_state(pt._rng),  # type: ignore[attr-defined]
