@@ -15,7 +15,7 @@ from icet import ClusterExpansion, ClusterSpace
 
 
 def make_wl_cluster_space() -> ClusterSpace:
-    """4x4x1 single-layer FCC, two-species, 1.1 A pair cutoff."""
+    """FCC conventional cell, two-species (Ag/Au), 3.5 A pair cutoff."""
     primitive = bulk("Au", "fcc", a=4.0, cubic=True)
     return ClusterSpace(
         structure=primitive,

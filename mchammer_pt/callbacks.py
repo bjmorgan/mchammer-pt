@@ -249,11 +249,10 @@ class WangLandauProgressPrinter:
     Args:
         pool: the `WangLandauPool` driving the REWL orchestrator.
             Passed at construction so the callback can query per-
-            window data containers from ``on_cycle_end`` without
-            needing pool access at call time. For process pools,
-            each emission triggers an IPC round-trip to fetch the
-            data containers; keep ``interval`` large enough that this
-            overhead is acceptable.
+            window convergence statistics via ``pool.per_window_stats()``
+            from ``on_cycle_end``. For process pools, each emission
+            triggers an IPC round-trip to collect the stats; keep
+            ``interval`` large enough that this overhead is acceptable.
         interval: emit a block every ``interval`` completed cycles.
             Must be ``>= 1``. The final cycle always emits.
         show_swap_rates: include cumulative per-pair acceptance rates
