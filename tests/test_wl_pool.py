@@ -485,6 +485,107 @@ def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
         assert len(pool._slots[1]) == 2
 
 
+def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
+    """converged_flags is False for a slot unless all walkers are converged."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    # Use a single-bin window (width 0.1 = energy_spacing) so the histogram
+    # is trivially flat after one in-window step.  flatness_check_interval=1
+    # fires the convergence check every step; fill_factor_limit=0.5 means one
+    # halving (fill_factor 1.0 -> 0.5) is enough to converge.
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 0.05, e0 + 0.05)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        ensemble_kwargs={"flatness_check_interval": 1, "fill_factor_limit": 0.5},
+    ) as pool:
+        # Neither walker is converged initially
+        assert not pool.converged_flags()[0]
+
+        # Force-converge walker 0 only by advancing until it converges.
+        # With a single bin and per-step flatness checks, convergence is
+        # reached quickly once the walker is inside its window.
+        _, conn0 = pool._slots[0][0]
+        for _ in range(200):
+            conn0.send(("ADVANCE", 1))
+            conn0.recv()
+            conn0.send(("CONVERGED",))
+            _, val = conn0.recv()
+            if val:
+                break
+        # Walker 0 converged; walker 1 has not been advanced
+        assert not pool.converged_flags()[0]
+
+        # Now converge walker 1 the same way
+        _, conn1 = pool._slots[0][1]
+        for _ in range(200):
+            conn1.send(("ADVANCE", 1))
+            conn1.recv()
+            conn1.send(("CONVERGED",))
+            _, val = conn1.recv()
+            if val:
+                break
+        assert pool.converged_flags()[0]
+
+
+def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
+    """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(20)
+
+        # Collect individual WL_STATS from both workers
+        _, conn0 = pool._slots[0][0]
+        _, conn1 = pool._slots[0][1]
+        conn0.send(("WL_STATS",))
+        conn1.send(("WL_STATS",))
+        _, s0 = conn0.recv()
+        _, s1 = conn1.recv()
+
+        stats = pool.per_window_stats()
+        assert len(stats) == 1
+
+        # fill_factor from walker 0
+        assert stats[0]["fill_factor"] == pytest.approx(s0["fill_factor"])
+
+        # histogram is sum of both workers' histograms
+        for bin_key in set(s0["histogram"]) | set(s1["histogram"]):
+            expected = s0["histogram"].get(bin_key, 0) + s1["histogram"].get(bin_key, 0)
+            assert stats[0]["histogram"].get(bin_key, 0) == expected
+
+
+def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
+    """per_window_data_containers returns W containers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[1, 2],
+    ) as pool:
+        result = pool.per_window_data_containers()
+        assert len(result) == 2
+        assert len(result[0]) == 1   # window 0: 1 walker
+        assert len(result[1]) == 2   # window 1: 2 walkers
+
+
 def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
     """After advance_all, both walkers in a slot have identical entropy dicts."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool

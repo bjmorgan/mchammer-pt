@@ -868,7 +868,9 @@ class ProcessWangLandauPool:
             for _, conn in slot:
                 conn.send(("GET_ENTROPY_SYNC_STATE",))
             states = [
-                self._recv_or_raise(conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}")
+                self._recv_or_raise(
+                    conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}"
+                )
                 for w, (_, conn) in enumerate(slot)
             ]
             target_len = max(s["fill_factor_history_len"] for s in states)
@@ -877,7 +879,9 @@ class ProcessWangLandauPool:
                 extra = target_len - states[w]["fill_factor_history_len"]
                 conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
             for w, (_, conn) in enumerate(slot):
-                self._recv_or_raise(conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}")
+                self._recv_or_raise(
+                    conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}"
+                )
             self._exchange_idx[i] = int(self._slot_rngs[i].integers(0, len(slot)))
 
     def current_energies(self) -> np.ndarray:
