@@ -95,6 +95,31 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
         assert not flags.any()
 
 
+def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
+    """per_window_stats() round-trips through WL_STATS opcode and returns
+    fill_factor, halvings, histogram, and converged for each window."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(10)
+        stats = pool.per_window_stats()
+
+    assert len(stats) == 2
+    for s in stats:
+        assert set(s.keys()) == {"fill_factor", "halvings", "histogram", "converged"}
+        assert isinstance(s["fill_factor"], float)
+        assert isinstance(s["halvings"], int)
+        assert isinstance(s["histogram"], dict)
+        assert isinstance(s["converged"], bool)
+        assert s["fill_factor"] > 0.0
+
+
 def test_serial_wl_pool_swap_configurations_refreshes_window_flag():
     """After a swap, each replica's _reached_energy_window is True."""
     pool = _make_serial_wl_pool(n_replicas=2)

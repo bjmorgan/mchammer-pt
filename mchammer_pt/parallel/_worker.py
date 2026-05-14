@@ -203,13 +203,15 @@ def _wl_worker(
 
     Recognises the data/state opcodes shared with the canonical worker
     (ADVANCE, ENERGY, GET_OCC, SET_OCC, GET_DC, SNAPSHOT_FOR_CHECKPOINT,
-    RESTORE_STATE, SHUTDOWN) plus two REWL-specific ones:
+    RESTORE_STATE, SHUTDOWN) plus three REWL-specific ones:
 
     - ``("LOG_G_AT", E_i, E_j)`` -> ``("OK", (g_at_E_i, g_at_E_j))``
       The worker evaluates its replica's `log_g` at the two energies
       in one round trip.
     - ``("CONVERGED",)`` -> ``("OK", bool)`` the replica's `converged`
       flag.
+    - ``("WL_STATS",)`` -> ``("OK", dict)`` lightweight convergence
+      metrics: fill_factor, halvings, histogram, converged.
     """
     try:
         atoms = Atoms(

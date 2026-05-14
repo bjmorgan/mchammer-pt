@@ -7,8 +7,9 @@ attempt/accept counters) and `ExchangePrinter` (stdout trace on a
 configurable cadence).
 
 `CycleCallback` fires once per PT cycle, after that cycle's history
-rows are written. Built-in: `ProgressPrinter` (periodic progress
-lines on stderr for long runs).
+rows are written. Built-ins: `ProgressPrinter` (periodic progress
+lines on stderr for canonical runs) and `WangLandauProgressPrinter`
+(per-window convergence table for REWL runs).
 """
 
 from __future__ import annotations

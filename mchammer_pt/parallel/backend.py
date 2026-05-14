@@ -192,7 +192,9 @@ class WangLandauPool(ReplicaPool, Protocol):
         * ``"halvings"`` (int): number of fill-factor halvings
           completed (each marks one flattened histogram phase).
         * ``"histogram"`` (dict[int, int]): current-phase histogram
-          keyed by bin index.
+          keyed by bin index. Reset to empty after each fill-factor
+          halving, so ``len(histogram)`` counts bins visited since
+          the last halving, not over the full run.
         * ``"converged"`` (bool): whether this window has converged.
         """
         ...

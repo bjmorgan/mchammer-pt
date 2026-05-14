@@ -370,6 +370,8 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
     for row in blocks[-1][2:]:
         # bins_visited column should read "0", not "--".
         assert re.search(r"\b0\b", row) is not None, row
+        # flat_min is undefined with no histogram data: should show "--".
+        assert "--" in row, row
 
 
 def test_wl_progress_printer_rejects_non_positive_interval():

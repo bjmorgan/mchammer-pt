@@ -24,7 +24,7 @@ from mchammer.data_containers.wang_landau_data_container import (
     get_density_of_states_wl,
 )
 
-from mchammer_pt import ProgressPrinter, WangLandauParallelTempering
+from mchammer_pt import WangLandauParallelTempering, WangLandauProgressPrinter
 
 
 def build_ising_ce() -> tuple[ClusterExpansion, Atoms]:
@@ -111,11 +111,15 @@ def main() -> None:
             "trial_move": "flip",
         },
     )
-    pt.attach_cycle_callback(ProgressPrinter(interval=100))
+    pt.attach_cycle_callback(WangLandauProgressPrinter(pt.pool, interval=100))
     pt.run(n_cycles=5000)
     print(f"\nConverged after {pt.cycles_in_segment} cycles.")
 
     # Stitch the per-window ln g(E) into a single density of states.
+    # snapshot_for_checkpoint() populates _last_state on each replica's
+    # data container from the live ensemble state; get_density_of_states_wl
+    # reads entropy and fill_factor_history from _last_state, so this call
+    # is required to get current (not stale) values.
     pt.pool.snapshot_for_checkpoint()
     dcs = {i: r.data_container() for i, r in enumerate(pt.pool.replicas)}
     df, errors = get_density_of_states_wl(dcs)
