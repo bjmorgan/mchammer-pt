@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import os
 import random
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -278,7 +278,7 @@ class WangLandauReplica:
         e = self._ensemble
         return {
             "fill_factor": float(e._fill_factor),
-            "halvings": len(e._fill_factor_history),
+            "halvings": max(0, len(e._fill_factor_history) - 1),
             "histogram": dict(e._histogram),
             "converged": self.converged,
         }
@@ -287,9 +287,44 @@ class WangLandauReplica:
         """The replica's live `WangLandauDataContainer`."""
         return self._ensemble.data_container
 
+    def all_data_containers(self) -> list[WangLandauDataContainer]:
+        """Wraps `data_container()` in a list for interface parity with `WangLandauWindowGroup`."""
+        return [self.data_container()]
+
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach an mchammer observer; fires inside `advance(...)`."""
         self._ensemble.attach_observer(observer)
+
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer.
+
+        Constructs ``cls(*args, **kwargs)`` and attaches it. Mirrors the
+        method of the same name on `WangLandauWindowGroup`.
+        """
+        self.attach_mchammer_observer(cls(*args, **kwargs))
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+    ) -> None:
+        """Attach an observer constructed via ``factory(self)``.
+
+        Mirrors the method of the same name on `WangLandauWindowGroup`.
+        ``factory`` must return a ``BaseObserver``.
+        """
+        observer = factory(self)
+        if not isinstance(observer, BaseObserver):
+            raise TypeError(
+                f"attach_observer_factory: factory returned "
+                f"{type(observer).__name__}, not a BaseObserver"
+            )
+        self.attach_mchammer_observer(observer)
 
     @property
     def cluster_expansion_path(self) -> str | None:

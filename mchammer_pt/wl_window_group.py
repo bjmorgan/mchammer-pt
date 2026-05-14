@@ -102,6 +102,15 @@ class WangLandauWindowGroup:
         self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
 
     @property
+    def ensemble(self) -> Any:
+        """The mchammer ensemble for the first walker.
+
+        Used by pool-level metadata queries (ensemble class, observer
+        snapshot). All walkers share the same ensemble class and kwargs.
+        """
+        return self._replicas[0].ensemble
+
+    @property
     def energy_window(self) -> tuple[float | None, float | None]:
         return self._replicas[0].energy_window
 
@@ -150,7 +159,7 @@ class WangLandauWindowGroup:
                 combined_hist[k] = combined_hist.get(k, 0) + v
         return {
             "fill_factor": float(e0._fill_factor),
-            "halvings": len(e0._fill_factor_history),
+            "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
             "converged": self.converged,
         }
