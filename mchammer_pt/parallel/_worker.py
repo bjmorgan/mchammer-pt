@@ -222,6 +222,46 @@ class BaseWorker:
         raise _Shutdown
 
 
+class CanonicalWorker(BaseWorker):
+    """Worker for canonical-ensemble replicas."""
+
+    def __init__(
+        self,
+        conn: Connection,
+        ce_path: str,
+        atoms_dict: dict[str, Any],
+        temperature: float,
+        seed: int,
+        ensemble_cls: type[CanonicalEnsemble],
+        ensemble_kwargs: dict[str, Any],
+    ) -> None:
+        super().__init__(conn)
+        self._ce_path = ce_path
+        self._atoms_dict = atoms_dict
+        self._temperature = temperature
+        self._seed = seed
+        self._ensemble_cls = ensemble_cls
+        self._ensemble_kwargs = ensemble_kwargs
+
+    def _build_replica(self) -> Replica:
+        atoms = Atoms(
+            numbers=self._atoms_dict["numbers"],
+            positions=self._atoms_dict["positions"],
+            cell=self._atoms_dict["cell"],
+            pbc=self._atoms_dict["pbc"],
+        )
+        ce = ClusterExpansion.read(self._ce_path)
+        return Replica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            temperature=self._temperature,
+            random_seed=self._seed,
+            ensemble_cls=self._ensemble_cls,
+            ensemble_kwargs=self._ensemble_kwargs,
+            cluster_expansion_path=self._ce_path,
+        )
+
+
 def _worker(
     conn: Connection,
     ce_path: str,
@@ -231,103 +271,11 @@ def _worker(
     ensemble_cls: type[CanonicalEnsemble],
     ensemble_kwargs: dict[str, Any],
 ) -> None:
-    """Worker entry point: build a Replica, then serve commands.
-
-    After successful Replica construction the worker sends a single
-    ("OK", None) ready-handshake back to the parent, so the parent can
-    verify startup success synchronously rather than discovering it on
-    the first ADVANCE. Any exception during startup — including
-    Replica construction — is caught and sent back as ("ERR", tb)
-    instead, and the worker exits.
-    """
-    try:
-        atoms = Atoms(
-            numbers=atoms_dict["numbers"],
-            positions=atoms_dict["positions"],
-            cell=atoms_dict["cell"],
-            pbc=atoms_dict["pbc"],
-        )
-        ce = ClusterExpansion.read(ce_path)
-        replica = Replica(
-            cluster_expansion=ce,
-            atoms=atoms,
-            temperature=temperature,
-            random_seed=seed,
-            ensemble_cls=ensemble_cls,
-            ensemble_kwargs=ensemble_kwargs,
-            cluster_expansion_path=ce_path,
-        )
-    except BaseException:
-        conn.send(("ERR", traceback.format_exc()))
-        conn.close()
-        return
-
-    conn.send(("OK", None))
-
-    while True:
-        try:
-            cmd = conn.recv()
-        except EOFError:
-            return
-        op = cmd[0]
-        try:
-            if op == "ADVANCE":
-                replica.advance(cmd[1])
-                conn.send(("OK", None))
-            elif op == "ENERGY":
-                conn.send(("OK", replica.current_energy()))
-            elif op == "GET_OCC":
-                conn.send(("OK", replica.current_occupations()))
-            elif op == "SET_OCC":
-                replica.set_occupations(cmd[1])
-                conn.send(("OK", None))
-            elif op == "GET_DC":
-                conn.send(("OK", replica.data_container()))
-            elif op == "SNAPSHOT_FOR_CHECKPOINT":
-                conn.send(("OK", replica.snapshot_for_checkpoint()))
-            elif op == "RESTORE_STATE":
-                _, container, sites_by_species = cmd
-                replica.restore_state(
-                    container, sites_by_species=sites_by_species
-                )
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS":
-                observer = pickle.loads(cmd[1])
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_CLS":
-                _, cls, args, kwargs = cmd
-                replica.attach_mchammer_observer(cls(*args, **kwargs))
-                conn.send(("OK", None))
-            elif op == "ATTACH_OBS_FACTORY":
-                factory = cmd[1]
-                observer = factory(replica)
-                if not isinstance(observer, BaseObserver):
-                    raise TypeError(
-                        f"attach_observer_factory: factory returned "
-                        f"{type(observer).__name__}, not a BaseObserver"
-                    )
-                replica.attach_mchammer_observer(observer)
-                conn.send(("OK", None))
-            elif op == "GET_OBSERVERS":
-                # Pickling the live observer dict is safe because the
-                # worker is single-threaded and idle here; a future
-                # refactor adding background work would need to copy.
-                observers = replica.ensemble.observers
-                try:
-                    pickle.dumps(observers)
-                except Exception:
-                    conn.send(("ERR_PICKLE", traceback.format_exc()))
-                else:
-                    conn.send(("OK", observers))
-            elif op == "SHUTDOWN":
-                conn.send(("OK", None))
-                conn.close()
-                return
-            else:
-                conn.send(("ERR", f"unknown command: {op!r}"))
-        except Exception:
-            conn.send(("ERR", traceback.format_exc()))
+    """Canonical worker entry point for Process(target=...)."""
+    CanonicalWorker(
+        conn, ce_path, atoms_dict, temperature, seed,
+        ensemble_cls, ensemble_kwargs,
+    ).run()
 
 
 def _wl_worker(

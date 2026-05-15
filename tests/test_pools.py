@@ -234,7 +234,7 @@ def test_process_pool_worker_startup_failure_surfaces_at_init(
     sees the actual cause synchronously.
     """
     nonexistent_ce = tmp_path / "does_not_exist.ce"
-    with pytest.raises(RuntimeError, match="worker startup failed"):
+    with pytest.raises(RuntimeError, match="worker STARTUP"):
         ProcessPool(
             ce_path=nonexistent_ce,
             initial_atoms=toy_atoms,
@@ -306,7 +306,7 @@ def test_process_pool_bad_ensemble_kwargs_surfaces_at_init(
 
     ce_path = tmp_path / "toy.ce"
     toy_ce.write(str(ce_path))
-    with pytest.raises(RuntimeError, match="worker startup failed"):
+    with pytest.raises(RuntimeError, match="worker STARTUP"):
         ProcessPool(
             ce_path=ce_path,
             initial_atoms=toy_atoms,

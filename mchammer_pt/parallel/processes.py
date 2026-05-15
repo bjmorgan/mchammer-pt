@@ -31,6 +31,7 @@ from mchammer.observers.base_observer import (
 from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
+from ._comms import broadcast_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
@@ -187,10 +188,8 @@ class ProcessPool:
             # the caller gets the actual traceback, rather than a
             # BrokenPipeError on the first ADVANCE with the original
             # cause lost.
-            for _, conn in self._workers:
-                status, payload = conn.recv()
-                if status != "OK":
-                    raise RuntimeError(f"worker startup failed:\n{payload}")
+            for i, (_, conn) in enumerate(self._workers):
+                recv_reply(conn, "STARTUP", i)
         except BaseException:
             self.shutdown()
             raise
@@ -263,49 +262,11 @@ class ProcessPool:
         further operations refuse via _check_open.
         """
         try:
-            status, payload = conn.recv()
-        except EOFError as exc:
+            recv_reply(conn, op, i)
+        except (RuntimeError, TypeError):
             self._drain_remaining_replies(remaining)
             self.shutdown()
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly during attach"
-            ) from exc
-        if status != "OK":
-            self._abort_partial_attach(op, payload, remaining)
-
-    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
-        """Receive a (status, payload) reply or raise a clear exception.
-
-        Three reply shapes are recognised:
-
-        - ``("OK", payload)`` — return ``payload``.
-        - ``("ERR_PICKLE", traceback)`` — the worker's reply payload
-          could not be pickled (e.g. an attached observer accumulated
-          a non-picklable attribute). Raise ``TypeError`` so callers
-          see the same exception type as the parent-side eager pickle
-          checks on the attach paths.
-        - ``("ERR", traceback)`` — any other worker-side failure.
-          Raise ``RuntimeError`` carrying the worker traceback.
-
-        A pipe-closed ``EOFError`` (worker died, e.g. via
-        ``KeyboardInterrupt``) is translated into a framed
-        ``RuntimeError`` so the parent never sees a bare
-        ``EOFError`` from the recv path.
-        """
-        try:
-            status, payload = conn.recv()
-        except EOFError as exc:
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly"
-            ) from exc
-        if status == "ERR_PICKLE":
-            raise TypeError(
-                f"reply from worker {op} (replica i={i}) could not be "
-                f"round-tripped through pickle: {payload}"
-            )
-        if status != "OK":
-            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
-        return payload
+            raise
 
     def __len__(self) -> int:
         self._check_open()
@@ -318,69 +279,48 @@ class ProcessPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ADVANCE", int(n_steps)))
-        for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "ADVANCE", i)
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        broadcast_gather(targets, ("ADVANCE", int(n_steps)))
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ENERGY",))
-        result = np.empty(len(self._workers), dtype=np.float64)
-        for i, (_, conn) in enumerate(self._workers):
-            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
-        return result
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        payloads = broadcast_gather(targets, ("ENERGY",))
+        return np.array(payloads, dtype=np.float64)
 
     def current_energy(self, i: int) -> float:
         self._check_open()
         _, conn = self._workers[i]
-        conn.send(("ENERGY",))
-        return float(self._recv_or_raise(conn, "ENERGY", i))
+        return float(request(conn, ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
         _, conn = self._workers[i]
-        conn.send(("GET_OCC",))
-        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
+        return np.asarray(request(conn, ("GET_OCC",), i))
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
-        conn_i.send(("GET_OCC",))
-        conn_j.send(("GET_OCC",))
-        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
-        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
-        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        self._recv_or_raise(conn_i, "SET_OCC", i)
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        occ_i, occ_j = broadcast_gather(
+            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
+        )
+        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
         try:
-            self._recv_or_raise(conn_j, "SET_OCC", j)
+            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
         except BaseException:
-            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-            self._recv_or_raise(conn_i, "SET_OCC", i)
+            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("GET_DC",))
-        containers: list[BaseDataContainer] = []
-        for i, (_, conn) in enumerate(self._workers):
-            containers.append(self._recv_or_raise(conn, "GET_DC", i))
-        return containers
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        return broadcast_gather(targets, ("GET_DC",))
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
-        extras: list[dict[str, Any]] = []
-        for i, (_, conn) in enumerate(self._workers):
-            extras.append(
-                self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
-            )
-        return extras
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        return broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
 
     def restore_replica_state(
         self,
@@ -425,7 +365,7 @@ class ProcessPool:
                 ("RESTORE_STATE", container, extra["sites_by_species"])
             )
         for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "RESTORE_STATE", i)
+            recv_reply(conn, "RESTORE_STATE", i)
 
     def attach_observer(
         self,
@@ -538,8 +478,7 @@ class ProcessPool:
                 f"for pool of size {n}"
             )
         _, conn = self._workers[replica_index]
-        conn.send(("GET_OBSERVERS",))
-        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
+        return request(conn, ("GET_OBSERVERS",), replica_index)
 
     def attach_observer_factory(
         self,
