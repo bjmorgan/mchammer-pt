@@ -81,3 +81,30 @@ def request(conn: Connection, msg: tuple, label: Any) -> Any:
     """
     conn.send(msg)
     return recv_reply(conn, msg[0], label)
+
+
+def broadcast_gather(
+    targets: list[tuple[Connection, Any]],
+    msg: tuple,
+) -> list[Any]:
+    """Send the same command to all targets, then gather validated replies.
+
+    Phase 1: sends ``msg`` to every connection.
+    Phase 2: receives from every connection in order, validating
+    each reply via ``recv_reply``.
+
+    Args:
+        targets: list of ``(connection, label)`` pairs.
+        msg: command tuple sent to all targets.
+
+    Returns:
+        List of payloads in the same order as ``targets``.
+    """
+    for conn, label in targets:
+        try:
+            conn.send(msg)
+        except BrokenPipeError as exc:
+            raise RuntimeError(
+                f"worker {msg[0]} ({label}) exited unexpectedly"
+            ) from exc
+    return [recv_reply(conn, msg[0], label) for conn, label in targets]

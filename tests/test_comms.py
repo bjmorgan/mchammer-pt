@@ -6,7 +6,7 @@ import multiprocessing as mp
 
 import pytest
 
-from mchammer_pt.parallel._comms import Reply, recv_reply, request
+from mchammer_pt.parallel._comms import Reply, broadcast_gather, recv_reply, request
 
 
 class TestRecvReply:
@@ -71,3 +71,45 @@ class TestRequest:
         child.send(Reply("ERR", "ENERGY", "boom"))
         with pytest.raises(RuntimeError):
             request(parent, ("ENERGY",), label=0)
+
+
+class TestBroadcastGather:
+    """Tests for broadcast_gather: send same message to all, gather replies."""
+
+    def test_happy_path_returns_payloads_in_order(self):
+        targets = []
+        children = []
+        for i in range(3):
+            parent, child = mp.Pipe(duplex=True)
+            child.send(Reply("OK", "ENERGY", float(i)))
+            targets.append((parent, i))
+            children.append(child)
+        payloads = broadcast_gather(targets, ("ENERGY",))
+        assert payloads == [0.0, 1.0, 2.0]
+        for child in children:
+            assert child.recv() == ("ENERGY",)
+
+    def test_single_target(self):
+        parent, child = mp.Pipe(duplex=True)
+        child.send(Reply("OK", "ADVANCE", None))
+        payloads = broadcast_gather([(parent, 0)], ("ADVANCE", 50))
+        assert payloads == [None]
+
+    def test_error_on_second_connection_raises(self):
+        p0, c0 = mp.Pipe(duplex=True)
+        p1, c1 = mp.Pipe(duplex=True)
+        c0.send(Reply("OK", "ENERGY", 1.0))
+        c1.send(Reply("ERR", "ENERGY", "boom"))
+        with pytest.raises(RuntimeError, match="boom"):
+            broadcast_gather([(p0, 0), (p1, 1)], ("ENERGY",))
+
+    def test_pipe_death_mid_gather_raises(self):
+        p0, c0 = mp.Pipe(duplex=True)
+        p1, c1 = mp.Pipe(duplex=True)
+        c0.send(Reply("OK", "ENERGY", 1.0))
+        c1.close()
+        with pytest.raises(RuntimeError, match="exited unexpectedly"):
+            broadcast_gather([(p0, 0), (p1, 1)], ("ENERGY",))
+
+    def test_empty_targets_returns_empty_list(self):
+        assert broadcast_gather([], ("ENERGY",)) == []
