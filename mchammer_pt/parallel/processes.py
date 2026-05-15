@@ -13,7 +13,7 @@ import pickle
 from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 
 import numpy as np
 from ase import Atoms
@@ -222,23 +222,6 @@ class ProcessPool:
                 conn.recv()
             except (EOFError, BrokenPipeError):
                 pass
-
-    def _abort_partial_attach(
-        self,
-        op: str,
-        payload: str,
-        remaining: list[int],
-    ) -> NoReturn:
-        """Shut the pool down after a worker reports ERR during attach.
-
-        Partial-attach state is unrecoverable — mchammer has no detach
-        API — so the pool is shut down and further operations refuse
-        via _check_open. The drain step prevents the SHUTDOWN handshake
-        from racing against unread attach replies.
-        """
-        self._drain_remaining_replies(remaining)
-        self.shutdown()
-        raise RuntimeError(f"worker {op} failed: {payload}")
 
     def _recv_or_abort_attach(
         self,
@@ -878,7 +861,7 @@ class ProcessWangLandauPool:
         all_stats = broadcast_gather(all_targets, ("WL_STATS",))
         result = []
         offset = 0
-        for i, slot in enumerate(self._slots):
+        for slot in self._slots:
             slot_stats = all_stats[offset:offset + len(slot)]
             offset += len(slot)
             if len(slot_stats) == 1:
