@@ -306,7 +306,7 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         occ1[[0, -1]] = occ1[[-1, 0]]  # swap first/last to differ
 
         # Direct SET_OCC on worker 1 so its configuration is distinct.
-        _, conn1 = pool._slots[1][0]
+        _, conn1 = pool._slots[1].workers[0]
         request(conn1, ("SET_OCC", np.asarray(occ1, dtype=np.int64)), 1)
 
         e_before_0 = pool.current_energy(0)
@@ -428,7 +428,7 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
 
 
 def test_merge_entropies_averages_bins():
-    from mchammer_pt.parallel.processes import _merge_entropies
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
     result = _merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
     assert result[0] == pytest.approx(4.0)  # (2 + 6) / 2
     assert result[1] == pytest.approx(2.0)  # (4 + 0) / 2 — bin missing from replica 1
@@ -436,14 +436,14 @@ def test_merge_entropies_averages_bins():
 
 
 def test_merge_entropies_single_replica_is_identity():
-    from mchammer_pt.parallel.processes import _merge_entropies
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
     assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {
         1: pytest.approx(3.0), 2: pytest.approx(5.0)
     }
 
 
 def test_merge_entropies_all_empty():
-    from mchammer_pt.parallel.processes import _merge_entropies
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
     assert _merge_entropies([{}, {}]) == {}
 
 
@@ -461,8 +461,8 @@ def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
         n_walkers_per_window=2,
     ) as pool:
         assert len(pool) == 2                 # 2 windows
-        assert len(pool._slots[0]) == 2       # 2 walkers in window 0
-        assert len(pool._slots[1]) == 2       # 2 walkers in window 1
+        assert len(pool._slots[0].workers) == 2   # 2 walkers in window 0
+        assert len(pool._slots[1].workers) == 2   # 2 walkers in window 1
 
 
 def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
@@ -478,8 +478,8 @@ def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
         seeds=[0, 1],
         n_walkers_per_window=[1, 2],
     ) as pool:
-        assert len(pool._slots[0]) == 1
-        assert len(pool._slots[1]) == 2
+        assert len(pool._slots[0].workers) == 1
+        assert len(pool._slots[1].workers) == 2
 
 
 def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
@@ -500,20 +500,15 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         n_walkers_per_window=2,
         ensemble_kwargs={"flatness_check_interval": 1, "fill_factor_limit": 0.5},
     ) as pool:
-        _, conn0 = pool._slots[0][0]
-        _, conn1 = pool._slots[0][1]
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
 
         def _query_converged(conn):
             return bool(request(conn, ("CONVERGED",), 0))
 
-        # Neither walker is converged initially; query directly to avoid
-        # all()-short-circuit pipe leaks that would desync subsequent sends.
         assert not _query_converged(conn0)
         assert not _query_converged(conn1)
 
-        # Force-converge walker 0 only by advancing until it converges.
-        # With a single bin and per-step flatness checks, convergence is
-        # reached quickly once the walker is inside its window.
         converged_w0 = False
         for _ in range(200):
             request(conn0, ("ADVANCE", 1), 0)
@@ -553,8 +548,8 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
     ) as pool:
         # Advance both workers directly so histograms accumulate without
         # entropy-sync zeroing
-        _, conn0 = pool._slots[0][0]
-        _, conn1 = pool._slots[0][1]
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
         conn0.send(("ADVANCE", 20))
         conn1.send(("ADVANCE", 20))
         recv_reply(conn0, "ADVANCE", "window 0 walker 0")
@@ -611,10 +606,27 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
         pool.advance_all(50)
 
         # Directly query both workers for their post-sync entropy
-        _, conn0 = pool._slots[0][0]
-        _, conn1 = pool._slots[0][1]
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
         s0 = request(conn0, ("GET_ENTROPY_SYNC_STATE",), 0)
         s1 = request(conn1, ("GET_ENTROPY_SYNC_STATE",), 1)
 
         assert s0["entropy"] == s1["entropy"]
         assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
+
+
+def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
+    """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        with pytest.raises(NotImplementedError, match="checkpointing"):
+            pool.snapshot_for_checkpoint()

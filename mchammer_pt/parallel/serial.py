@@ -15,15 +15,13 @@ from mchammer.observers.base_observer import (
 )
 
 from ..replica import Replica
-from ..wl_replica import WangLandauReplica
+from ..wl_replica import WangLandauReplica, WangLandauSlot
 from ._imports import _resolve_replicas
 
 if TYPE_CHECKING:
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
     )
-
-    from ..wl_window_group import WangLandauWindowGroup
 
 
 class SerialPool:
@@ -234,11 +232,11 @@ class SerialWangLandauPool:
 
     def __init__(
         self,
-        replicas: Sequence[WangLandauReplica | WangLandauWindowGroup],
+        replicas: Sequence[WangLandauSlot],
         *,
         energy_spacing: float,
     ) -> None:
-        self._replicas: list[WangLandauReplica | WangLandauWindowGroup] = list(replicas)
+        self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
@@ -251,7 +249,7 @@ class SerialWangLandauPool:
         return len(self._replicas)
 
     @property
-    def replicas(self) -> list[WangLandauReplica | WangLandauWindowGroup]:
+    def replicas(self) -> list[WangLandauSlot]:
         return list(self._replicas)
 
     @property

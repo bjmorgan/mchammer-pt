@@ -13,13 +13,13 @@ triggered the reply. ``recv_reply`` validates this echo.
 from __future__ import annotations
 
 from multiprocessing.connection import Connection
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 
 class Reply(NamedTuple):
     """Worker-to-parent reply on a pipe connection."""
 
-    status: str
+    status: Literal["OK", "ERR", "ERR_PICKLE"]
     op: str
     payload: Any
 
@@ -64,7 +64,7 @@ def recv_reply(conn: Connection, expected_op: str, label: Any) -> Any:
     return reply.payload
 
 
-def request(conn: Connection, msg: tuple, label: Any) -> Any:
+def request(conn: Connection, msg: tuple[Any, ...], label: Any) -> Any:
     """Send a command and receive the validated reply.
 
     Atomic send/recv pair: structurally impossible to send without
@@ -85,7 +85,7 @@ def request(conn: Connection, msg: tuple, label: Any) -> Any:
 
 def broadcast_gather(
     targets: list[tuple[Connection, Any]],
-    msg: tuple,
+    msg: tuple[Any, ...],
 ) -> list[Any]:
     """Send the same command to all targets, then gather validated replies.
 

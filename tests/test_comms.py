@@ -111,5 +111,11 @@ class TestBroadcastGather:
         with pytest.raises(RuntimeError, match="exited unexpectedly"):
             broadcast_gather([(p0, 0), (p1, 1)], ("ENERGY",))
 
+    def test_send_phase_broken_pipe_raises(self):
+        p0, c0 = mp.Pipe(duplex=True)
+        c0.close()
+        with pytest.raises(RuntimeError, match="exited unexpectedly"):
+            broadcast_gather([(p0, 0)], ("ENERGY",))
+
     def test_empty_targets_returns_empty_list(self):
         assert broadcast_gather([], ("ENERGY",)) == []

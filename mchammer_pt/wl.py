@@ -28,12 +28,10 @@ from .checkpoint import (
 from .exchange import pair_set_for_cycle
 from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
-from .parallel.processes import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
-    ProcessWangLandauPool,
-)
+from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
-from .wl_replica import WangLandauReplica
+from .wl_replica import WangLandauReplica, WangLandauSlot
+from .wl_window_group import _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED
 
 
 def _validate_windows(
@@ -172,7 +170,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         seed_sequence = np.random.SeedSequence(int(random_seed))
         if all(w == 1 for w in walkers_per_window):
-            # Original single-walker path — seed allocation is unchanged.
+            # Single-walker path: one seed per window plus one master seed.
             child_seeds = seed_sequence.spawn(n_windows + 1)
             replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
             master_seed = int(child_seeds[-1].generate_state(1)[0])
@@ -230,12 +228,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
             else:
                 from .wl_window_group import WangLandauWindowGroup
 
-                slots: list[WangLandauReplica | WangLandauWindowGroup] = []
+                slots: list[WangLandauSlot] = []
                 for w in range(n_windows):
                     lo, hi = windows[w]
                     W_w = walkers_per_window[w]
                     if W_w == 1:
-                        slot: WangLandauReplica | WangLandauWindowGroup = (
+                        slot: WangLandauSlot = (
                             WangLandauReplica(
                                 cluster_expansion=cluster_expansion,
                                 atoms=atoms_list[w],
@@ -351,11 +349,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def run(self, n_cycles: int) -> ExchangeHistory:
         """Advance until `n_cycles` reached or every replica converged.
 
-        Differs from `BaseParallelTempering.run` in only one place: at
-        the end of each cycle we query `pool.converged_flags()` and exit
-        early if every replica reports True. The returned history's
-        rows past the stopping cycle remain at their zero-initialised
-        values; `cycles_in_segment` records how far the run got.
+        At the end of each cycle, queries ``pool.converged_flags()``
+        and exits early if every replica reports True. The returned
+        history's rows past the stopping cycle remain at their
+        zero-initialised values; ``cycles_in_segment`` records how
+        far the run got.
         """
         n_replicas = len(self._pool)
         history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
@@ -678,6 +676,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 random_seed=random_seed,
                 pool=pool,
                 data_container_file=data_container_file,
+                n_walkers_per_window=n_walkers_per_window,
             )
         except BaseException:
             pool.shutdown()

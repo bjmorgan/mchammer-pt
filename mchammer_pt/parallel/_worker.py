@@ -79,7 +79,7 @@ class BaseWorker:
         self._conn = conn
         self._op: str = ""
         self._replica: Any = None
-        self._handlers: dict[str, Callable[[tuple], None]] = {
+        self._handlers: dict[str, Callable[[tuple[Any, ...]], None]] = {
             "ADVANCE": self._handle_advance,
             "ENERGY": self._handle_energy,
             "GET_OCC": self._handle_get_occ,
@@ -136,44 +136,44 @@ class BaseWorker:
     def _reply_pickle_error(self, tb: str) -> None:
         self._conn.send(Reply("ERR_PICKLE", self._op, tb))
 
-    def _handle_advance(self, cmd: tuple) -> None:
+    def _handle_advance(self, cmd: tuple[Any, ...]) -> None:
         self._replica.advance(cmd[1])
         self._reply(None)
 
-    def _handle_energy(self, cmd: tuple) -> None:
+    def _handle_energy(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.current_energy())
 
-    def _handle_get_occ(self, cmd: tuple) -> None:
+    def _handle_get_occ(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.current_occupations())
 
-    def _handle_set_occ(self, cmd: tuple) -> None:
+    def _handle_set_occ(self, cmd: tuple[Any, ...]) -> None:
         self._replica.set_occupations(cmd[1])
         self._reply(None)
 
-    def _handle_get_dc(self, cmd: tuple) -> None:
+    def _handle_get_dc(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.data_container())
 
-    def _handle_snapshot_for_checkpoint(self, cmd: tuple) -> None:
+    def _handle_snapshot_for_checkpoint(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.snapshot_for_checkpoint())
 
-    def _handle_restore_state(self, cmd: tuple) -> None:
+    def _handle_restore_state(self, cmd: tuple[Any, ...]) -> None:
         _, container, sites_by_species = cmd
         self._replica.restore_state(
             container, sites_by_species=sites_by_species
         )
         self._reply(None)
 
-    def _handle_attach_obs(self, cmd: tuple) -> None:
+    def _handle_attach_obs(self, cmd: tuple[Any, ...]) -> None:
         observer = pickle.loads(cmd[1])
         self._replica.attach_mchammer_observer(observer)
         self._reply(None)
 
-    def _handle_attach_obs_cls(self, cmd: tuple) -> None:
+    def _handle_attach_obs_cls(self, cmd: tuple[Any, ...]) -> None:
         _, cls, args, kwargs = cmd
         self._replica.attach_mchammer_observer(cls(*args, **kwargs))
         self._reply(None)
 
-    def _handle_attach_obs_factory(self, cmd: tuple) -> None:
+    def _handle_attach_obs_factory(self, cmd: tuple[Any, ...]) -> None:
         factory = cmd[1]
         observer = factory(self._replica)
         if not isinstance(observer, BaseObserver):
@@ -184,7 +184,7 @@ class BaseWorker:
         self._replica.attach_mchammer_observer(observer)
         self._reply(None)
 
-    def _handle_get_observers(self, cmd: tuple) -> None:
+    def _handle_get_observers(self, cmd: tuple[Any, ...]) -> None:
         observers = self._replica.ensemble.observers
         try:
             pickle.dumps(observers)
@@ -193,7 +193,7 @@ class BaseWorker:
         else:
             self._reply(observers)
 
-    def _handle_shutdown(self, cmd: tuple) -> None:
+    def _handle_shutdown(self, cmd: tuple[Any, ...]) -> None:
         self._reply(None)
         self._conn.close()
         raise _Shutdown
@@ -307,17 +307,17 @@ class WangLandauWorker(BaseWorker):
             cluster_expansion_path=self._ce_path,
         )
 
-    def _handle_log_g_at(self, cmd: tuple) -> None:
+    def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:
         _, E_i, E_j = cmd
         self._reply((self._replica.log_g(E_i), self._replica.log_g(E_j)))
 
-    def _handle_converged(self, cmd: tuple) -> None:
+    def _handle_converged(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.converged)
 
-    def _handle_wl_stats(self, cmd: tuple) -> None:
+    def _handle_wl_stats(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.window_stats())
 
-    def _handle_get_entropy_sync_state(self, cmd: tuple) -> None:
+    def _handle_get_entropy_sync_state(self, cmd: tuple[Any, ...]) -> None:
         e = self._replica.ensemble
         self._reply({
             "entropy": dict(e._entropy),
@@ -325,15 +325,11 @@ class WangLandauWorker(BaseWorker):
             "histogram": dict(e._histogram),
         })
 
-    def _handle_apply_entropy_sync(self, cmd: tuple) -> None:
+    def _handle_apply_entropy_sync(self, cmd: tuple[Any, ...]) -> None:
         _, merged_entropy, extra_halvings = cmd
-        e = self._replica.ensemble
         for _ in range(extra_halvings):
-            e._fill_factor /= 2.0
-            next_key = max(e._fill_factor_history, default=-1) + 1
-            e._fill_factor_history[next_key] = e._fill_factor
-            e._histogram = dict.fromkeys(e._histogram, 0)
-        e._entropy = dict(merged_entropy)
+            self._replica.force_halve()
+        self._replica.ensemble._entropy = dict(merged_entropy)
         self._reply(None)
 
 

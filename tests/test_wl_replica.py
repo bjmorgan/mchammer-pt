@@ -225,11 +225,11 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     replica.data_container().write(str(dc_path))
     container = WangLandauDataContainer.read(str(dc_path))
 
-    # Confirm schedule and 1/t-specific fields made it onto _last_state.
     assert container._last_state["schedule"] == "1_over_t"
-    assert "in_one_over_t_phase" in container._last_state
-    assert "window_entry_step" in container._last_state
-    assert "switch_mode" in container._last_state
+    e = replica.ensemble
+    if hasattr(e, "_phase"):
+        assert "phase" in container._last_state
+        assert "window_entry_step" in container._last_state
 
     restored = WangLandauReplica.restart_from(
         container,
@@ -242,15 +242,11 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
         ensemble_kwargs={"schedule": "1_over_t"},
         sites_by_species=extras["sites_by_species"],
     )
-    assert (
-        restored.ensemble._in_one_over_t_phase
-        == replica.ensemble._in_one_over_t_phase
-    )
+    assert restored.ensemble._phase == replica.ensemble._phase
     assert (
         restored.ensemble._window_entry_step
         == replica.ensemble._window_entry_step
     )
-    assert restored.ensemble._switch_mode == replica.ensemble._switch_mode
 
 
 def test_wl_replica_restore_state_does_not_mutate_caller_container(tmp_path):

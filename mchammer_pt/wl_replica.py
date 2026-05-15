@@ -13,7 +13,7 @@ import copy
 import os
 import random
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 from ase import Atoms
@@ -83,6 +83,48 @@ def _coerce_wl_last_state_keys_to_int(last_state: dict[str, Any]) -> None:
                 f"{exc}"
             ) from exc
         last_state[tag] = converted
+
+
+@runtime_checkable
+class WangLandauSlot(Protocol):
+    """Structural interface shared by single-walker and multi-walker WL slots.
+
+    Both ``WangLandauReplica`` (single walker) and
+    ``WangLandauWindowGroup`` (multi-walker) satisfy this protocol.
+    Used in type annotations by the serial and process pools.
+    """
+
+    @property
+    def energy_window(self) -> tuple[float | None, float | None]: ...
+    @property
+    def energy_spacing(self) -> float: ...
+    @property
+    def ensemble(self) -> Any: ...
+    @property
+    def cluster_expansion_path(self) -> str | None: ...
+    @property
+    def converged(self) -> bool: ...
+    def advance(self, n_steps: int) -> None: ...
+    def current_energy(self) -> float: ...
+    def current_occupations(self) -> np.ndarray: ...
+    def set_occupations(self, occupations: np.ndarray) -> None: ...
+    def log_g(self, energy: float) -> float: ...
+    def data_container(self) -> WangLandauDataContainer: ...
+    def all_data_containers(self) -> list[WangLandauDataContainer]: ...
+    def window_stats(self) -> dict[str, Any]: ...
+    def snapshot_for_checkpoint(self) -> dict[str, Any]: ...
+    def attach_mchammer_observer(self, observer: BaseObserver) -> None: ...
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None: ...
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+    ) -> None: ...
 
 
 class WangLandauReplica:
@@ -265,6 +307,21 @@ class WangLandauReplica:
         finally:
             random.setstate(previous_state)
 
+    def force_halve(self) -> None:
+        """Force one fill-factor halving, bypassing mchammer's flatness check.
+
+        Halves ``_fill_factor``, records the new value in
+        ``_fill_factor_history`` under a fresh key, and resets the
+        histogram to zero (preserving keys so the flatness check stays
+        valid). Used by multi-walker entropy sync to bring lagging
+        walkers up to the most-halved fill factor.
+        """
+        e = self._ensemble
+        e._fill_factor /= 2.0
+        next_key = max(e._fill_factor_history, default=-1) + 1
+        e._fill_factor_history[next_key] = e._fill_factor
+        e._histogram = dict.fromkeys(e._histogram, 0)
+
     @property
     def converged(self) -> bool:
         """True once the underlying WL ensemble has flagged convergence."""
@@ -334,8 +391,8 @@ class WangLandauReplica:
         Populates the fields icet's WL `_restart_ensemble` reads on resume
         (`last_step`, `occupations`, `accepted_trials`, `random_state`,
         `fill_factor`, `fill_factor_history`, `entropy_history`,
-        `histogram`, `entropy`), plus the 1/t-schedule fields when the
-        1/t schedule is selected. Returns the
+        `histogram`, `entropy`), plus the 1/t-schedule fields (`schedule`,
+        `phase`, `window_entry_step`) when present. Returns the
         `sites_by_species` extras the orchestrator-side checkpoint code
         embeds alongside the container.
         """
@@ -353,22 +410,16 @@ class WangLandauReplica:
             histogram=OrderedDict(sorted(e._histogram.items())),
             entropy=OrderedDict(sorted(e._entropy.items())),
         )
-        # `schedule` and the 1/t-phase fields live directly on
+        # `schedule`, `phase`, and `window_entry_step` live directly on
         # `_last_state` rather than via `_update_last_state`, mirroring
-        # icet's `write_data_container`. `_restart_ensemble` validates
-        # `schedule` on resume, so it must always be present when the
-        # attribute exists (patched icet); mainline icet does not have
-        # `_schedule` and its `_restart_ensemble` does not check it.
+        # icet's `write_data_container`.
         if hasattr(e, "_schedule"):
             e._data_container._last_state["schedule"] = e._schedule
-        if hasattr(e, "_in_one_over_t_phase"):
-            e._data_container._last_state[
-                "in_one_over_t_phase"
-            ] = e._in_one_over_t_phase
+        if hasattr(e, "_phase"):
+            e._data_container._last_state["phase"] = e._phase
             e._data_container._last_state[
                 "window_entry_step"
             ] = e._window_entry_step
-            e._data_container._last_state["switch_mode"] = e._switch_mode
         sites_by_species: list[dict[int, list[int]]] = [
             {
                 int(species): [int(s) for s in sites]

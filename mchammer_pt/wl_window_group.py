@@ -17,6 +17,26 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
     "attach_checkpoint_writer() when using multiple walkers per window."
 )
 
+
+def merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
+    """Average bin-wise entropy estimates across multiple walkers.
+
+    Args:
+        entropies: list of {bin_index: entropy_value} dicts from each walker.
+
+    Returns:
+        Merged entropy dict with bin-wise averages; missing bins contribute 0.0.
+        Unvisited bins are deliberately suppressed: frontier regions entered by
+        only a subset of walkers contribute a reduced entropy estimate until all
+        walkers reach them.
+    """
+    all_bins: set[int] = set()
+    for e in entropies:
+        all_bins.update(e.keys())
+    n = len(entropies)
+    return {b: sum(e.get(b, 0.0) for e in entropies) / n for b in all_bins}
+
+
 if TYPE_CHECKING:
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
@@ -65,34 +85,19 @@ class WangLandauWindowGroup:
         Detect-and-resync: after mchammer's per-walker auto-halving,
         replicas may be at different fill factors. We count halvings via
         len(_fill_factor_history) and force-halve any replica that is
-        behind the leader, mirroring mchammer's own halving logic:
-        halve _fill_factor, record the post-halving value in
-        _fill_factor_history under a fresh key, and reset _histogram
-        to zero (preserving keys so the flatness check stays valid).
+        behind the leader.
         """
         halvings = [len(r.ensemble._fill_factor_history) for r in self._replicas]
         target = max(halvings)
         for r, h in zip(self._replicas, halvings, strict=True):
             for _ in range(target - h):
-                r.ensemble._fill_factor /= 2.0
-                next_key = max(r.ensemble._fill_factor_history, default=-1) + 1
-                r.ensemble._fill_factor_history[next_key] = r.ensemble._fill_factor
-                r.ensemble._histogram = dict.fromkeys(r.ensemble._histogram, 0)
+                r.force_halve()
 
     def _merge_entropies(self) -> None:
-        """Average ln g bin-wise across all replicas and write back to each.
-
-        Bins not yet visited by a replica contribute 0.0 (mchammer's
-        default for unvisited bins via _entropy.get(bin, 0.0)).
-        """
-        all_bins: set[int] = set()
-        for r in self._replicas:
-            all_bins.update(r.ensemble._entropy.keys())
-        n = len(self._replicas)
-        merged = {
-            b: sum(r.ensemble._entropy.get(b, 0.0) for r in self._replicas) / n
-            for b in all_bins
-        }
+        """Average ln g bin-wise across all replicas and write back to each."""
+        merged = merge_entropies(
+            [dict(r.ensemble._entropy) for r in self._replicas]
+        )
         for r in self._replicas:
             r.ensemble._entropy = dict(merged)
 

@@ -234,3 +234,12 @@ def test_snapshot_for_checkpoint_raises():
     group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
     with pytest.raises(NotImplementedError, match="checkpointing"):
         group.snapshot_for_checkpoint()
+
+
+def test_attach_observer_factory_type_check():
+    """attach_observer_factory raises TypeError if factory returns non-BaseObserver."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+    with pytest.raises(TypeError, match="not a BaseObserver"):
+        group.attach_observer_factory(lambda replica: "not an observer")
