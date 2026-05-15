@@ -686,11 +686,9 @@ class ProcessWangLandauPool:
                     slot.append((process, parent_conn))
                 self._slots.append(slot)
 
-            for slot in self._slots:
-                for _, conn in slot:
-                    status, payload = conn.recv()
-                    if status != "OK":
-                        raise RuntimeError(f"worker startup failed:\n{payload}")
+            for i, slot in enumerate(self._slots):
+                for w, (_, conn) in enumerate(slot):
+                    recv_reply(conn, "STARTUP", f"window {i} walker {w}")
         except BaseException:
             self.shutdown()
             raise
@@ -715,30 +713,6 @@ class ProcessWangLandauPool:
         """SHA-256 hash of the ensemble kwargs forwarded to workers."""
         return self._ensemble_kwargs_hash
 
-    def _recv_or_raise(self, conn: Connection, op: str, label: Any) -> Any:
-        """Receive a (status, payload) reply or raise a clear exception.
-
-        Mirrors `ProcessPool._recv_or_raise`; duplicated here for
-        clarity since `ProcessWangLandauPool` is self-contained. A
-        future refactor extracting the parent-side pipe plumbing
-        would consolidate this and the abort/drain helpers across
-        both pool classes.
-        """
-        try:
-            status, payload = conn.recv()
-        except EOFError as exc:
-            raise RuntimeError(
-                f"worker {op} ({label}) exited unexpectedly"
-            ) from exc
-        if status == "ERR_PICKLE":
-            raise TypeError(
-                f"reply from worker {op} ({label}) could not be "
-                f"round-tripped through pickle: {payload}"
-            )
-        if status != "OK":
-            raise RuntimeError(f"worker {op} ({label}) failed: {payload}")
-        return payload
-
     def _drain_remaining_replies(self, conns: list[Connection]) -> None:
         """Read pending replies on the given connections, ignoring contents."""
         for conn in conns:
@@ -746,24 +720,6 @@ class ProcessWangLandauPool:
                 conn.recv()
             except (EOFError, BrokenPipeError):
                 pass
-
-    def _abort_partial_attach(
-        self,
-        op: str,
-        payload: str,
-        remaining: list[Connection],
-    ) -> NoReturn:
-        """Shut the pool down after a worker reports ERR during attach.
-
-        Mirrors `ProcessPool._abort_partial_attach`. Partial-attach
-        state is unrecoverable — mchammer has no detach API — so the
-        pool is shut down and further operations refuse via
-        `_check_open`. The drain step prevents the SHUTDOWN handshake
-        from racing against unread attach replies.
-        """
-        self._drain_remaining_replies(remaining)
-        self.shutdown()
-        raise RuntimeError(f"worker {op} failed: {payload}")
 
     def _recv_or_abort_attach(
         self,
@@ -777,15 +733,11 @@ class ProcessWangLandauPool:
         Mirrors `ProcessPool._recv_or_abort_attach`.
         """
         try:
-            status, payload = conn.recv()
-        except EOFError as exc:
+            recv_reply(conn, op, label)
+        except (RuntimeError, TypeError):
             self._drain_remaining_replies(remaining)
             self.shutdown()
-            raise RuntimeError(
-                f"worker {op} ({label}) exited unexpectedly during attach"
-            ) from exc
-        if status != "OK":
-            self._abort_partial_attach(op, payload, remaining)
+            raise
 
     def __len__(self) -> int:
         self._check_open()
@@ -802,139 +754,133 @@ class ProcessWangLandauPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        for slot in self._slots:
-            for _, conn in slot:
-                conn.send(("ADVANCE", int(n_steps)))
-        for i, slot in enumerate(self._slots):
-            for w, (_, conn) in enumerate(slot):
-                self._recv_or_raise(conn, "ADVANCE", f"window {i} walker {w}")
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot)
+        ]
+        broadcast_gather(all_targets, ("ADVANCE", int(n_steps)))
 
-        # Phase 2: entropy sync for multi-walker slots
         try:
             for i, slot in enumerate(self._slots):
                 if len(slot) == 1:
                     continue
-                for _, conn in slot:
-                    conn.send(("GET_ENTROPY_SYNC_STATE",))
-                states = [
-                    self._recv_or_raise(
-                        conn, "GET_ENTROPY_SYNC_STATE", f"window {i} walker {w}"
-                    )
+                slot_targets = [
+                    (conn, f"window {i} walker {w}")
                     for w, (_, conn) in enumerate(slot)
                 ]
-                target_len = max(s["fill_factor_history_len"] for s in states)
-                merged = _merge_entropies([s["entropy"] for s in states])
+                states = broadcast_gather(
+                    slot_targets, ("GET_ENTROPY_SYNC_STATE",)
+                )
+                target_len = max(
+                    s["fill_factor_history_len"] for s in states
+                )
+                merged = _merge_entropies(
+                    [s["entropy"] for s in states]
+                )
                 for w, (_, conn) in enumerate(slot):
                     extra = target_len - states[w]["fill_factor_history_len"]
                     conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
                 for w, (_, conn) in enumerate(slot):
-                    self._recv_or_raise(
-                        conn, "APPLY_ENTROPY_SYNC", f"window {i} walker {w}"
+                    recv_reply(
+                        conn, "APPLY_ENTROPY_SYNC",
+                        f"window {i} walker {w}",
                     )
-                self._exchange_idx[i] = int(self._slot_rngs[i].integers(0, len(slot)))
+                self._exchange_idx[i] = int(
+                    self._slot_rngs[i].integers(0, len(slot))
+                )
         except Exception:
             self.shutdown()
             raise
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        for i, slot in enumerate(self._slots):
-            _, conn = slot[self._exchange_idx[i]]
-            conn.send(("ENERGY",))
-        result = np.empty(len(self._slots), dtype=np.float64)
-        for i, slot in enumerate(self._slots):
-            _, conn = slot[self._exchange_idx[i]]
-            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
-        return result
+        targets = [
+            (slot[self._exchange_idx[i]][1], i)
+            for i, slot in enumerate(self._slots)
+        ]
+        payloads = broadcast_gather(targets, ("ENERGY",))
+        return np.array(payloads, dtype=np.float64)
 
     def current_energy(self, i: int) -> float:
         self._check_open()
         _, conn = self._slots[i][self._exchange_idx[i]]
-        conn.send(("ENERGY",))
-        return float(self._recv_or_raise(conn, "ENERGY", i))
+        return float(request(conn, ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
         _, conn = self._slots[i][self._exchange_idx[i]]
-        conn.send(("GET_OCC",))
-        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
+        return np.asarray(request(conn, ("GET_OCC",), i))
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
         _, conn_i = self._slots[i][self._exchange_idx[i]]
         _, conn_j = self._slots[j][self._exchange_idx[j]]
-        conn_i.send(("GET_OCC",))
-        conn_j.send(("GET_OCC",))
-        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
-        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
-        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        self._recv_or_raise(conn_i, "SET_OCC", i)
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        occ_i, occ_j = broadcast_gather(
+            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
+        )
+        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
         try:
-            self._recv_or_raise(conn_j, "SET_OCC", j)
+            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
         except BaseException:
-            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-            self._recv_or_raise(conn_i, "SET_OCC", i)
+            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()
-        # walker 0; all walkers' entropies are equal after advance_all returns
         _, conn = self._slots[i][0]
-        conn.send(("LOG_G_AT", float(energy), float(energy)))
-        g_at_E, _ = self._recv_or_raise(conn, "LOG_G_AT", i)
+        g_at_E, _ = request(conn, ("LOG_G_AT", float(energy), float(energy)), i)
         return float(g_at_E)
 
     def log_g_pair(
         self, i: int, j: int, E_i: float, E_j: float,
     ) -> tuple[float, float, float, float]:
         self._check_open()
-        # walker 0; all walkers' entropies are equal after advance_all returns
         _, conn_i = self._slots[i][0]
         _, conn_j = self._slots[j][0]
-        conn_i.send(("LOG_G_AT", float(E_i), float(E_j)))
-        conn_j.send(("LOG_G_AT", float(E_i), float(E_j)))
-        g_i_Ei, g_i_Ej = self._recv_or_raise(conn_i, "LOG_G_AT", i)
-        g_j_Ei, g_j_Ej = self._recv_or_raise(conn_j, "LOG_G_AT", j)
+        (g_i_Ei, g_i_Ej), (g_j_Ei, g_j_Ej) = broadcast_gather(
+            [(conn_i, i), (conn_j, j)],
+            ("LOG_G_AT", float(E_i), float(E_j)),
+        )
         return (
             float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
         )
 
     def converged_flags(self) -> np.ndarray:
         self._check_open()
-        for slot in self._slots:
-            for _, conn in slot:
-                conn.send(("CONVERGED",))
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot)
+        ]
+        all_flags = broadcast_gather(all_targets, ("CONVERGED",))
         result = np.empty(len(self._slots), dtype=bool)
+        offset = 0
         for i, slot in enumerate(self._slots):
-            result[i] = all([
-                bool(self._recv_or_raise(conn, "CONVERGED", f"window {i} walker {w}"))
-                for w, (_, conn) in enumerate(slot)
-            ])
+            result[i] = all(
+                bool(all_flags[offset + w]) for w in range(len(slot))
+            )
+            offset += len(slot)
         return result
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
-        for slot in self._slots:
-            _, conn = slot[0]
-            conn.send(("GET_DC",))
-        result = []
-        for i, slot in enumerate(self._slots):
-            _, conn = slot[0]
-            result.append(self._recv_or_raise(conn, "GET_DC", i))
-        return result
+        targets = [(slot[0][1], i) for i, slot in enumerate(self._slots)]
+        return broadcast_gather(targets, ("GET_DC",))
 
     def per_window_stats(self) -> list[dict[str, Any]]:
         self._check_open()
-        for slot in self._slots:
-            for _, conn in slot:
-                conn.send(("WL_STATS",))
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot)
+        ]
+        all_stats = broadcast_gather(all_targets, ("WL_STATS",))
         result = []
+        offset = 0
         for i, slot in enumerate(self._slots):
-            slot_stats = [
-                self._recv_or_raise(conn, "WL_STATS", f"window {i} walker {w}")
-                for w, (_, conn) in enumerate(slot)
-            ]
+            slot_stats = all_stats[offset:offset + len(slot)]
+            offset += len(slot)
             if len(slot_stats) == 1:
                 result.append(slot_stats[0])
             else:
@@ -957,31 +903,25 @@ class ProcessWangLandauPool:
         ``WangLandauDataContainer`` instances, one per walker in that slot.
         """
         self._check_open()
-        for slot in self._slots:
-            for _, conn in slot:
-                conn.send(("GET_DC",))
-        return [
-            [
-                self._recv_or_raise(conn, "GET_DC", f"window {i} walker {w}")
-                for w, (_, conn) in enumerate(slot)
-            ]
+        all_targets = [
+            (conn, f"window {i} walker {w}")
             for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot)
         ]
+        all_dcs = broadcast_gather(all_targets, ("GET_DC",))
+        result = []
+        offset = 0
+        for slot in self._slots:
+            result.append(all_dcs[offset:offset + len(slot)])
+            offset += len(slot)
+        return result
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
         if any(len(slot) > 1 for slot in self._slots):
             raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-        for slot in self._slots:
-            _, conn = slot[0]
-            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
-        result = []
-        for i, slot in enumerate(self._slots):
-            _, conn = slot[0]
-            result.append(
-                self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
-            )
-        return result
+        targets = [(slot[0][1], i) for i, slot in enumerate(self._slots)]
+        return broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
 
     def restore_replica_state(
         self,
@@ -1023,10 +963,12 @@ class ProcessWangLandauPool:
             self._slots, containers, replica_extras, strict=True
         ):
             _, conn = slot[0]
-            conn.send(("RESTORE_STATE", container, extra["sites_by_species"]))
+            conn.send(
+                ("RESTORE_STATE", container, extra["sites_by_species"])
+            )
         for i, slot in enumerate(self._slots):
             _, conn = slot[0]
-            self._recv_or_raise(conn, "RESTORE_STATE", i)
+            recv_reply(conn, "RESTORE_STATE", i)
 
     def attach_observer(
         self,
@@ -1166,8 +1108,7 @@ class ProcessWangLandauPool:
                 f"for pool of size {n}"
             )
         _, conn = self._slots[replica_index][0]
-        conn.send(("GET_OBSERVERS",))
-        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
+        return request(conn, ("GET_OBSERVERS",), replica_index)
 
     def shutdown(self) -> None:
         for slot in self._slots:

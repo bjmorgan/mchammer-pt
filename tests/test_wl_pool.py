@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
@@ -53,8 +54,8 @@ def _spawn_wl_worker(tmp_path):
     )
     process.start()
     child_conn.close()
-    status, _ = parent_conn.recv()   # ready handshake
-    assert status == "OK"
+    reply = parent_conn.recv()
+    assert reply == Reply("OK", "STARTUP", None)
     return process, parent_conn
 
 
@@ -62,9 +63,7 @@ def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
     """GET_ENTROPY_SYNC_STATE returns entropy, fill_factor_history_len, histogram."""
     process, conn = _spawn_wl_worker(tmp_path)
     try:
-        conn.send(("GET_ENTROPY_SYNC_STATE",))
-        status, payload = conn.recv()
-        assert status == "OK"
+        payload = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
         assert set(payload.keys()) == {
             "entropy", "fill_factor_history_len", "histogram"
         }
@@ -73,8 +72,7 @@ def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
         assert isinstance(payload["histogram"], dict)
         assert payload["fill_factor_history_len"] >= 1
     finally:
-        conn.send(("SHUTDOWN",))
-        conn.recv()
+        request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
 
 
@@ -82,25 +80,20 @@ def test_wl_worker_apply_entropy_sync_halvings_and_entropy(tmp_path):
     """APPLY_ENTROPY_SYNC applies extra halvings and writes merged entropy."""
     process, conn = _spawn_wl_worker(tmp_path)
     try:
-        conn.send(("GET_ENTROPY_SYNC_STATE",))
-        _, initial = conn.recv()
+        initial = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
         initial_len = initial["fill_factor_history_len"]
 
         merged_entropy = {0: 1.5, 1: 2.5}
-        conn.send(("APPLY_ENTROPY_SYNC", merged_entropy, 2))
-        status, _ = conn.recv()
-        assert status == "OK"
+        request(conn, ("APPLY_ENTROPY_SYNC", merged_entropy, 2), 0)
 
-        conn.send(("GET_ENTROPY_SYNC_STATE",))
-        _, after = conn.recv()
+        after = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
         assert after["fill_factor_history_len"] == initial_len + 2
         assert after["entropy"][0] == pytest.approx(1.5)
         assert after["entropy"][1] == pytest.approx(2.5)
         # Histogram values must be zeroed after halvings
         assert all(v == 0 for v in after["histogram"].values())
     finally:
-        conn.send(("SHUTDOWN",))
-        conn.recv()
+        request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
 
 
@@ -314,8 +307,7 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
 
         # Direct SET_OCC on worker 1 so its configuration is distinct.
         _, conn1 = pool._slots[1][0]
-        conn1.send(("SET_OCC", np.asarray(occ1, dtype=np.int64)))
-        pool._recv_or_raise(conn1, "SET_OCC", 1)
+        request(conn1, ("SET_OCC", np.asarray(occ1, dtype=np.int64)), 1)
 
         e_before_0 = pool.current_energy(0)
         e_before_1 = pool.current_energy(1)
@@ -512,9 +504,7 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         _, conn1 = pool._slots[0][1]
 
         def _query_converged(conn):
-            conn.send(("CONVERGED",))
-            _, val = conn.recv()
-            return bool(val)
+            return bool(request(conn, ("CONVERGED",), 0))
 
         # Neither walker is converged initially; query directly to avoid
         # all()-short-circuit pipe leaks that would desync subsequent sends.
@@ -526,8 +516,7 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         # reached quickly once the walker is inside its window.
         converged_w0 = False
         for _ in range(200):
-            conn0.send(("ADVANCE", 1))
-            conn0.recv()
+            request(conn0, ("ADVANCE", 1), 0)
             if _query_converged(conn0):
                 converged_w0 = True
                 break
@@ -541,8 +530,7 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         # Now converge walker 1 the same way
         converged_w1 = False
         for _ in range(200):
-            conn1.send(("ADVANCE", 1))
-            conn1.recv()
+            request(conn1, ("ADVANCE", 1), 0)
             if _query_converged(conn1):
                 converged_w1 = True
                 break
@@ -569,14 +557,12 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
         _, conn1 = pool._slots[0][1]
         conn0.send(("ADVANCE", 20))
         conn1.send(("ADVANCE", 20))
-        pool._recv_or_raise(conn0, "ADVANCE", "window 0 walker 0")
-        pool._recv_or_raise(conn1, "ADVANCE", "window 0 walker 1")
+        recv_reply(conn0, "ADVANCE", "window 0 walker 0")
+        recv_reply(conn1, "ADVANCE", "window 0 walker 1")
 
         # Collect individual WL_STATS from both workers
-        conn0.send(("WL_STATS",))
-        conn1.send(("WL_STATS",))
-        _, s0 = conn0.recv()
-        _, s1 = conn1.recv()
+        s0 = request(conn0, ("WL_STATS",), 0)
+        s1 = request(conn1, ("WL_STATS",), 1)
 
         stats = pool.per_window_stats()
         assert len(stats) == 1
@@ -627,12 +613,8 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
         # Directly query both workers for their post-sync entropy
         _, conn0 = pool._slots[0][0]
         _, conn1 = pool._slots[0][1]
-        conn0.send(("GET_ENTROPY_SYNC_STATE",))
-        conn1.send(("GET_ENTROPY_SYNC_STATE",))
-        status0, s0 = conn0.recv()
-        status1, s1 = conn1.recv()
-        assert status0 == "OK"
-        assert status1 == "OK"
+        s0 = request(conn0, ("GET_ENTROPY_SYNC_STATE",), 0)
+        s1 = request(conn1, ("GET_ENTROPY_SYNC_STATE",), 1)
 
         assert s0["entropy"] == s1["entropy"]
         assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
