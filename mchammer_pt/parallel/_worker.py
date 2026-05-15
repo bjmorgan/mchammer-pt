@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import pickle
 import traceback
+from collections.abc import Callable
 from multiprocessing.connection import Connection
 from typing import Any
 
@@ -83,6 +84,142 @@ from mchammer.observers.base_observer import (
 
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
+from ._comms import Reply
+
+
+class _Shutdown(BaseException):
+    """Raised by SHUTDOWN handler to exit the command loop."""
+
+
+class BaseWorker:
+    """Command-loop base class for persistent pool workers.
+
+    Subclasses implement ``_build_replica`` and optionally extend
+    ``self._handlers`` with extra opcode handlers.
+    """
+
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+        self._op: str = ""
+        self._replica: Any = None
+        self._handlers: dict[str, Callable[[tuple], None]] = {
+            "ADVANCE": self._handle_advance,
+            "ENERGY": self._handle_energy,
+            "GET_OCC": self._handle_get_occ,
+            "SET_OCC": self._handle_set_occ,
+            "GET_DC": self._handle_get_dc,
+            "SNAPSHOT_FOR_CHECKPOINT": self._handle_snapshot_for_checkpoint,
+            "RESTORE_STATE": self._handle_restore_state,
+            "ATTACH_OBS": self._handle_attach_obs,
+            "ATTACH_OBS_CLS": self._handle_attach_obs_cls,
+            "ATTACH_OBS_FACTORY": self._handle_attach_obs_factory,
+            "GET_OBSERVERS": self._handle_get_observers,
+            "SHUTDOWN": self._handle_shutdown,
+        }
+
+    def _build_replica(self) -> Any:
+        raise NotImplementedError
+
+    def run(self) -> None:
+        """Build the replica, handshake, and enter the command loop."""
+        try:
+            self._replica = self._build_replica()
+        except BaseException:
+            self._conn.send(Reply("ERR", "STARTUP", traceback.format_exc()))
+            self._conn.close()
+            return
+
+        self._conn.send(Reply("OK", "STARTUP", None))
+
+        while True:
+            try:
+                cmd = self._conn.recv()
+            except EOFError:
+                return
+            self._op = cmd[0]
+            handler = self._handlers.get(self._op)
+            if handler is None:
+                self._conn.send(
+                    Reply("ERR", self._op, f"unknown command: {self._op!r}")
+                )
+                continue
+            try:
+                handler(cmd)
+            except _Shutdown:
+                return
+            except Exception:
+                self._reply_error(traceback.format_exc())
+
+    def _reply(self, payload: Any) -> None:
+        self._conn.send(Reply("OK", self._op, payload))
+
+    def _reply_error(self, tb: str) -> None:
+        self._conn.send(Reply("ERR", self._op, tb))
+
+    def _reply_pickle_error(self, tb: str) -> None:
+        self._conn.send(Reply("ERR_PICKLE", self._op, tb))
+
+    def _handle_advance(self, cmd: tuple) -> None:
+        self._replica.advance(cmd[1])
+        self._reply(None)
+
+    def _handle_energy(self, cmd: tuple) -> None:
+        self._reply(self._replica.current_energy())
+
+    def _handle_get_occ(self, cmd: tuple) -> None:
+        self._reply(self._replica.current_occupations())
+
+    def _handle_set_occ(self, cmd: tuple) -> None:
+        self._replica.set_occupations(cmd[1])
+        self._reply(None)
+
+    def _handle_get_dc(self, cmd: tuple) -> None:
+        self._reply(self._replica.data_container())
+
+    def _handle_snapshot_for_checkpoint(self, cmd: tuple) -> None:
+        self._reply(self._replica.snapshot_for_checkpoint())
+
+    def _handle_restore_state(self, cmd: tuple) -> None:
+        _, container, sites_by_species = cmd
+        self._replica.restore_state(
+            container, sites_by_species=sites_by_species
+        )
+        self._reply(None)
+
+    def _handle_attach_obs(self, cmd: tuple) -> None:
+        observer = pickle.loads(cmd[1])
+        self._replica.attach_mchammer_observer(observer)
+        self._reply(None)
+
+    def _handle_attach_obs_cls(self, cmd: tuple) -> None:
+        _, cls, args, kwargs = cmd
+        self._replica.attach_mchammer_observer(cls(*args, **kwargs))
+        self._reply(None)
+
+    def _handle_attach_obs_factory(self, cmd: tuple) -> None:
+        factory = cmd[1]
+        observer = factory(self._replica)
+        if not isinstance(observer, BaseObserver):
+            raise TypeError(
+                f"attach_observer_factory: factory returned "
+                f"{type(observer).__name__}, not a BaseObserver"
+            )
+        self._replica.attach_mchammer_observer(observer)
+        self._reply(None)
+
+    def _handle_get_observers(self, cmd: tuple) -> None:
+        observers = self._replica.ensemble.observers
+        try:
+            pickle.dumps(observers)
+        except Exception:
+            self._reply_pickle_error(traceback.format_exc())
+        else:
+            self._reply(observers)
+
+    def _handle_shutdown(self, cmd: tuple) -> None:
+        self._reply(None)
+        self._conn.close()
+        raise _Shutdown
 
 
 def _worker(
