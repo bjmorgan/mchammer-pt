@@ -30,6 +30,8 @@ def merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
         only a subset of walkers contribute a reduced entropy estimate until all
         walkers reach them.
     """
+    if not entropies:
+        return {}
     all_bins: set[int] = set()
     for e in entropies:
         all_bins.update(e.keys())

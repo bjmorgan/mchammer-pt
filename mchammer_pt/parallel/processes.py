@@ -1,6 +1,6 @@
 """Persistent-worker multiprocessing pool -- parent-side orchestration.
 
-One OS process per replica. Workers live in spawn-mode subprocesses
+One OS process per walker. Workers live in spawn-mode subprocesses
 implemented in ``_worker.py``; this file contains only the parent-side
 ``ProcessPool`` class and the per-worker ``Pipe``-based command/reply
 plumbing.
@@ -82,7 +82,7 @@ class ProcessPool:
             (one per temperature, length-validated against
             ``temperatures``).
         temperatures: one temperature per replica.
-        seeds: one random seed per replica.
+        seeds: one random seed per window.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used
             by every worker's Replica. Spawn workers re-import the
             class by fully qualified name, so it must live in an
@@ -562,7 +562,7 @@ class ProcessWangLandauPool:
             configuration whose energy lies in that window).
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
-        seeds: one random seed per replica.
+        seeds: one random seed per window.
         n_walkers_per_window: walkers per energy window; > 1 enables
             multi-walker entropy sync after each block.
         ensemble_cls: WL ensemble class. Defaults to

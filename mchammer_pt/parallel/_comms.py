@@ -79,7 +79,10 @@ def request(conn: Connection, msg: tuple[Any, ...], label: Any) -> Any:
     Returns:
         The reply payload on success.
     """
-    conn.send(msg)
+    try:
+        conn.send(msg)
+    except BrokenPipeError:
+        raise RuntimeError(f"worker {label!r} pipe broke during send") from None
     return recv_reply(conn, msg[0], label)
 
 
