@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "mypy", "ruff"]
+dev = ["pytest", "mypy", "ruff", "pandas-stubs"]
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]

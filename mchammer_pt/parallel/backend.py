@@ -199,6 +199,16 @@ class WangLandauPool(ReplicaPool, Protocol):
         """
         ...
 
+    def per_window_data_containers(
+        self,
+    ) -> list[list[BaseDataContainer]]:
+        """All data containers grouped by window.
+
+        Returns one inner list per window, each containing one
+        ``WangLandauDataContainer`` per walker.
+        """
+        ...
+
 
 @runtime_checkable
 class _ObserverAttach(Protocol):
