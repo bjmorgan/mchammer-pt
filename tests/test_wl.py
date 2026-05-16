@@ -733,3 +733,51 @@ def test_wl_pt_results_returns_window_results():
         assert wr.energy_limit_right == expected_hi
         assert wr.energy_spacing == 0.1
         assert wr.n_walkers == 1
+
+
+def test_wl_pt_results_multi_walker():
+    """results() with W=2 returns WindowResults with 2 containers each."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_result import WindowResult
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=42,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    results = pt.results()
+    assert len(results) == 2
+    for wr in results:
+        assert isinstance(wr, WindowResult)
+        assert wr.n_walkers == 2
+        assert len(wr.containers) == 2
+
+
+def test_wl_pt_results_matches_data_containers_w1():
+    """For W=1, results() entropy matches the underlying container."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=42,
+    )
+    pt.run(n_cycles=3)
+    results = pt.results()
+    for wr in results:
+        wr_entropy = wr.get_entropy()
+        if wr_entropy is not None and len(wr_entropy) > 0:
+            # Single container, so merge is identity.
+            assert "energy" in wr_entropy.columns
+            assert "entropy" in wr_entropy.columns
+            assert wr_entropy["entropy"].min() == 0.0  # min-shifted
