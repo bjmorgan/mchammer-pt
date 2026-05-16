@@ -621,6 +621,9 @@ class ProcessWangLandauPool:
         )
         self._slots: list[_WindowSlot] = []
 
+        # Cover both spawn-time and handshake-time failures with one
+        # cleanup path. A failure on window N leaves N-1 fully started
+        # slots in self._slots that shutdown() then joins.
         ctx = mp.get_context("spawn")
         try:
             for (lo, hi), window_seed, ad, W_w in zip(
@@ -658,6 +661,8 @@ class ProcessWangLandauPool:
                         child_conn.close()
                         workers.append((process, parent_conn))
                 except BaseException:
+                    # BaseException (not Exception): also clean up on
+                    # KeyboardInterrupt during the spawn loop.
                     for proc, conn in workers:
                         conn.close()
                         proc.terminate()
