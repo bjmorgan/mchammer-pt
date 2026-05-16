@@ -700,3 +700,36 @@ def test_wl_pt_process_pool_resume_round_trip_preserves_non_default_ensemble(
         pt_b.run(n_cycles=1)
     finally:
         pt_b._pool.shutdown()
+
+
+def test_wl_pt_results_returns_window_results():
+    """results() returns one WindowResult per window with correct shape."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_result import WindowResult
+
+    e0 = _initial_energy()
+    windows = [
+        (None, e0 + 50.0),
+        (e0 - 50.0, e0 + 50.0),
+        (e0 - 50.0, None),
+    ]
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms() for _ in range(3)],
+        windows=windows,
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=42,
+    )
+    pt.run(n_cycles=2)
+    results = pt.results()
+    assert len(results) == 3
+    for i, wr in enumerate(results):
+        assert isinstance(wr, WindowResult)
+        lo, hi = windows[i]
+        expected_lo = float("-inf") if lo is None else lo
+        expected_hi = float("inf") if hi is None else hi
+        assert wr.energy_limit_left == expected_lo
+        assert wr.energy_limit_right == expected_hi
+        assert wr.energy_spacing == 0.1
+        assert wr.n_walkers == 1

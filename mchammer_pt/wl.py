@@ -31,6 +31,7 @@ from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica, WangLandauSlot
+from .wl_result import WindowResult
 from .wl_window_group import _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED
 
 
@@ -377,6 +378,24 @@ class WangLandauParallelTempering(BaseParallelTempering):
         if self._data_container_file is not None:
             _write_checkpoint(self, Path(self._data_container_file))
         return history
+
+    def results(self) -> list[WindowResult]:
+        """Per-window analysis output.
+
+        Returns one ``WindowResult`` per energy window. Each result
+        wraps the per-walker data containers and provides merged
+        ``get_entropy()`` and ``get_histogram()`` methods.
+        """
+        grouped = self._pool.per_window_data_containers()
+        return [
+            WindowResult(
+                energy_limit_left=float(lo) if lo is not None else float("-inf"),
+                energy_limit_right=float(hi) if hi is not None else float("inf"),
+                energy_spacing=self._energy_spacing,
+                containers=tuple(containers),
+            )
+            for (lo, hi), containers in zip(self._windows, grouped, strict=True)
+        ]
 
     def save_checkpoint(self, path: Path | str) -> None:
         """Write a full checkpoint of this orchestrator atomically."""
