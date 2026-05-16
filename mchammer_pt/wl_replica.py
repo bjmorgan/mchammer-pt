@@ -111,6 +111,7 @@ class WangLandauSlot(Protocol):
     def log_g(self, energy: float) -> float: ...
     def data_container(self) -> WangLandauDataContainer: ...
     def all_data_containers(self) -> list[WangLandauDataContainer]: ...
+    def refresh_last_state(self) -> None: ...
     def window_stats(self) -> dict[str, Any]: ...
     def snapshot_for_checkpoint(self) -> dict[str, Any]: ...
     def attach_mchammer_observer(self, observer: BaseObserver) -> None: ...
@@ -310,16 +311,23 @@ class WangLandauReplica:
     def force_halve(self) -> None:
         """Force one fill-factor halving, bypassing mchammer's flatness check.
 
-        Halves ``_fill_factor``, records the new value in
-        ``_fill_factor_history`` under a fresh key, and resets the
-        histogram to zero (preserving keys so the flatness check stays
-        valid). Used by multi-walker entropy sync to bring lagging
-        walkers up to the most-halved fill factor.
+        Halves ``_fill_factor``, records the new value in both
+        ``_fill_factor_history`` and ``_entropy_history`` under a
+        fresh key, and resets the histogram to zero (preserving keys
+        so the flatness check stays valid). The entropy snapshot
+        mirrors mchammer's natural halving, which always records both
+        histories at the same step. Used by multi-walker entropy sync
+        to bring lagging walkers up to the most-halved fill factor.
         """
+        from collections import OrderedDict
+
         e = self._ensemble
         e._fill_factor /= 2.0
         next_key = max(e._fill_factor_history, default=-1) + 1
         e._fill_factor_history[next_key] = e._fill_factor
+        e._entropy_history[next_key] = OrderedDict(
+            sorted(e._entropy.items())
+        )
         e._histogram = dict.fromkeys(e._histogram, 0)
 
     @property
@@ -385,16 +393,12 @@ class WangLandauReplica:
     def cluster_expansion_path(self) -> str | None:
         return self._cluster_expansion_path
 
-    def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        """Refresh `_last_state` on the live container and return extras.
+    def refresh_last_state(self) -> None:
+        """Populate ``_last_state`` on the live container from ensemble state.
 
-        Populates the fields icet's WL `_restart_ensemble` reads on resume
-        (`last_step`, `occupations`, `accepted_trials`, `random_state`,
-        `fill_factor`, `fill_factor_history`, `entropy_history`,
-        `histogram`, `entropy`), plus the 1/t-schedule fields (`schedule`,
-        `phase`, `window_entry_step`) when present. Returns the
-        `sites_by_species` extras the orchestrator-side checkpoint code
-        embeds alongside the container.
+        Writes the fields that ``WindowResult`` reads (entropy,
+        histogram, fill_factor, fill_factor_history, entropy_history)
+        and the 1/t-schedule fields when present. Idempotent.
         """
         from collections import OrderedDict
 
@@ -410,9 +414,6 @@ class WangLandauReplica:
             histogram=OrderedDict(sorted(e._histogram.items())),
             entropy=OrderedDict(sorted(e._entropy.items())),
         )
-        # `schedule`, `phase`, and `window_entry_step` live directly on
-        # `_last_state` rather than via `_update_last_state`, mirroring
-        # icet's `write_data_container`.
         if hasattr(e, "_schedule"):
             e._data_container._last_state["schedule"] = e._schedule
         if hasattr(e, "_phase"):
@@ -420,6 +421,16 @@ class WangLandauReplica:
             e._data_container._last_state[
                 "window_entry_step"
             ] = e._window_entry_step
+
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Refresh ``_last_state`` and return checkpoint extras.
+
+        Calls ``refresh_last_state`` to populate the container, then
+        returns the ``sites_by_species`` extras the checkpoint code
+        embeds alongside it.
+        """
+        self.refresh_last_state()
+        e = self._ensemble
         sites_by_species: list[dict[int, list[int]]] = [
             {
                 int(species): [int(s) for s in sites]

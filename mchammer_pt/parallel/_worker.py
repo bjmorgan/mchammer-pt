@@ -307,6 +307,10 @@ class WangLandauWorker(BaseWorker):
             cluster_expansion_path=self._ce_path,
         )
 
+    def _handle_get_dc(self, cmd: tuple[Any, ...]) -> None:
+        self._replica.refresh_last_state()
+        self._reply(self._replica.data_container())
+
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:
         _, E_i, E_j = cmd
         self._reply((self._replica.log_g(E_i), self._replica.log_g(E_j)))

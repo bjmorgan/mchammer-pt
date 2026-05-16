@@ -443,10 +443,15 @@ class SerialWangLandauPool:
     def per_window_data_containers(self) -> list[list[WangLandauDataContainer]]:
         """All data containers grouped by window slot.
 
+        Refreshes ``_last_state`` on every walker's container before
+        returning, so callers always see current entropy/histogram.
+
         Returns a list of length n_windows; each entry is a list of
         WangLandauDataContainer instances — one per walker for
         WangLandauWindowGroup slots, one for WangLandauReplica slots.
         """
+        for r in self._replicas:
+            r.refresh_last_state()
         return [r.all_data_containers() for r in self._replicas]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:

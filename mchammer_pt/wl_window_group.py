@@ -180,6 +180,11 @@ class WangLandauWindowGroup:
             "converged": self.converged,
         }
 
+    def refresh_last_state(self) -> None:
+        """Refresh ``_last_state`` on every walker's container."""
+        for r in self._replicas:
+            r.refresh_last_state()
+
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
         raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
