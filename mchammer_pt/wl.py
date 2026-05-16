@@ -645,6 +645,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
         """
+        _w = n_walkers_per_window
+        multi = (
+            (isinstance(_w, int) and _w > 1)
+            or (not isinstance(_w, int) and any(int(w) > 1 for w in _w))
+        )
+        if multi and data_container_file is not None:
+            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]

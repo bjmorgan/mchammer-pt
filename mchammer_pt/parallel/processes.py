@@ -82,7 +82,7 @@ class ProcessPool:
             (one per temperature, length-validated against
             ``temperatures``).
         temperatures: one temperature per replica.
-        seeds: one random seed per window.
+        seeds: one random seed per replica.
         ensemble_cls: `CanonicalEnsemble` or a subclass thereof, used
             by every worker's Replica. Spawn workers re-import the
             class by fully qualified name, so it must live in an
@@ -636,26 +636,32 @@ class ProcessWangLandauPool:
                     rng_seed = int(children[W_w].generate_state(1)[0])
 
                 workers: list[tuple[mp.process.BaseProcess, Connection]] = []
-                for w_seed in walker_seeds:
-                    parent_conn, child_conn = ctx.Pipe(duplex=True)
-                    process = ctx.Process(
-                        target=_wl_worker,
-                        args=(
-                            child_conn,
-                            str(ce_path),
-                            ad,
-                            float(energy_spacing),
-                            lo,
-                            hi,
-                            int(w_seed),
-                            ensemble_cls,
-                            extra_kwargs,
-                        ),
-                        daemon=True,
-                    )
-                    process.start()
-                    child_conn.close()
-                    workers.append((process, parent_conn))
+                try:
+                    for w_seed in walker_seeds:
+                        parent_conn, child_conn = ctx.Pipe(duplex=True)
+                        process = ctx.Process(
+                            target=_wl_worker,
+                            args=(
+                                child_conn,
+                                str(ce_path),
+                                ad,
+                                float(energy_spacing),
+                                lo,
+                                hi,
+                                int(w_seed),
+                                ensemble_cls,
+                                extra_kwargs,
+                            ),
+                            daemon=True,
+                        )
+                        process.start()
+                        child_conn.close()
+                        workers.append((process, parent_conn))
+                except BaseException:
+                    for proc, conn in workers:
+                        conn.close()
+                        proc.terminate()
+                    raise
                 self._slots.append(_WindowSlot(
                     workers=workers,
                     exchange_idx=0,
