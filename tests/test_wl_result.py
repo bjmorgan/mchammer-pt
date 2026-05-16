@@ -231,3 +231,22 @@ def test_get_entropy_fill_factor_limit_not_yet_reached():
         containers=(c,),
     )
     assert wr.get_entropy(fill_factor_limit=0.25) is None
+
+
+def test_get_entropy_fill_factor_limit_no_matching_history_step():
+    """Returns None when fill_factor passes the gate but no history step matches."""
+    c = _make_mock_container(
+        entropy={0: 1.0, 1: 2.0},
+        histogram={0: 5, 1: 3},
+        energy_spacing=1.0,
+        fill_factor=0.25,
+        fill_factor_history={0: 1.0, 100: 0.5},
+        entropy_history={100: {0: 1.0, 1: 2.0}},
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    assert wr.get_entropy(fill_factor_limit=0.25) is None
