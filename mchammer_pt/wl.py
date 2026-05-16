@@ -663,6 +663,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
+
+        Raises:
+            NotImplementedError: if any ``n_walkers_per_window`` value
+                is > 1 and ``data_container_file`` is not None.
         """
         _w = n_walkers_per_window
         multi = (

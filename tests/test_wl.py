@@ -781,3 +781,21 @@ def test_wl_pt_results_matches_data_containers_w1():
             assert "energy" in wr_entropy.columns
             assert "entropy" in wr_entropy.columns
             assert wr_entropy["entropy"].min() == 0.0  # min-shifted
+
+
+def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
+    """process_pool() rejects n_walkers > 1 with data_container_file before spawning."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(NotImplementedError, match="checkpointing"):
+        WangLandauParallelTempering.process_pool(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=2,
+            data_container_file="test.hdf5",
+        )

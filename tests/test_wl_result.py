@@ -212,3 +212,22 @@ def test_get_entropy_respects_fill_factor_limit():
     df = wr.get_entropy(fill_factor_limit=0.5)
     assert df.loc[0, "entropy"] == pytest.approx(0.0)
     assert df.loc[1, "entropy"] == pytest.approx(2.0)
+
+
+def test_get_entropy_fill_factor_limit_not_yet_reached():
+    """fill_factor_limit returns None when the walker hasn't converged far enough."""
+    c = _make_mock_container(
+        entropy={0: 1.0, 1: 2.0},
+        histogram={0: 5, 1: 3},
+        energy_spacing=1.0,
+        fill_factor=0.5,
+        fill_factor_history={0: 1.0, 100: 0.5},
+        entropy_history={100: {0: 1.0, 1: 2.0}},
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    assert wr.get_entropy(fill_factor_limit=0.25) is None
