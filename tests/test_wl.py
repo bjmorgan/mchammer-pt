@@ -523,6 +523,146 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         assert pt._ensemble_kwargs_hash != empty_hash
 
 
+def test_wl_pt_n_walkers_1_creates_plain_replicas():
+    """n_walkers_per_window=1 (default) creates WangLandauReplica slots."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    assert len(pt.pool) == 2
+    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
+    assert isinstance(pt.pool.replicas[1], WangLandauReplica)
+
+
+def test_wl_pt_n_walkers_2_creates_window_groups():
+    """n_walkers_per_window=2 creates WangLandauWindowGroup slots with 2 replicas."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    assert len(pt.pool) == 2
+    assert isinstance(pt.pool.replicas[0], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[0]._replicas) == 2
+    assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[1]._replicas) == 2
+
+
+def test_wl_pt_n_walkers_2_rejects_data_container_file():
+    """data_container_file with n_walkers_per_window > 1 raises NotImplementedError."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(NotImplementedError, match="checkpointing"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=2,
+            data_container_file="test.hdf5",
+        )
+
+
+def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
+    """n_walkers_per_window=[1, 2]: window 0 is a plain replica, window 1 is a group."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=[1, 2],
+    )
+    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
+    assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[1]._replicas) == 2
+
+
+def test_wl_pt_n_walkers_per_window_wrong_length_raises():
+    """n_walkers_per_window sequence with wrong length raises ValueError."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(ValueError, match="n_walkers_per_window"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=[2, 2, 2],
+        )
+
+
+def test_wl_pt_process_pool_accepts_n_walkers_per_window():
+    """process_pool with n_walkers_per_window=2 returns a valid orchestrator."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    try:
+        assert isinstance(pt, WangLandauParallelTempering)
+        assert len(pt.pool) == 2
+        assert len(pt.pool._slots[0].workers) == 2
+    finally:
+        pt.pool.shutdown()
+
+
+def test_wl_pt_n_walkers_2_run_returns_correct_history_shape():
+    """A multi-walker run returns ExchangeHistory with the expected shape."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    history = pt.run(n_cycles=3)
+    # 2 windows, 3 cycles -> energies shape (4, 2), one pair -> swap_attempted (1,)
+    assert history.energies_per_cycle.shape == (4, 2)
+    assert history.swap_attempted.shape == (1,)
+
+
 def test_wl_pt_process_pool_resume_round_trip_preserves_non_default_ensemble(
     tmp_path,
 ):
@@ -560,3 +700,102 @@ def test_wl_pt_process_pool_resume_round_trip_preserves_non_default_ensemble(
         pt_b.run(n_cycles=1)
     finally:
         pt_b._pool.shutdown()
+
+
+def test_wl_pt_results_returns_window_results():
+    """results() returns one WindowResult per window with correct shape."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_result import WindowResult
+
+    e0 = _initial_energy()
+    windows = [
+        (None, e0 + 50.0),
+        (e0 - 50.0, e0 + 50.0),
+        (e0 - 50.0, None),
+    ]
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms() for _ in range(3)],
+        windows=windows,
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=42,
+    )
+    pt.run(n_cycles=2)
+    results = pt.results()
+    assert len(results) == 3
+    for i, wr in enumerate(results):
+        assert isinstance(wr, WindowResult)
+        lo, hi = windows[i]
+        expected_lo = float("-inf") if lo is None else lo
+        expected_hi = float("inf") if hi is None else hi
+        assert wr.energy_limit_left == expected_lo
+        assert wr.energy_limit_right == expected_hi
+        assert wr.energy_spacing == 0.1
+        assert wr.n_walkers == 1
+
+
+def test_wl_pt_results_multi_walker():
+    """results() with W=2 returns WindowResults with 2 containers each."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_result import WindowResult
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=42,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    results = pt.results()
+    assert len(results) == 2
+    for wr in results:
+        assert isinstance(wr, WindowResult)
+        assert wr.n_walkers == 2
+        assert len(wr.containers) == 2
+
+
+def test_wl_pt_results_matches_data_containers_w1():
+    """For W=1, results() entropy matches the underlying container."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=42,
+    )
+    pt.run(n_cycles=3)
+    results = pt.results()
+    for wr in results:
+        wr_entropy = wr.get_entropy()
+        if wr_entropy is not None and len(wr_entropy) > 0:
+            # Single container, so merge is identity.
+            assert "energy" in wr_entropy.columns
+            assert "entropy" in wr_entropy.columns
+            assert wr_entropy["entropy"].min() == 0.0  # min-shifted
+
+
+def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
+    """process_pool() rejects n_walkers > 1 with data_container_file before spawning."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(NotImplementedError, match="checkpointing"):
+        WangLandauParallelTempering.process_pool(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            n_walkers_per_window=2,
+            data_container_file="test.hdf5",
+        )

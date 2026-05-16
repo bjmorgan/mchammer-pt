@@ -15,7 +15,7 @@ from mchammer.observers.base_observer import (
 )
 
 from ..replica import Replica
-from ..wl_replica import WangLandauReplica
+from ..wl_replica import WangLandauReplica, WangLandauSlot
 from ._imports import _resolve_replicas
 
 if TYPE_CHECKING:
@@ -232,11 +232,11 @@ class SerialWangLandauPool:
 
     def __init__(
         self,
-        replicas: Sequence[WangLandauReplica],
+        replicas: Sequence[WangLandauSlot],
         *,
         energy_spacing: float,
     ) -> None:
-        self._replicas: list[WangLandauReplica] = list(replicas)
+        self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
@@ -249,7 +249,7 @@ class SerialWangLandauPool:
         return len(self._replicas)
 
     @property
-    def replicas(self) -> list[WangLandauReplica]:
+    def replicas(self) -> list[WangLandauSlot]:
         return list(self._replicas)
 
     @property
@@ -314,16 +314,7 @@ class SerialWangLandauPool:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
     def per_window_stats(self) -> list[dict[str, Any]]:
-        result = []
-        for r in self._replicas:
-            e = r.ensemble
-            result.append({
-                "fill_factor": float(e._fill_factor),
-                "halvings": len(e._fill_factor_history),
-                "histogram": dict(e._histogram),
-                "converged": r.converged,
-            })
-        return result
+        return [r.window_stats() for r in self._replicas]
 
     def attach_observer(
         self,
@@ -380,7 +371,7 @@ class SerialWangLandauPool:
             )
         del probe
         for i in target_indices:
-            self._replicas[i].attach_mchammer_observer(cls(*args, **kwargs))
+            self._replicas[i].attach_observer_class(cls, *args, **kwargs)
 
     def attach_observer_factory(
         self,
@@ -398,6 +389,10 @@ class SerialWangLandauPool:
         reload the CE from disk inside the factory via
         ``ClusterExpansion.read(replica.cluster_expansion_path)``.
 
+        For ``WangLandauWindowGroup`` slots, the factory is called once
+        per walker (each inner ``WangLandauReplica``), so every walker
+        receives a freshly-constructed independent observer.
+
         On ``SerialWangLandauPool``,
         ``replica.cluster_expansion_path`` is ``None`` unless you
         passed ``cluster_expansion_path=`` to
@@ -408,13 +403,7 @@ class SerialWangLandauPool:
         if not target_indices:
             return
         for i in target_indices:
-            observer = factory(self._replicas[i])
-            if not isinstance(observer, BaseObserver):
-                raise TypeError(
-                    f"attach_observer_factory: factory returned "
-                    f"{type(observer).__name__}, not a BaseObserver"
-                )
-            self._replicas[i].attach_mchammer_observer(observer)
+            self._replicas[i].attach_observer_factory(factory)
 
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one WL replica.
@@ -423,6 +412,9 @@ class SerialWangLandauPool:
         keyed by observer tag; values are independent copies via
         ``pickle`` round-trip so mutations on the returned objects
         do not affect the pool's running state.
+
+        For ``WangLandauWindowGroup`` slots, only the observers from
+        the first walker in the group are returned.
 
         Raises:
             IndexError: if ``replica_index`` is out of range.
@@ -435,7 +427,8 @@ class SerialWangLandauPool:
                 f"replica index {replica_index} out of range "
                 f"for pool of size {n}"
             )
-        live = self._replicas[replica_index].ensemble.observers
+        slot = self._replicas[replica_index]
+        live = slot.ensemble.observers
         try:
             return pickle.loads(pickle.dumps(live))
         except Exception as exc:
@@ -446,6 +439,20 @@ class SerialWangLandauPool:
 
     def data_containers(self) -> list[WangLandauDataContainer]:
         return [r.data_container() for r in self._replicas]
+
+    def per_window_data_containers(self) -> list[list[WangLandauDataContainer]]:
+        """All data containers grouped by window slot.
+
+        Refreshes ``_last_state`` on every walker's container before
+        returning, so callers always see current entropy/histogram.
+
+        Returns a list of length n_windows; each entry is a list of
+        WangLandauDataContainer instances — one per walker for
+        WangLandauWindowGroup slots, one for WangLandauReplica slots.
+        """
+        for r in self._replicas:
+            r.refresh_last_state()
+        return [r.all_data_containers() for r in self._replicas]
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         return [r.snapshot_for_checkpoint() for r in self._replicas]

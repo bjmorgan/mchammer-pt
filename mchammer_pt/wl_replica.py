@@ -12,8 +12,8 @@ from __future__ import annotations
 import copy
 import os
 import random
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 from ase import Atoms
@@ -83,6 +83,49 @@ def _coerce_wl_last_state_keys_to_int(last_state: dict[str, Any]) -> None:
                 f"{exc}"
             ) from exc
         last_state[tag] = converted
+
+
+@runtime_checkable
+class WangLandauSlot(Protocol):
+    """Structural interface shared by single-walker and multi-walker WL slots.
+
+    Both ``WangLandauReplica`` (single walker) and
+    ``WangLandauWindowGroup`` (multi-walker) satisfy this protocol.
+    Used in type annotations by the serial and process pools.
+    """
+
+    @property
+    def energy_window(self) -> tuple[float | None, float | None]: ...
+    @property
+    def energy_spacing(self) -> float: ...
+    @property
+    def ensemble(self) -> Any: ...
+    @property
+    def cluster_expansion_path(self) -> str | None: ...
+    @property
+    def converged(self) -> bool: ...
+    def advance(self, n_steps: int) -> None: ...
+    def current_energy(self) -> float: ...
+    def current_occupations(self) -> np.ndarray: ...
+    def set_occupations(self, occupations: np.ndarray) -> None: ...
+    def log_g(self, energy: float) -> float: ...
+    def data_container(self) -> WangLandauDataContainer: ...
+    def all_data_containers(self) -> list[WangLandauDataContainer]: ...
+    def refresh_last_state(self) -> None: ...
+    def window_stats(self) -> dict[str, Any]: ...
+    def snapshot_for_checkpoint(self) -> dict[str, Any]: ...
+    def attach_mchammer_observer(self, observer: BaseObserver) -> None: ...
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None: ...
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+    ) -> None: ...
 
 
 class WangLandauReplica:
@@ -265,33 +308,97 @@ class WangLandauReplica:
         finally:
             random.setstate(previous_state)
 
+    def force_halve(self) -> None:
+        """Force one fill-factor halving, bypassing mchammer's flatness check.
+
+        Halves ``_fill_factor``, records the new value in both
+        ``_fill_factor_history`` and ``_entropy_history`` under a
+        fresh key, and resets the histogram to zero (preserving keys
+        so the flatness check stays valid). The entropy snapshot
+        mirrors mchammer's natural halving, which always records both
+        histories at the same step. Used by multi-walker entropy sync
+        to bring lagging walkers up to the most-halved fill factor.
+        """
+        from collections import OrderedDict
+
+        e = self._ensemble
+        e._fill_factor /= 2.0
+        next_key = max(e._fill_factor_history, default=-1) + 1
+        e._fill_factor_history[next_key] = e._fill_factor
+        e._entropy_history[next_key] = OrderedDict(
+            sorted(e._entropy.items())
+        )
+        e._histogram = dict.fromkeys(e._histogram, 0)
+
     @property
     def converged(self) -> bool:
         """True once the underlying WL ensemble has flagged convergence."""
         return bool(self._ensemble.converged or False)
 
+    def window_stats(self) -> dict[str, Any]:
+        """Per-window convergence metrics.
+
+        Returns fill_factor, halvings, histogram, and converged.
+        """
+        e = self._ensemble
+        return {
+            "fill_factor": float(e._fill_factor),
+            "halvings": max(0, len(e._fill_factor_history) - 1),
+            "histogram": dict(e._histogram),
+            "converged": self.converged,
+        }
+
     def data_container(self) -> WangLandauDataContainer:
         """The replica's live `WangLandauDataContainer`."""
         return self._ensemble.data_container
+
+    def all_data_containers(self) -> list[WangLandauDataContainer]:
+        """Returns a single-element list containing this replica's data container."""
+        return [self.data_container()]
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach an mchammer observer; fires inside `advance(...)`."""
         self._ensemble.attach_observer(observer)
 
+    def attach_observer_class(
+        self,
+        cls: type[BaseObserver],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Attach a freshly-constructed observer.
+
+        Constructs ``cls(*args, **kwargs)`` and attaches it.
+        """
+        self.attach_mchammer_observer(cls(*args, **kwargs))
+
+    def attach_observer_factory(
+        self,
+        factory: Callable[[WangLandauReplica], BaseObserver],
+    ) -> None:
+        """Attach an observer constructed via ``factory(self)``.
+
+        ``factory`` must return a ``BaseObserver``.
+        """
+        observer = factory(self)
+        if not isinstance(observer, BaseObserver):
+            raise TypeError(
+                f"attach_observer_factory: factory returned "
+                f"{type(observer).__name__}, not a BaseObserver"
+            )
+        self.attach_mchammer_observer(observer)
+
     @property
     def cluster_expansion_path(self) -> str | None:
         return self._cluster_expansion_path
 
-    def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        """Refresh `_last_state` on the live container and return extras.
+    def refresh_last_state(self) -> None:
+        """Populate ``_last_state`` on the live container from ensemble state.
 
-        Populates the fields icet's WL `_restart_ensemble` reads on resume
-        (`last_step`, `occupations`, `accepted_trials`, `random_state`,
-        `fill_factor`, `fill_factor_history`, `entropy_history`,
-        `histogram`, `entropy`), plus the 1/t-schedule fields when the
-        1/t schedule is selected. Returns the
-        `sites_by_species` extras the orchestrator-side checkpoint code
-        embeds alongside the container.
+        Writes the fields that ``WindowResult`` reads (entropy,
+        histogram, fill_factor, fill_factor_history, entropy_history)
+        and the 1/t-schedule fields when present. Idempotent.
         """
         from collections import OrderedDict
 
@@ -307,22 +414,23 @@ class WangLandauReplica:
             histogram=OrderedDict(sorted(e._histogram.items())),
             entropy=OrderedDict(sorted(e._entropy.items())),
         )
-        # `schedule` and the 1/t-phase fields live directly on
-        # `_last_state` rather than via `_update_last_state`, mirroring
-        # icet's `write_data_container`. `_restart_ensemble` validates
-        # `schedule` on resume, so it must always be present when the
-        # attribute exists (patched icet); mainline icet does not have
-        # `_schedule` and its `_restart_ensemble` does not check it.
         if hasattr(e, "_schedule"):
             e._data_container._last_state["schedule"] = e._schedule
-        if hasattr(e, "_in_one_over_t_phase"):
-            e._data_container._last_state[
-                "in_one_over_t_phase"
-            ] = e._in_one_over_t_phase
+        if hasattr(e, "_phase"):
+            e._data_container._last_state["phase"] = e._phase
             e._data_container._last_state[
                 "window_entry_step"
             ] = e._window_entry_step
-            e._data_container._last_state["switch_mode"] = e._switch_mode
+
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Refresh ``_last_state`` and return checkpoint extras.
+
+        Calls ``refresh_last_state`` to populate the container, then
+        returns the ``sites_by_species`` extras the checkpoint code
+        embeds alongside it.
+        """
+        self.refresh_last_state()
+        e = self._ensemble
         sites_by_species: list[dict[int, list[int]]] = [
             {
                 int(species): [int(s) for s in sites]

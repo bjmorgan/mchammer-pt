@@ -1,6 +1,6 @@
 """Persistent-worker multiprocessing pool -- parent-side orchestration.
 
-One OS process per replica. Workers live in spawn-mode subprocesses
+One OS process per walker. Workers live in spawn-mode subprocesses
 implemented in ``_worker.py``; this file contains only the parent-side
 ``ProcessPool`` class and the per-worker ``Pipe``-based command/reply
 plumbing.
@@ -8,12 +8,13 @@ plumbing.
 
 from __future__ import annotations
 
+import dataclasses
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 
 import numpy as np
 from ase import Atoms
@@ -31,6 +32,11 @@ from mchammer.observers.base_observer import (
 from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
+from ..wl_window_group import (
+    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    merge_entropies,
+)
+from ._comms import broadcast_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
@@ -162,10 +168,8 @@ class ProcessPool:
             # the caller gets the actual traceback, rather than a
             # BrokenPipeError on the first ADVANCE with the original
             # cause lost.
-            for _, conn in self._workers:
-                status, payload = conn.recv()
-                if status != "OK":
-                    raise RuntimeError(f"worker startup failed:\n{payload}")
+            for i, (_, conn) in enumerate(self._workers):
+                recv_reply(conn, "STARTUP", i)
         except BaseException:
             self.shutdown()
             raise
@@ -199,23 +203,6 @@ class ProcessPool:
             except (EOFError, BrokenPipeError):
                 pass
 
-    def _abort_partial_attach(
-        self,
-        op: str,
-        payload: str,
-        remaining: list[int],
-    ) -> NoReturn:
-        """Shut the pool down after a worker reports ERR during attach.
-
-        Partial-attach state is unrecoverable — mchammer has no detach
-        API — so the pool is shut down and further operations refuse
-        via _check_open. The drain step prevents the SHUTDOWN handshake
-        from racing against unread attach replies.
-        """
-        self._drain_remaining_replies(remaining)
-        self.shutdown()
-        raise RuntimeError(f"worker {op} failed: {payload}")
-
     def _recv_or_abort_attach(
         self,
         conn: Connection,
@@ -225,9 +212,8 @@ class ProcessPool:
     ) -> None:
         """Receive an attach reply or abort the pool with full cleanup.
 
-        Three failure paths produce the same outcome — drain pending
-        replies on later workers, shut the pool down, raise a framed
-        RuntimeError:
+        Two failure paths produce the same outcome — drain pending
+        replies on later workers, shut the pool down, raise:
 
         - Worker reports ERR (factory raised, isinstance check
           failed, etc.) — message includes the worker traceback.
@@ -238,49 +224,11 @@ class ProcessPool:
         further operations refuse via _check_open.
         """
         try:
-            status, payload = conn.recv()
-        except EOFError as exc:
+            recv_reply(conn, op, i)
+        except (RuntimeError, TypeError):
             self._drain_remaining_replies(remaining)
             self.shutdown()
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly during attach"
-            ) from exc
-        if status != "OK":
-            self._abort_partial_attach(op, payload, remaining)
-
-    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
-        """Receive a (status, payload) reply or raise a clear exception.
-
-        Three reply shapes are recognised:
-
-        - ``("OK", payload)`` — return ``payload``.
-        - ``("ERR_PICKLE", traceback)`` — the worker's reply payload
-          could not be pickled (e.g. an attached observer accumulated
-          a non-picklable attribute). Raise ``TypeError`` so callers
-          see the same exception type as the parent-side eager pickle
-          checks on the attach paths.
-        - ``("ERR", traceback)`` — any other worker-side failure.
-          Raise ``RuntimeError`` carrying the worker traceback.
-
-        A pipe-closed ``EOFError`` (worker died, e.g. via
-        ``KeyboardInterrupt``) is translated into a framed
-        ``RuntimeError`` so the parent never sees a bare
-        ``EOFError`` from the recv path.
-        """
-        try:
-            status, payload = conn.recv()
-        except EOFError as exc:
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly"
-            ) from exc
-        if status == "ERR_PICKLE":
-            raise TypeError(
-                f"reply from worker {op} (replica i={i}) could not be "
-                f"round-tripped through pickle: {payload}"
-            )
-        if status != "OK":
-            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
-        return payload
+            raise
 
     def __len__(self) -> int:
         self._check_open()
@@ -293,69 +241,48 @@ class ProcessPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ADVANCE", int(n_steps)))
-        for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "ADVANCE", i)
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        broadcast_gather(targets, ("ADVANCE", int(n_steps)))
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ENERGY",))
-        result = np.empty(len(self._workers), dtype=np.float64)
-        for i, (_, conn) in enumerate(self._workers):
-            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
-        return result
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        payloads = broadcast_gather(targets, ("ENERGY",))
+        return np.array(payloads, dtype=np.float64)
 
     def current_energy(self, i: int) -> float:
         self._check_open()
         _, conn = self._workers[i]
-        conn.send(("ENERGY",))
-        return float(self._recv_or_raise(conn, "ENERGY", i))
+        return float(request(conn, ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
         _, conn = self._workers[i]
-        conn.send(("GET_OCC",))
-        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
+        return np.asarray(request(conn, ("GET_OCC",), i))
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
         _, conn_i = self._workers[i]
         _, conn_j = self._workers[j]
-        conn_i.send(("GET_OCC",))
-        conn_j.send(("GET_OCC",))
-        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
-        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
-        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        self._recv_or_raise(conn_i, "SET_OCC", i)
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        occ_i, occ_j = broadcast_gather(
+            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
+        )
+        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
         try:
-            self._recv_or_raise(conn_j, "SET_OCC", j)
+            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
         except BaseException:
-            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-            self._recv_or_raise(conn_i, "SET_OCC", i)
+            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("GET_DC",))
-        containers: list[BaseDataContainer] = []
-        for i, (_, conn) in enumerate(self._workers):
-            containers.append(self._recv_or_raise(conn, "GET_DC", i))
-        return containers
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        return broadcast_gather(targets, ("GET_DC",))
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
-        extras: list[dict[str, Any]] = []
-        for i, (_, conn) in enumerate(self._workers):
-            extras.append(
-                self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
-            )
-        return extras
+        targets = [(conn, i) for i, (_, conn) in enumerate(self._workers)]
+        return broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
 
     def restore_replica_state(
         self,
@@ -371,7 +298,7 @@ class ProcessPool:
         freshly-spawned process pool to the saved state.
 
         Args:
-            containers: one container per worker, in slot order.
+            containers: one container per slot, in window order.
                 Length must equal `len(self)`.
             replica_extras: one per-replica extras dict per worker.
                 Each must carry a ``"sites_by_species"`` key.
@@ -400,7 +327,7 @@ class ProcessPool:
                 ("RESTORE_STATE", container, extra["sites_by_species"])
             )
         for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "RESTORE_STATE", i)
+            recv_reply(conn, "RESTORE_STATE", i)
 
     def attach_observer(
         self,
@@ -513,8 +440,7 @@ class ProcessPool:
                 f"for pool of size {n}"
             )
         _, conn = self._workers[replica_index]
-        conn.send(("GET_OBSERVERS",))
-        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
+        return request(conn, ("GET_OBSERVERS",), replica_index)
 
     def attach_observer_factory(
         self,
@@ -606,10 +532,23 @@ class ProcessPool:
         self.shutdown()
 
 
+@dataclasses.dataclass
+class _WindowSlot:
+    """Per-window state for ``ProcessWangLandauPool``."""
+
+    workers: list[tuple[mp.process.BaseProcess, Connection]]
+    exchange_idx: int
+    rng: np.random.Generator
+
+    def exchange_conn(self) -> Connection:
+        """Connection to the current exchange-representative walker."""
+        return self.workers[self.exchange_idx][1]
+
+
 class ProcessWangLandauPool:
     """Persistent-worker REWL pool.
 
-    One OS process per replica. Satisfies `WangLandauObservablePool`:
+    Satisfies `WangLandauObservablePool`:
     observers can be attached via the same three paths as
     `ProcessPool` — `attach_observer`, `attach_observer_class`,
     `attach_observer_factory` — and snapshotted back via
@@ -623,7 +562,9 @@ class ProcessWangLandauPool:
             configuration whose energy lies in that window).
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
-        seeds: one random seed per replica.
+        seeds: one random seed per window.
+        n_walkers_per_window: walkers per energy window; > 1 enables
+            multi-walker entropy sync after each block.
         ensemble_cls: WL ensemble class. Defaults to
             `WangLandauEnsemble`. To use the 1/t schedule, pass
             ``ensemble_kwargs={'schedule': '1_over_t'}``. Spawned
@@ -641,6 +582,7 @@ class ProcessWangLandauPool:
         energy_spacing: float,
         seeds: Sequence[int],
         *,
+        n_walkers_per_window: int | Sequence[int] = 1,
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
@@ -657,41 +599,83 @@ class ProcessWangLandauPool:
             )
         if len(seeds_list) != len(windows_list):
             raise ValueError("seeds and windows must be the same length")
+        if isinstance(n_walkers_per_window, int):
+            walkers_per_window = [int(n_walkers_per_window)] * len(windows_list)
+        else:
+            walkers_per_window = [int(w) for w in n_walkers_per_window]
+            if len(walkers_per_window) != len(windows_list):
+                raise ValueError(
+                    f"n_walkers_per_window has {len(walkers_per_window)} entries "
+                    f"but windows has {len(windows_list)}"
+                )
+        if any(w < 1 for w in walkers_per_window):
+            raise ValueError(
+                f"all n_walkers_per_window values must be >= 1; "
+                f"got {walkers_per_window}"
+            )
         self._windows: list[tuple[float | None, float | None]] = windows_list
         self._energy_spacing = float(energy_spacing)
-        self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
+        self._slots: list[_WindowSlot] = []
+
+        # Cover both spawn-time and handshake-time failures with one
+        # cleanup path. A failure on window N leaves N-1 fully started
+        # slots in self._slots that shutdown() then joins.
         ctx = mp.get_context("spawn")
         try:
-            for (lo, hi), seed, ad in zip(
-                windows_list, seeds_list, atoms_dicts, strict=True,
+            for (lo, hi), window_seed, ad, W_w in zip(
+                windows_list, seeds_list, atoms_dicts, walkers_per_window, strict=True,
             ):
-                parent_conn, child_conn = ctx.Pipe(duplex=True)
-                process = ctx.Process(
-                    target=_wl_worker,
-                    args=(
-                        child_conn,
-                        str(ce_path),
-                        ad,
-                        float(energy_spacing),
-                        lo,
-                        hi,
-                        int(seed),
-                        ensemble_cls,
-                        extra_kwargs,
-                    ),
-                    daemon=True,
-                )
-                process.start()
-                child_conn.close()
-                self._workers.append((process, parent_conn))
-            for _, conn in self._workers:
-                status, payload = conn.recv()
-                if status != "OK":
-                    raise RuntimeError(f"worker startup failed:\n{payload}")
+                if W_w == 1:
+                    walker_seeds = [int(window_seed)]
+                    rng_seed = int(window_seed)
+                else:
+                    sub = np.random.SeedSequence(int(window_seed))
+                    children = sub.spawn(W_w + 1)
+                    walker_seeds = [int(c.generate_state(1)[0]) for c in children[:W_w]]
+                    rng_seed = int(children[W_w].generate_state(1)[0])
+
+                workers: list[tuple[mp.process.BaseProcess, Connection]] = []
+                try:
+                    for w_seed in walker_seeds:
+                        parent_conn, child_conn = ctx.Pipe(duplex=True)
+                        process = ctx.Process(
+                            target=_wl_worker,
+                            args=(
+                                child_conn,
+                                str(ce_path),
+                                ad,
+                                float(energy_spacing),
+                                lo,
+                                hi,
+                                int(w_seed),
+                                ensemble_cls,
+                                extra_kwargs,
+                            ),
+                            daemon=True,
+                        )
+                        process.start()
+                        child_conn.close()
+                        workers.append((process, parent_conn))
+                except BaseException:
+                    # BaseException (not Exception): also clean up on
+                    # KeyboardInterrupt during the spawn loop.
+                    for proc, conn in workers:
+                        conn.close()
+                        proc.terminate()
+                    raise
+                self._slots.append(_WindowSlot(
+                    workers=workers,
+                    exchange_idx=0,
+                    rng=np.random.default_rng(rng_seed),
+                ))
+
+            for i, slot in enumerate(self._slots):
+                for w, (_, conn) in enumerate(slot.workers):
+                    recv_reply(conn, "STARTUP", f"window {i} walker {w}")
         except BaseException:
             self.shutdown()
             raise
@@ -703,7 +687,7 @@ class ProcessWangLandauPool:
         )
 
     def _check_open(self) -> None:
-        if not self._workers:
+        if not self._slots:
             raise RuntimeError("pool is shut down")
 
     @property
@@ -716,82 +700,35 @@ class ProcessWangLandauPool:
         """SHA-256 hash of the ensemble kwargs forwarded to workers."""
         return self._ensemble_kwargs_hash
 
-    def _recv_or_raise(self, conn: Connection, op: str, i: int) -> Any:
-        """Receive a (status, payload) reply or raise a clear exception.
-
-        Mirrors `ProcessPool._recv_or_raise`; duplicated here for
-        clarity since `ProcessWangLandauPool` is self-contained. A
-        future refactor extracting the parent-side pipe plumbing
-        would consolidate this and the abort/drain helpers across
-        both pool classes.
-        """
-        try:
-            status, payload = conn.recv()
-        except EOFError as exc:
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly"
-            ) from exc
-        if status == "ERR_PICKLE":
-            raise TypeError(
-                f"reply from worker {op} (replica i={i}) could not be "
-                f"round-tripped through pickle: {payload}"
-            )
-        if status != "OK":
-            raise RuntimeError(f"worker {op} (replica i={i}) failed: {payload}")
-        return payload
-
-    def _drain_remaining_replies(self, indices: list[int]) -> None:
-        """Read pending replies on the given worker connections, ignoring contents."""
-        for i in indices:
-            _, conn = self._workers[i]
+    def _drain_remaining_replies(self, conns: list[Connection]) -> None:
+        """Read pending replies on the given connections, ignoring contents."""
+        for conn in conns:
             try:
                 conn.recv()
             except (EOFError, BrokenPipeError):
                 pass
 
-    def _abort_partial_attach(
-        self,
-        op: str,
-        payload: str,
-        remaining: list[int],
-    ) -> NoReturn:
-        """Shut the pool down after a worker reports ERR during attach.
-
-        Mirrors `ProcessPool._abort_partial_attach`. Partial-attach
-        state is unrecoverable — mchammer has no detach API — so the
-        pool is shut down and further operations refuse via
-        `_check_open`. The drain step prevents the SHUTDOWN handshake
-        from racing against unread attach replies.
-        """
-        self._drain_remaining_replies(remaining)
-        self.shutdown()
-        raise RuntimeError(f"worker {op} failed: {payload}")
-
     def _recv_or_abort_attach(
         self,
         conn: Connection,
         op: str,
-        i: int,
-        remaining: list[int],
+        label: Any,
+        remaining: list[Connection],
     ) -> None:
         """Receive an attach reply or abort the pool with full cleanup.
 
         Mirrors `ProcessPool._recv_or_abort_attach`.
         """
         try:
-            status, payload = conn.recv()
-        except EOFError as exc:
+            recv_reply(conn, op, label)
+        except (RuntimeError, TypeError):
             self._drain_remaining_replies(remaining)
             self.shutdown()
-            raise RuntimeError(
-                f"worker {op} (replica i={i}) exited unexpectedly during attach"
-            ) from exc
-        if status != "OK":
-            self._abort_partial_attach(op, payload, remaining)
+            raise
 
     def __len__(self) -> int:
         self._check_open()
-        return len(self._workers)
+        return len(self._slots)
 
     @property
     def windows(self) -> list[tuple[float | None, float | None]]:
@@ -804,106 +741,178 @@ class ProcessWangLandauPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ADVANCE", int(n_steps)))
-        for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "ADVANCE", i)
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
+        ]
+        broadcast_gather(all_targets, ("ADVANCE", int(n_steps)))
+
+        try:
+            for i, slot in enumerate(self._slots):
+                if len(slot.workers) == 1:
+                    continue
+                slot_targets = [
+                    (conn, f"window {i} walker {w}")
+                    for w, (_, conn) in enumerate(slot.workers)
+                ]
+                states = broadcast_gather(
+                    slot_targets, ("GET_ENTROPY_SYNC_STATE",)
+                )
+                target_len = max(
+                    s["fill_factor_history_len"] for s in states
+                )
+                merged = merge_entropies(
+                    [s["entropy"] for s in states]
+                )
+                for w, (_, conn) in enumerate(slot.workers):
+                    extra = target_len - states[w]["fill_factor_history_len"]
+                    conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
+                for w, (_, conn) in enumerate(slot.workers):
+                    recv_reply(
+                        conn, "APPLY_ENTROPY_SYNC",
+                        f"window {i} walker {w}",
+                    )
+                slot.exchange_idx = int(
+                    slot.rng.integers(0, len(slot.workers))
+                )
+        except Exception:
+            self.shutdown()
+            raise
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("ENERGY",))
-        result = np.empty(len(self._workers), dtype=np.float64)
-        for i, (_, conn) in enumerate(self._workers):
-            result[i] = float(self._recv_or_raise(conn, "ENERGY", i))
-        return result
+        targets = [
+            (slot.exchange_conn(), i)
+            for i, slot in enumerate(self._slots)
+        ]
+        payloads = broadcast_gather(targets, ("ENERGY",))
+        return np.array(payloads, dtype=np.float64)
 
     def current_energy(self, i: int) -> float:
         self._check_open()
-        _, conn = self._workers[i]
-        conn.send(("ENERGY",))
-        return float(self._recv_or_raise(conn, "ENERGY", i))
+        return float(request(self._slots[i].exchange_conn(), ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
-        _, conn = self._workers[i]
-        conn.send(("GET_OCC",))
-        return np.asarray(self._recv_or_raise(conn, "GET_OCC", i))
+        return np.asarray(request(self._slots[i].exchange_conn(), ("GET_OCC",), i))
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
-        _, conn_i = self._workers[i]
-        _, conn_j = self._workers[j]
-        conn_i.send(("GET_OCC",))
-        conn_j.send(("GET_OCC",))
-        occ_i = self._recv_or_raise(conn_i, "GET_OCC", i)
-        occ_j = self._recv_or_raise(conn_j, "GET_OCC", j)
-        conn_i.send(("SET_OCC", np.asarray(occ_j, dtype=np.int64)))
-        self._recv_or_raise(conn_i, "SET_OCC", i)
-        conn_j.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
+        conn_i = self._slots[i].exchange_conn()
+        conn_j = self._slots[j].exchange_conn()
+        occ_i, occ_j = broadcast_gather(
+            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
+        )
+        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
         try:
-            self._recv_or_raise(conn_j, "SET_OCC", j)
+            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
         except BaseException:
-            conn_i.send(("SET_OCC", np.asarray(occ_i, dtype=np.int64)))
-            self._recv_or_raise(conn_i, "SET_OCC", i)
+            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()
-        _, conn = self._workers[i]
-        conn.send(("LOG_G_AT", float(energy), float(energy)))
-        g_at_E, _ = self._recv_or_raise(conn, "LOG_G_AT", i)
+        _, conn = self._slots[i].workers[0]
+        g_at_E, _ = request(conn, ("LOG_G_AT", float(energy), float(energy)), i)
         return float(g_at_E)
 
     def log_g_pair(
         self, i: int, j: int, E_i: float, E_j: float,
     ) -> tuple[float, float, float, float]:
         self._check_open()
-        _, conn_i = self._workers[i]
-        _, conn_j = self._workers[j]
-        conn_i.send(("LOG_G_AT", float(E_i), float(E_j)))
-        conn_j.send(("LOG_G_AT", float(E_i), float(E_j)))
-        g_i_Ei, g_i_Ej = self._recv_or_raise(conn_i, "LOG_G_AT", i)
-        g_j_Ei, g_j_Ej = self._recv_or_raise(conn_j, "LOG_G_AT", j)
+        _, conn_i = self._slots[i].workers[0]
+        _, conn_j = self._slots[j].workers[0]
+        (g_i_Ei, g_i_Ej), (g_j_Ei, g_j_Ej) = broadcast_gather(
+            [(conn_i, i), (conn_j, j)],
+            ("LOG_G_AT", float(E_i), float(E_j)),
+        )
         return (
             float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
         )
 
     def converged_flags(self) -> np.ndarray:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("CONVERGED",))
-        result = np.empty(len(self._workers), dtype=bool)
-        for i, (_, conn) in enumerate(self._workers):
-            result[i] = bool(self._recv_or_raise(conn, "CONVERGED", i))
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
+        ]
+        all_flags = broadcast_gather(all_targets, ("CONVERGED",))
+        result = np.empty(len(self._slots), dtype=bool)
+        offset = 0
+        for i, slot in enumerate(self._slots):
+            result[i] = all(
+                bool(all_flags[offset + w]) for w in range(len(slot.workers))
+            )
+            offset += len(slot.workers)
         return result
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("GET_DC",))
-        return [
-            self._recv_or_raise(conn, "GET_DC", i)
-            for i, (_, conn) in enumerate(self._workers)
+        targets = [
+            (slot.workers[0][1], i) for i, slot in enumerate(self._slots)
         ]
+        return broadcast_gather(targets, ("GET_DC",))
 
     def per_window_stats(self) -> list[dict[str, Any]]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("WL_STATS",))
-        return [
-            self._recv_or_raise(conn, "WL_STATS", i)
-            for i, (_, conn) in enumerate(self._workers)
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
         ]
+        all_stats = broadcast_gather(all_targets, ("WL_STATS",))
+        result = []
+        offset = 0
+        for slot in self._slots:
+            n_workers = len(slot.workers)
+            slot_stats = all_stats[offset:offset + n_workers]
+            offset += n_workers
+            if n_workers == 1:
+                result.append(slot_stats[0])
+            else:
+                combined_hist: dict[int, int] = {}
+                for s in slot_stats:
+                    for k, v in s["histogram"].items():
+                        combined_hist[k] = combined_hist.get(k, 0) + v
+                result.append({
+                    "fill_factor": slot_stats[0]["fill_factor"],
+                    "halvings": slot_stats[0]["halvings"],
+                    "histogram": combined_hist,
+                    "converged": all(s["converged"] for s in slot_stats),
+                })
+        return result
+
+    def per_window_data_containers(self) -> list[list[BaseDataContainer]]:
+        """All data containers grouped by window slot.
+
+        Returns a list of length n_windows; each entry is a list of
+        ``WangLandauDataContainer`` instances, one per walker in that slot.
+        """
+        self._check_open()
+        all_targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
+        ]
+        all_dcs = broadcast_gather(all_targets, ("GET_DC",))
+        result = []
+        offset = 0
+        for slot in self._slots:
+            n_workers = len(slot.workers)
+            result.append(all_dcs[offset:offset + n_workers])
+            offset += n_workers
+        return result
 
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         self._check_open()
-        for _, conn in self._workers:
-            conn.send(("SNAPSHOT_FOR_CHECKPOINT",))
-        return [
-            self._recv_or_raise(conn, "SNAPSHOT_FOR_CHECKPOINT", i)
-            for i, (_, conn) in enumerate(self._workers)
+        if any(len(slot.workers) > 1 for slot in self._slots):
+            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+        targets = [
+            (slot.workers[0][1], i) for i, slot in enumerate(self._slots)
         ]
+        return broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
 
     def restore_replica_state(
         self,
@@ -941,14 +950,16 @@ class ProcessWangLandauPool:
                 f"restore_replica_state expects {len(self)} extras dicts, "
                 f"got {len(replica_extras)}"
             )
-        for (_, conn), container, extra in zip(
-            self._workers, containers, replica_extras, strict=True
+        for slot, container, extra in zip(
+            self._slots, containers, replica_extras, strict=True
         ):
+            _, conn = slot.workers[0]
             conn.send(
                 ("RESTORE_STATE", container, extra["sites_by_species"])
             )
-        for i, (_, conn) in enumerate(self._workers):
-            self._recv_or_raise(conn, "RESTORE_STATE", i)
+        for i, slot in enumerate(self._slots):
+            _, conn = slot.workers[0]
+            recv_reply(conn, "RESTORE_STATE", i)
 
     def attach_observer(
         self,
@@ -963,7 +974,7 @@ class ProcessWangLandauPool:
         any worker.
         """
         self._check_open()
-        target_indices = _resolve_replicas(replicas, len(self._workers))
+        target_indices = _resolve_replicas(replicas, len(self._slots))
         if not target_indices:
             return
         try:
@@ -973,14 +984,14 @@ class ProcessWangLandauPool:
                 f"observer of type {type(observer).__name__} is not "
                 f"picklable ({exc}); use attach_observer_class instead"
             ) from exc
+        targets: list[tuple[str, Connection]] = []
         for i in target_indices:
-            _, conn = self._workers[i]
-            conn.send(("ATTACH_OBS", blob))
-        for offset, i in enumerate(target_indices):
-            _, conn = self._workers[i]
-            self._recv_or_abort_attach(
-                conn, "ATTACH_OBS", i, target_indices[offset + 1:]
-            )
+            for w, (_, conn) in enumerate(self._slots[i].workers):
+                conn.send(("ATTACH_OBS", blob))
+                targets.append((f"window {i} walker {w}", conn))
+        for offset, (label, conn) in enumerate(targets):
+            remaining = [c for _, c in targets[offset + 1:]]
+            self._recv_or_abort_attach(conn, "ATTACH_OBS", label, remaining)
 
     def attach_observer_class(
         self,
@@ -998,7 +1009,7 @@ class ProcessWangLandauPool:
         asserts the result is a ``BaseObserver``.
         """
         self._check_open()
-        target_indices = _resolve_replicas(replicas, len(self._workers))
+        target_indices = _resolve_replicas(replicas, len(self._slots))
         if not target_indices:
             return
         _check_importable(cls, kind="observer class")
@@ -1016,14 +1027,14 @@ class ProcessWangLandauPool:
                 f"{type(probe).__name__}, not a BaseObserver"
             )
         del probe
+        targets: list[tuple[str, Connection]] = []
         for i in target_indices:
-            _, conn = self._workers[i]
-            conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
-        for offset, i in enumerate(target_indices):
-            _, conn = self._workers[i]
-            self._recv_or_abort_attach(
-                conn, "ATTACH_OBS_CLS", i, target_indices[offset + 1:]
-            )
+            for w, (_, conn) in enumerate(self._slots[i].workers):
+                conn.send(("ATTACH_OBS_CLS", cls, args, kwargs))
+                targets.append((f"window {i} walker {w}", conn))
+        for offset, (label, conn) in enumerate(targets):
+            remaining = [c for _, c in targets[offset + 1:]]
+            self._recv_or_abort_attach(conn, "ATTACH_OBS_CLS", label, remaining)
 
     def attach_observer_factory(
         self,
@@ -1042,7 +1053,7 @@ class ProcessWangLandauPool:
         ``_check_open``.
         """
         self._check_open()
-        target_indices = _resolve_replicas(replicas, len(self._workers))
+        target_indices = _resolve_replicas(replicas, len(self._slots))
         if not target_indices:
             return
         _check_importable(factory, kind="observer factory")
@@ -1054,13 +1065,15 @@ class ProcessWangLandauPool:
                 f"{getattr(factory, '__name__', repr(factory))!r} "
                 f"is not picklable ({exc})"
             ) from exc
+        targets: list[tuple[str, Connection]] = []
         for i in target_indices:
-            _, conn = self._workers[i]
-            conn.send(("ATTACH_OBS_FACTORY", factory))
-        for offset, i in enumerate(target_indices):
-            _, conn = self._workers[i]
+            for w, (_, conn) in enumerate(self._slots[i].workers):
+                conn.send(("ATTACH_OBS_FACTORY", factory))
+                targets.append((f"window {i} walker {w}", conn))
+        for offset, (label, conn) in enumerate(targets):
+            remaining = [c for _, c in targets[offset + 1:]]
             self._recv_or_abort_attach(
-                conn, "ATTACH_OBS_FACTORY", i, target_indices[offset + 1:]
+                conn, "ATTACH_OBS_FACTORY", label, remaining
             )
 
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
@@ -1079,29 +1092,30 @@ class ProcessWangLandauPool:
                 other ERR.
         """
         self._check_open()
-        n = len(self._workers)
+        n = len(self._slots)
         if not 0 <= replica_index < n:
             raise IndexError(
                 f"replica index {replica_index} out of range "
                 f"for pool of size {n}"
             )
-        _, conn = self._workers[replica_index]
-        conn.send(("GET_OBSERVERS",))
-        return self._recv_or_raise(conn, "GET_OBSERVERS", replica_index)
+        _, conn = self._slots[replica_index].workers[0]
+        return request(conn, ("GET_OBSERVERS",), replica_index)
 
     def shutdown(self) -> None:
-        for _, conn in self._workers:
-            try:
-                conn.send(("SHUTDOWN",))
-                conn.recv()
-            except (EOFError, BrokenPipeError):
-                pass
-            conn.close()
-        for process, _ in self._workers:
-            process.join(timeout=5.0)
-            if process.is_alive():
-                process.terminate()
-        self._workers = []
+        for slot in self._slots:
+            for _, conn in slot.workers:
+                try:
+                    conn.send(("SHUTDOWN",))
+                    conn.recv()
+                except (EOFError, BrokenPipeError):
+                    pass
+                conn.close()
+        for slot in self._slots:
+            for process, _ in slot.workers:
+                process.join(timeout=5.0)
+                if process.is_alive():
+                    process.terminate()
+        self._slots = []
 
     def __enter__(self) -> ProcessWangLandauPool:
         return self

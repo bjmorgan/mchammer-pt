@@ -5,7 +5,96 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+
+def _spawn_wl_worker(tmp_path):
+    """Spawn a single _wl_worker and return (process, parent_conn).
+
+    Caller is responsible for sending SHUTDOWN and joining.
+    """
+    import multiprocessing as mp
+
+    from mchammer.calculators import ClusterExpansionCalculator
+    from mchammer.ensembles import WangLandauEnsemble
+
+    from mchammer_pt.parallel._worker import _wl_worker
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    atoms_dict = {
+        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
+        "positions": np.asarray(atoms.positions, dtype=np.float64),
+        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
+        "pbc": np.asarray(atoms.pbc, dtype=bool),
+    }
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=True)
+    process = ctx.Process(
+        target=_wl_worker,
+        args=(
+            child_conn,
+            str(ce_path),
+            atoms_dict,
+            0.1,           # energy_spacing
+            e0 - 100.0,    # energy_limit_left
+            e0 + 100.0,    # energy_limit_right
+            42,            # seed
+            WangLandauEnsemble,
+            {},
+        ),
+        daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    reply = parent_conn.recv()
+    assert reply == Reply("OK", "STARTUP", None)
+    return process, parent_conn
+
+
+def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
+    """GET_ENTROPY_SYNC_STATE returns entropy, fill_factor_history_len, histogram."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        payload = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
+        assert set(payload.keys()) == {
+            "entropy", "fill_factor_history_len", "histogram"
+        }
+        assert isinstance(payload["entropy"], dict)
+        assert isinstance(payload["fill_factor_history_len"], int)
+        assert isinstance(payload["histogram"], dict)
+        assert payload["fill_factor_history_len"] >= 1
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_apply_entropy_sync_halvings_and_entropy(tmp_path):
+    """APPLY_ENTROPY_SYNC applies extra halvings and writes merged entropy."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        initial = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
+        initial_len = initial["fill_factor_history_len"]
+
+        merged_entropy = {0: 1.5, 1: 2.5}
+        request(conn, ("APPLY_ENTROPY_SYNC", merged_entropy, 2), 0)
+
+        after = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
+        assert after["fill_factor_history_len"] == initial_len + 2
+        assert after["entropy"][0] == pytest.approx(1.5)
+        assert after["entropy"][1] == pytest.approx(2.5)
+        # Histogram values must be zeroed after halvings
+        assert all(v == 0 for v in after["histogram"].values())
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
 
 
 def _make_serial_wl_pool(n_replicas: int = 2):
@@ -217,9 +306,8 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         occ1[[0, -1]] = occ1[[-1, 0]]  # swap first/last to differ
 
         # Direct SET_OCC on worker 1 so its configuration is distinct.
-        _, conn1 = pool._workers[1]
-        conn1.send(("SET_OCC", np.asarray(occ1, dtype=np.int64)))
-        pool._recv_or_raise(conn1, "SET_OCC", 1)
+        _, conn1 = pool._slots[1].workers[0]
+        request(conn1, ("SET_OCC", np.asarray(occ1, dtype=np.int64)), 1)
 
         e_before_0 = pool.current_energy(0)
         e_before_1 = pool.current_energy(1)
@@ -243,3 +331,302 @@ def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
         # _reached_energy_window is True and the bin is in-window.
         assert pool.log_g(0, e_after_0) != -float("inf")
         assert pool.log_g(1, e_after_1) != -float("inf")
+
+
+def _make_wl_pool_with_groups(n_windows: int = 2, n_walkers: int = 2):
+    """SerialWangLandauPool whose slots are WangLandauWindowGroup instances."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    groups = [
+        WangLandauWindowGroup(
+            [
+                WangLandauReplica(
+                    cluster_expansion=ce,
+                    atoms=atoms,
+                    energy_spacing=0.1,
+                    energy_limit_left=e0 - 100.0,
+                    energy_limit_right=e0 + 100.0,
+                    random_seed=w * n_walkers + j,
+                )
+                for j in range(n_walkers)
+            ],
+            random_seed=w,
+        )
+        for w in range(n_windows)
+    ]
+    return SerialWangLandauPool(groups, energy_spacing=0.1)
+
+
+def test_per_window_data_containers_single_replica_slots():
+    """per_window_data_containers wraps each WangLandauReplica in a single-item list."""
+    pool = _make_serial_wl_pool(n_replicas=2)
+    result = pool.per_window_data_containers()
+    assert len(result) == 2
+    assert len(result[0]) == 1
+    assert len(result[1]) == 1
+
+
+def test_per_window_data_containers_window_group_slots():
+    """per_window_data_containers returns W containers per WindowGroup slot."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=3)
+    result = pool.per_window_data_containers()
+    assert len(result) == 2
+    assert len(result[0]) == 3
+    assert len(result[1]) == 3
+
+
+def test_per_window_stats_with_window_group_slots():
+    """per_window_stats works when slots are WangLandauWindowGroup instances."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+    stats = pool.per_window_stats()
+    assert len(stats) == 2
+    for s in stats:
+        assert "fill_factor" in s
+        assert "halvings" in s
+        assert "histogram" in s
+        assert "converged" in s
+
+
+def test_serial_wl_pool_attach_observer_class_dispatches_to_all_walkers():
+    """attach_observer_class gives each walker in a WindowGroup its own observer."""
+    from tests._observer_fixtures import StatefulCounter
+
+    pool = _make_wl_pool_with_groups(n_windows=1, n_walkers=2)
+    pool.attach_observer_class(StatefulCounter, interval=10)
+    pool.advance_all(30)
+
+    for r in pool._replicas[0]._replicas:
+        assert "counter" in r.ensemble.observers
+    observer_ids = {
+        id(r.ensemble.observers["counter"])
+        for r in pool._replicas[0]._replicas
+    }
+    assert len(observer_ids) == len(pool._replicas[0]._replicas)
+
+
+def test_serial_wl_pool_swap_configurations_with_window_groups():
+    """swap_configurations exchanges the exchange-walker's occupations across groups."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+
+    occ0_before = pool.current_occupations(0).copy()
+    occ1_before = pool.current_occupations(1).copy()
+
+    pool.swap_configurations(0, 1)
+
+    assert np.array_equal(pool.current_occupations(0), occ1_before)
+    assert np.array_equal(pool.current_occupations(1), occ0_before)
+
+
+def test_merge_entropies_averages_bins():
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
+    result = _merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
+    assert result[0] == pytest.approx(4.0)  # (2 + 6) / 2
+    assert result[1] == pytest.approx(2.0)  # (4 + 0) / 2 — bin missing from replica 1
+    assert result[2] == pytest.approx(4.0)  # (0 + 8) / 2 — bin missing from replica 0
+
+
+def test_merge_entropies_single_replica_is_identity():
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
+    assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {
+        1: pytest.approx(3.0), 2: pytest.approx(5.0)
+    }
+
+
+def test_merge_entropies_all_empty():
+    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
+    assert _merge_entropies([{}, {}]) == {}
+
+
+def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
+    """n_walkers_per_window=2 creates 2 workers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=2,
+    ) as pool:
+        assert len(pool) == 2                 # 2 windows
+        assert len(pool._slots[0].workers) == 2   # 2 walkers in window 0
+        assert len(pool._slots[1].workers) == 2   # 2 walkers in window 1
+
+
+def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
+    """n_walkers_per_window=[1, 2] gives 1 and 2 workers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[1, 2],
+    ) as pool:
+        assert len(pool._slots[0].workers) == 1
+        assert len(pool._slots[1].workers) == 2
+
+
+def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
+    """converged_flags is False for a slot unless all walkers are converged."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    # Use a single-bin window (width 0.1 = energy_spacing) so the histogram
+    # is trivially flat after one in-window step.  flatness_check_interval=1
+    # fires the convergence check every step; fill_factor_limit=0.5 means one
+    # halving (fill_factor 1.0 -> 0.5) is enough to converge.
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 0.05, e0 + 0.05)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        ensemble_kwargs={"flatness_check_interval": 1, "fill_factor_limit": 0.5},
+    ) as pool:
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
+
+        def _query_converged(conn):
+            return bool(request(conn, ("CONVERGED",), 0))
+
+        assert not _query_converged(conn0)
+        assert not _query_converged(conn1)
+
+        converged_w0 = False
+        for _ in range(200):
+            request(conn0, ("ADVANCE", 1), 0)
+            if _query_converged(conn0):
+                converged_w0 = True
+                break
+        assert converged_w0, "walker 0 did not converge — test is inconclusive"
+
+        # Walker 0 converged; walker 1 has not been advanced.
+        # Now conn0 and conn1 are both fully drained, so converged_flags()
+        # will consume both replies without leaving orphans.
+        assert not pool.converged_flags()[0]
+
+        # Now converge walker 1 the same way
+        converged_w1 = False
+        for _ in range(200):
+            request(conn1, ("ADVANCE", 1), 0)
+            if _query_converged(conn1):
+                converged_w1 = True
+                break
+        assert converged_w1, "walker 1 did not converge — test is inconclusive"
+        assert pool.converged_flags()[0]
+
+
+def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
+    """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        # Advance both workers directly so histograms accumulate without
+        # entropy-sync zeroing
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
+        conn0.send(("ADVANCE", 20))
+        conn1.send(("ADVANCE", 20))
+        recv_reply(conn0, "ADVANCE", "window 0 walker 0")
+        recv_reply(conn1, "ADVANCE", "window 0 walker 1")
+
+        # Collect individual WL_STATS from both workers
+        s0 = request(conn0, ("WL_STATS",), 0)
+        s1 = request(conn1, ("WL_STATS",), 1)
+
+        stats = pool.per_window_stats()
+        assert len(stats) == 1
+
+        # fill_factor from walker 0
+        assert stats[0]["fill_factor"] == pytest.approx(s0["fill_factor"])
+
+        # histogram is sum of both workers' histograms
+        for bin_key in set(s0["histogram"]) | set(s1["histogram"]):
+            expected = s0["histogram"].get(bin_key, 0) + s1["histogram"].get(bin_key, 0)
+            assert stats[0]["histogram"].get(bin_key, 0) == expected
+
+
+def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
+    """per_window_data_containers returns W containers per slot."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[1, 2],
+    ) as pool:
+        result = pool.per_window_data_containers()
+        assert len(result) == 2
+        assert len(result[0]) == 1   # window 0: 1 walker
+        assert len(result[1]) == 2   # window 1: 2 walkers
+
+
+def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
+    """After advance_all, both walkers in a slot have identical entropy dicts."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(50)
+
+        # Directly query both workers for their post-sync entropy
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
+        s0 = request(conn0, ("GET_ENTROPY_SYNC_STATE",), 0)
+        s1 = request(conn1, ("GET_ENTROPY_SYNC_STATE",), 1)
+
+        assert s0["entropy"] == s1["entropy"]
+        assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
+
+
+def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
+    """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        with pytest.raises(NotImplementedError, match="checkpointing"):
+            pool.snapshot_for_checkpoint()
