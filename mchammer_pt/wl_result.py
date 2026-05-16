@@ -41,7 +41,9 @@ class WindowResult:
         """Number of walkers in this window."""
         return len(self.containers)
 
-    def get_entropy(self, fill_factor_limit: float | None = None) -> pd.DataFrame | None:
+    def get_entropy(
+        self, fill_factor_limit: float | None = None,
+    ) -> pd.DataFrame | None:
         """Merged entropy across all walkers.
 
         Returns a DataFrame with ``energy`` and ``entropy`` columns,
