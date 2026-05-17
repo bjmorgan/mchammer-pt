@@ -439,9 +439,25 @@ class WangLandauParallelTempering(BaseParallelTempering):
         random_seed = int(meta["random_seed"])
 
         atoms_list = [container.structure.copy() for container in containers]
+        n_windows = len(windows)
+        # Match ``__init__``'s seed allocation: ``n_windows`` walker
+        # seeds + ``n_windows`` group seeds + 1 master. Restored
+        # replicas overwrite their walker RNG state from the container,
+        # so the walker seeds are effectively cosmetic on resume; group
+        # seeds drive ``WangLandauWindowGroup``'s exchange-selection
+        # RNG, which is unused for W=1 (the only supported resume case).
         seed_sequence = np.random.SeedSequence(random_seed)
-        child_seeds = seed_sequence.spawn(len(windows) + 1)
-        replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
+        child_seeds = seed_sequence.spawn(2 * n_windows + 1)
+        replica_seeds = [
+            int(child_seeds[i].generate_state(1)[0])
+            for i in range(n_windows)
+        ]
+        group_seeds = [
+            int(child_seeds[n_windows + i].generate_state(1)[0])
+            for i in range(n_windows)
+        ]
+
+        from .wl_window_group import WangLandauWindowGroup
 
         replicas = [
             WangLandauReplica.restart_from(
@@ -465,7 +481,20 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 strict=True,
             )
         ]
-        pool = SerialWangLandauPool(replicas, energy_spacing=energy_spacing)
+        # Wrap each restored replica in a single-walker
+        # ``WangLandauWindowGroup`` so the coordinator drives halving.
+        # Bare ``WangLandauReplica`` slots would never halve under the
+        # default ``CoordinatedWangLandauEnsemble``. Multi-walker
+        # resume is not supported, so every wrapper is W=1.
+        slots: list[WangLandauSlot] = [
+            WangLandauWindowGroup(
+                [replica],
+                random_seed=group_seeds[i],
+                sync_policy="block",
+            )
+            for i, replica in enumerate(replicas)
+        ]
+        pool = SerialWangLandauPool(slots, energy_spacing=energy_spacing)
         pt = cls(
             cluster_expansion=cluster_expansion,
             atoms=atoms_list,

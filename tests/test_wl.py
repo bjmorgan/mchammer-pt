@@ -332,6 +332,38 @@ def test_wl_pt_rejects_pool_plus_ensemble_kwargs():
         )
 
 
+def test_wl_pt_resume_wraps_replicas_in_window_groups(tmp_path):
+    """Resumed serial pool slots are WangLandauWindowGroup, not bare WangLandauReplica.
+
+    Bare replica slots would never halve under the default
+    CoordinatedWangLandauEnsemble (the coordinator drives halving),
+    silently producing wrong WL output post-resume.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt_a = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        data_container_file=str(tmp_path / "wl_ckpt.hdf5"),
+    )
+    pt_a.run(n_cycles=2)
+    pt_a.save_checkpoint(tmp_path / "wl_ckpt.hdf5")
+
+    pt_b = WangLandauParallelTempering.resume(
+        tmp_path / "wl_ckpt.hdf5",
+        cluster_expansion=make_wl_ce(),
+    )
+    for slot in pt_b.pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+        assert len(slot._replicas) == 1
+
+
 def test_wl_pt_resume_process_pool_round_trips(tmp_path):
     """Checkpoint, resume into a process pool, continue running.
 
