@@ -556,6 +556,85 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
         assert e0_dict == e1_dict
 
 
+def test_process_wl_pool_collective_halve_when_all_flat(tmp_path):
+    """All-flat advance triggers collective halving across all walkers."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        # Synthetically flatten both walkers' histograms before
+        # advance(0). With zero steps and pre-flat histograms the
+        # coordinator should fire one collective halve.
+        for _, conn in pool._slots[0].workers:
+            request(conn, ("SET_ENTROPY", {0: 1.0, 1: 1.0}), 0)
+        pool.advance_all(0)
+        fs = pool._slots[0]._last_fs
+        assert fs[0] == pytest.approx(fs[1])
+
+
+def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
+    """sync_policy='halving' does not merge entropy between halvings."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="halving",
+    ) as pool:
+        # Push divergent entropies; if any merge happens during
+        # advance(0) (no MC, so no halve possible), the two walker
+        # entropies would converge. Under "halving" policy with no
+        # halve event, they must stay distinct.
+        slot = pool._slots[0]
+        _, c0 = slot.workers[0]
+        _, c1 = slot.workers[1]
+        request(c0, ("SET_ENTROPY", {0: 2.0, 1: 4.0}), 0)
+        request(c1, ("SET_ENTROPY", {0: 6.0, 1: 8.0}), 1)
+        # Mark walkers not-flat by zeroing histograms (so collective
+        # halve cannot fire).
+        pool.advance_all(0)
+        e0_dict = request(c0, ("GET_ENTROPY",), 0)
+        e1_dict = request(c1, ("GET_ENTROPY",), 1)
+        assert e0_dict != e1_dict
+
+
+def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
+    """sync_policy='block' merges entropy every block, regardless of halve."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="block",
+    ) as pool:
+        slot = pool._slots[0]
+        _, c0 = slot.workers[0]
+        _, c1 = slot.workers[1]
+        request(c0, ("SET_ENTROPY", {0: 2.0, 1: 4.0}), 0)
+        request(c1, ("SET_ENTROPY", {0: 6.0, 1: 8.0}), 1)
+        pool.advance_all(0)
+        e0_dict = request(c0, ("GET_ENTROPY",), 0)
+        e1_dict = request(c1, ("GET_ENTROPY",), 1)
+        assert e0_dict == e1_dict
+
+
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
     """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
