@@ -65,6 +65,7 @@ from mchammer.observers.base_observer import (
 
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
+from ..wl_window_group import WalkerPostBlockState
 from ._comms import Reply
 
 
@@ -321,16 +322,17 @@ class WangLandauWorker(BaseWorker):
         n_steps = int(cmd[1])
         self._replica.advance(n_steps)
         e = self._replica.ensemble
-        is_flat = self._replica.is_flat()
-        f = float(e._fill_factor)
-        entropy = dict(e._entropy)
-        step = int(e.step)
-        window_entry = (
-            None
-            if e._window_entry_step is None
-            else int(e._window_entry_step)
-        )
-        self._reply((is_flat, f, entropy, step, window_entry))
+        self._reply(WalkerPostBlockState(
+            is_flat=self._replica.is_flat(),
+            fill_factor=float(e._fill_factor),
+            entropy=dict(e._entropy),
+            step=int(e.step),
+            window_entry=(
+                None
+                if e._window_entry_step is None
+                else int(e._window_entry_step)
+            ),
+        ))
 
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:
         _, E_i, E_j = cmd

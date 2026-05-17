@@ -35,6 +35,7 @@ from ..wl_replica import WangLandauReplica
 from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     SyncPolicy,
+    WalkerPostBlockState,
     _validate_sync_policy,
     decide_bp_switch,
     decide_collective_halve,
@@ -567,13 +568,16 @@ class ProcessWangLandauWindow:
         self._sync_policy: SyncPolicy = sync_policy
         self._schedule: str = schedule
         self.phase: str = "halving"
-        self._last_flags: list[bool] = [False] * len(workers)
-        self._last_fs: list[float] = [1.0] * len(workers)
-        self._last_entropies: list[dict[int, float]] = [
-            {} for _ in workers
+        self._last: list[WalkerPostBlockState] = [
+            WalkerPostBlockState(
+                is_flat=False,
+                fill_factor=1.0,
+                entropy={},
+                step=0,
+                window_entry=None,
+            )
+            for _ in workers
         ]
-        self._last_steps: list[int] = [0] * len(workers)
-        self._last_window_entries: list[int | None] = [None] * len(workers)
 
     def exchange_conn(self) -> Connection:
         """Connection to the current exchange-representative walker."""
@@ -582,9 +586,8 @@ class ProcessWangLandauWindow:
     def advance(self, n_steps: int) -> None:
         """Send ADVANCE to all walkers; collect piggybacked state.
 
-        After this call, ``_last_flags``, ``_last_fs``,
-        ``_last_entropies``, ``_last_steps``, ``_last_window_entries``
-        contain the per-walker post-block state.
+        After this call, ``self._last[i]`` holds the post-block
+        ``WalkerPostBlockState`` for walker ``i``.
         """
         for _, conn in self.workers:
             conn.send(("ADVANCE", int(n_steps)))
@@ -594,35 +597,27 @@ class ProcessWangLandauWindow:
                 raise RuntimeError(
                     f"worker {i} ADVANCE failed: {reply.payload}"
                 )
-            is_flat, f, entropy, step, win_entry = reply.payload
-            self._last_flags[i] = bool(is_flat)
-            self._last_fs[i] = float(f)
-            self._last_entropies[i] = dict(entropy)
-            self._last_steps[i] = int(step)
-            self._last_window_entries[i] = (
-                None if win_entry is None else int(win_entry)
-            )
+            self._last[i] = reply.payload
 
     def collect_flatness_flags(self) -> list[bool]:
-        return list(self._last_flags)
+        return [s.is_flat for s in self._last]
 
     def collect_entropy_snapshots(self) -> list[dict[int, float]]:
-        return [dict(e) for e in self._last_entropies]
+        return [dict(s.entropy) for s in self._last]
 
     def collect_fill_factors(self) -> list[float]:
-        return list(self._last_fs)
+        return [s.fill_factor for s in self._last]
 
     def collect_ts(self) -> list[int]:
         """Per-walker t = step - window_entry + 1, or 1 if not entered."""
-        ts: list[int] = []
-        for s, e in zip(
-            self._last_steps, self._last_window_entries, strict=True
-        ):
-            if e is None:
-                ts.append(1)
-            else:
-                ts.append(s - e + 1)
-        return ts
+        return [
+            1 if s.window_entry is None else s.step - s.window_entry + 1
+            for s in self._last
+        ]
+
+    def has_unentered_walker(self) -> bool:
+        """True iff any walker has not yet reached its window."""
+        return any(s.window_entry is None for s in self._last)
 
     def set_entropy_all(self, merged: dict[int, float]) -> None:
         """Send SET_ENTROPY to all workers with the merged dict."""
@@ -634,8 +629,8 @@ class ProcessWangLandauWindow:
                 raise RuntimeError(
                     f"worker {i} SET_ENTROPY failed: {reply.payload}"
                 )
-        for i in range(len(self.workers)):
-            self._last_entropies[i] = dict(merged)
+        for i, s in enumerate(self._last):
+            self._last[i] = s._replace(entropy=dict(merged))
 
     def force_halve_all(self) -> None:
         """Send FORCE_HALVE to all workers."""
@@ -647,7 +642,9 @@ class ProcessWangLandauWindow:
                 raise RuntimeError(
                     f"worker {i} FORCE_HALVE failed: {reply.payload}"
                 )
-        self._last_fs = [f / 2.0 for f in self._last_fs]
+        self._last = [
+            s._replace(fill_factor=s.fill_factor / 2.0) for s in self._last
+        ]
 
     def set_phase_all(self, phase: str) -> None:
         """Send SET_PHASE to all workers."""
@@ -914,7 +911,7 @@ class ProcessWangLandauPool:
         # SET_PHASE handler would silently leave ``_fill_factor`` in
         # the halving regime while flipping ``_phase`` to ``1_over_t``,
         # tripping a TypeError on the next step.
-        if any(e is None for e in slot._last_window_entries):
+        if slot.has_unentered_walker():
             return
         phases = ["halving"] * len(slot.workers)
         ts = slot.collect_ts()

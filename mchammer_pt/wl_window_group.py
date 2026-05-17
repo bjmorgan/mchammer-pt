@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import numpy as np
 from mchammer.observers.base_observer import BaseObserver
@@ -16,6 +16,20 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
     "pass data_container_file=None and avoid save_checkpoint() / "
     "attach_checkpoint_writer() when using multiple walkers per window."
 )
+
+
+class WalkerPostBlockState(NamedTuple):
+    """State a worker reports after each ``ADVANCE``.
+
+    The coordinator reads this off every worker's reply to decide
+    whether to halve, merge entropies, or flip the BP phase.
+    """
+
+    is_flat: bool
+    fill_factor: float
+    entropy: dict[int, float]
+    step: int
+    window_entry: int | None
 
 SyncPolicy = Literal["block", "halving"]
 """Entropy-sharing cadence between walkers in a multi-walker window.

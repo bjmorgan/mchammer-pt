@@ -575,7 +575,7 @@ def test_process_wl_pool_collective_halve_when_all_flat(tmp_path):
         for _, conn in pool._slots[0].workers:
             request(conn, ("SET_ENTROPY", {0: 1.0, 1: 1.0}), 0)
         pool.advance_all(0)
-        fs = pool._slots[0]._last_fs
+        fs = pool._slots[0].collect_fill_factors()
         assert fs[0] == pytest.approx(fs[1])
 
 
