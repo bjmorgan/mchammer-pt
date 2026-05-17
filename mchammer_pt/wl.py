@@ -486,16 +486,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
         # Wrap each restored replica in a single-walker
         # ``WangLandauWindowGroup`` so the coordinator drives halving.
-        # Bare ``WangLandauReplica`` slots would never halve under the
-        # default ``CoordinatedWangLandauEnsemble``. Multi-walker
-        # resume is not supported (rejected upstream by the
-        # ``data_container_file`` + ``n_walkers_per_window > 1`` check
-        # at save-time), so every restored slot is W=1. The hardcoded
-        # ``sync_policy="block"`` below is unobservable today because
-        # the coordinator short-circuits the merge for W=1 — but if
-        # multi-walker checkpointing lands later, ``sync_policy`` will
-        # need to be persisted in the checkpoint and threaded through
-        # here instead of being assumed.
+        # Multi-walker resume is rejected at save-time.
         slots: list[WangLandauSlot] = [
             WangLandauWindowGroup(
                 [replica],
@@ -504,16 +495,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
             for i, replica in enumerate(replicas)
         ]
-        # Pin the W=1 assumption that makes the hardcode unobservable.
-        # If multi-walker resume lands, this assertion fires before
-        # the wrong sync_policy can affect a run.
-        for slot in slots:
-            assert isinstance(slot, WangLandauWindowGroup)
-            assert len(slot._replicas) == 1, (
-                "resume() assumes single-walker windows; multi-walker "
-                "checkpointing is not supported. If you see this, "
-                "sync_policy must be persisted in the checkpoint."
-            )
         pool = SerialWangLandauPool(slots, energy_spacing=energy_spacing)
         pt = cls(
             cluster_expansion=cluster_expansion,

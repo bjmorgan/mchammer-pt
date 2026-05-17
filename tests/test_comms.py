@@ -138,11 +138,13 @@ class TestFanoutGather:
                 ("SET_ENTROPY", {0: 3.0})]
         for i, msg in enumerate(msgs):
             parent, child = mp.Pipe(duplex=True)
-            child.send(Reply("OK", "SET_ENTROPY", None))
+            # Each child returns its own index so reply ordering is
+            # asserted, not just count.
+            child.send(Reply("OK", "SET_ENTROPY", i))
             targets.append((parent, f"t{i}", msg))
             children.append((child, msg))
         payloads = fanout_gather(targets)
-        assert payloads == [None, None, None]
+        assert payloads == [0, 1, 2]
         # Each child received the message paired with its target.
         for child, expected_msg in children:
             assert child.recv() == expected_msg

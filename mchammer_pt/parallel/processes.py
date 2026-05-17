@@ -838,9 +838,10 @@ class ProcessWangLandauPool:
         return self._energy_spacing
 
     def advance_all(self, n_steps: int) -> None:
-        # Two-phase coordinator: ADVANCE, then DECIDE (pure), then
-        # batched EXECUTE (FORCE_HALVE, SET_ENTROPY, SET_PHASE, each
-        # parallelised across slots).
+        # Three stages: ADVANCE (one fan-out across every worker in
+        # every window), DECIDE (pure-Python coordinator decisions
+        # per slot), EXECUTE (batched FORCE_HALVE / SET_ENTROPY /
+        # SET_PHASE, each parallelised across slots).
         self._check_open()
         try:
             # ADVANCE: broadcast to every worker in every window in a
