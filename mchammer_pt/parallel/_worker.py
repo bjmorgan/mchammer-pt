@@ -357,6 +357,12 @@ class WangLandauWorker(BaseWorker):
         self._reply(None)
 
     def _handle_set_phase(self, cmd: tuple[Any, ...]) -> None:
+        # Flips ``_phase`` and, on transition to ``1_over_t``, sets
+        # ``_fill_factor`` to the current ``1/t``. Does not write to
+        # ``_fill_factor_history``: history records halve events
+        # (shared keys with ``_entropy_history``); in the 1/t phase
+        # ``_fill_factor`` is reconstructed from
+        # ``step - _window_entry_step + 1``.
         phase = str(cmd[1])
         e = self._replica.ensemble
         e._phase = phase
@@ -365,7 +371,6 @@ class WangLandauWorker(BaseWorker):
             if entry is not None:
                 t = e.step - entry + 1
                 e._fill_factor = 1.0 / t
-                e._fill_factor_history[e.step] = e._fill_factor
         self._reply(None)
 
 

@@ -215,7 +215,11 @@ class WangLandauWindowGroup:
 
         Called immediately after a collective halve. If every walker
         satisfies ``1/t > f``, flip the phase and set
-        ``_fill_factor = 1/t`` on every walker.
+        ``_fill_factor = 1/t`` on every walker. Does not write to
+        ``_fill_factor_history``: that dict records halve events,
+        which share keys with ``_entropy_history``; in the 1/t phase
+        ``_fill_factor`` is reconstructed from
+        ``step - _window_entry_step + 1``.
         """
         phases = [r.ensemble._phase for r in self._replicas]
         ts: list[int] = []
@@ -230,9 +234,6 @@ class WangLandauWindowGroup:
             for r, t in zip(self._replicas, ts, strict=True):
                 r.ensemble._phase = "1_over_t"
                 r.ensemble._fill_factor = 1.0 / t
-                r.ensemble._fill_factor_history[r.ensemble.step] = (
-                    r.ensemble._fill_factor
-                )
 
     @property
     def ensemble(self) -> Any:
