@@ -366,3 +366,56 @@ def test_is_flat_returns_false_on_uneven_histogram():
     r.ensemble._reached_energy_window = True
     r.ensemble._histogram = {0: 100, 1: 1000, 2: 900}
     assert r.is_flat() is False
+
+
+def test_default_ensemble_cls_is_coordinated():
+    """The default ensemble_cls is CoordinatedWangLandauEnsemble."""
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    r = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=0,
+    )
+    assert isinstance(r.ensemble, CoordinatedWangLandauEnsemble)
+
+
+def test_non_coordinated_ensemble_cls_rejected():
+    """Passing the plain WangLandauEnsemble raises TypeError."""
+    from mchammer.ensembles import WangLandauEnsemble
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    with pytest.raises(TypeError, match="CoordinatedWangLandauEnsemble"):
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=0,
+            ensemble_cls=WangLandauEnsemble,
+        )

@@ -32,6 +32,8 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from .wl_ensemble import CoordinatedWangLandauEnsemble
+
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
     {
         "structure",
@@ -150,8 +152,12 @@ class WangLandauReplica:
         energy_limit_right: upper window edge, or None for unbounded.
         random_seed: seed for this replica's MC random generator.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble`. To use the 1/t schedule, pass
-            ``ensemble_kwargs={'schedule': '1_over_t'}``.
+            ``CoordinatedWangLandauEnsemble``, which delegates
+            halving to the enclosing ``WangLandauWindowGroup``
+            coordinator. Must be a subclass of
+            ``CoordinatedWangLandauEnsemble``. To use the 1/t
+            schedule, pass ``ensemble_kwargs={'schedule':
+            '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Reserved names (see `_RESERVED_ENSEMBLE_KWARGS`) cannot
             appear here — they are set by the wrapper.
@@ -173,7 +179,7 @@ class WangLandauReplica:
         energy_limit_right: float | None,
         random_seed: int,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
@@ -189,6 +195,15 @@ class WangLandauReplica:
             if cluster_expansion_path is None
             else os.fspath(cluster_expansion_path)
         )
+        if not issubclass(ensemble_cls, CoordinatedWangLandauEnsemble):
+            raise TypeError(
+                f"ensemble_cls must be a subclass of "
+                f"CoordinatedWangLandauEnsemble; got "
+                f"{ensemble_cls.__name__}. Halving is now coordinated "
+                f"by WangLandauWindowGroup, so the plain "
+                f"WangLandauEnsemble would autonomously halve and "
+                f"conflict with the coordinator."
+            )
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -545,7 +560,7 @@ class WangLandauReplica:
         energy_limit_left: float | None,
         energy_limit_right: float | None,
         random_seed: int,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
