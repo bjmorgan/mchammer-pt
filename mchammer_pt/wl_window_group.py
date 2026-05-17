@@ -98,6 +98,30 @@ def decide_collective_halve(flags: list[bool]) -> bool:
     return all(flags)
 
 
+def _summed_histogram_is_flat(replicas: list[WangLandauReplica]) -> bool:
+    """Pool histograms across replicas; flatness criterion on the sum.
+
+    Mirrors mchammer's per-walker flatness rule (every bin's count is
+    >= flatness_limit * mean(counts)) but applied to the summed
+    histogram across walkers. Returns False if any walker has not yet
+    entered its window.
+    """
+    if not replicas:
+        return False
+    if not all(r.ensemble._reached_energy_window for r in replicas):
+        return False
+    combined: dict[int, int] = {}
+    for r in replicas:
+        for k, v in r.ensemble._histogram.items():
+            combined[k] = combined.get(k, 0) + v
+    if not combined:
+        return False
+    flatness_limit = replicas[0].ensemble._flatness_limit
+    counts = np.array(list(combined.values()))
+    limit = flatness_limit * float(np.average(counts))
+    return bool(np.all(counts >= limit))
+
+
 def decide_bp_switch(
     phases: list[str], ts: list[int], fs: list[float]
 ) -> bool:
