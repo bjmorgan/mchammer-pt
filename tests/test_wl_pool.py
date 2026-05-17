@@ -9,7 +9,7 @@ from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
-def _spawn_wl_worker(tmp_path):
+def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
     """Spawn a single _wl_worker and return (process, parent_conn).
 
     Caller is responsible for sending SHUTDOWN and joining.
@@ -48,7 +48,7 @@ def _spawn_wl_worker(tmp_path):
             e0 + 100.0,    # energy_limit_right
             42,            # seed
             CoordinatedWangLandauEnsemble,
-            {},
+            dict(ensemble_kwargs or {}),
         ),
         daemon=True,
     )
@@ -675,14 +675,20 @@ def test_wl_worker_force_halve_round_trip(tmp_path):
 
 
 def test_wl_worker_set_phase_round_trip(tmp_path):
-    """SET_PHASE switches ensemble._phase."""
-    process, conn = _spawn_wl_worker(tmp_path)
+    """SET_PHASE switches ensemble._phase under the 1/t schedule."""
+    # SET_PHASE -> "1_over_t" is only meaningful for schedule="1_over_t"
+    # because that schedule records ``_window_entry_step``, which the
+    # autonomous 1/t-phase ``_fill_factor = 1/t`` update requires. In
+    # production the coordinator only fires SET_PHASE under the same
+    # schedule gate.
+    process, conn = _spawn_wl_worker(
+        tmp_path, ensemble_kwargs={"schedule": "1_over_t"}
+    )
     try:
-        # Advance to ensure _window_entry_step is set.
+        # Advance to record _window_entry_step on the first in-window step.
         request(conn, ("ADVANCE", 50), 0)
         request(conn, ("SET_PHASE", "1_over_t"), 0)
-        # Subsequent ADVANCE in 1_over_t phase tracks 1/t; just verify
-        # the worker still responds without error.
+        # Subsequent ADVANCE in 1_over_t phase tracks 1/t.
         is_flat, f, _, _, _ = request(conn, ("ADVANCE", 5), 0)
         assert isinstance(f, float)
     finally:
