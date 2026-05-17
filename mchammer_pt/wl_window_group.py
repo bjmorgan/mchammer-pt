@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from mchammer.observers.base_observer import BaseObserver
@@ -16,6 +16,51 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
     "pass data_container_file=None and avoid save_checkpoint() / "
     "attach_checkpoint_writer() when using multiple walkers per window."
 )
+
+SyncPolicy = Literal["block", "halving"]
+"""Entropy-sharing cadence between walkers in a multi-walker window.
+
+- ``"block"``: merge entropies after every block. Fastest wall-clock
+  convergence; suitable for smooth landscapes (default).
+- ``"halving"``: merge entropies only at collective halving events.
+  Implements Vogel et al. 2013 multi-walker REWL; stronger
+  independence at the cost of slower per-halving convergence.
+"""
+
+
+def decide_collective_halve(flags: list[bool], policy: SyncPolicy) -> bool:
+    """Return ``True`` iff all walkers are flat (collective gate).
+
+    The halve decision is identical for both ``"block"`` and
+    ``"halving"`` policies; the policy parameter is accepted for
+    symmetry with other policy functions and to future-proof the
+    signature.
+    """
+    if not flags:
+        return False
+    return all(flags)
+
+
+def decide_bp_switch(
+    phases: list[str], ts: list[int], fs: list[float]
+) -> bool:
+    """Return ``True`` iff all walkers should flip from halving to 1/t.
+
+    Args:
+        phases: per-walker ``_phase`` strings.
+        ts: per-walker ``step - _window_entry_step + 1``.
+        fs: per-walker ``_fill_factor`` after the collective halve.
+
+    The collective BP switch fires when every walker is still in the
+    halving phase and every walker satisfies the natural condition
+    ``1/t > f``. The check is symmetric with mchammer's per-walker
+    switch but enforced at the window level.
+    """
+    if not phases:
+        return False
+    if any(p != "halving" for p in phases):
+        return False
+    return all((1.0 / t) > f for t, f in zip(ts, fs, strict=True))
 
 
 def merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
