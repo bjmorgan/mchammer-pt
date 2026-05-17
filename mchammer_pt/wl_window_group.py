@@ -21,15 +21,17 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
 class WalkerPostBlockState(NamedTuple):
     """State a worker reports after each ``ADVANCE``.
 
-    The coordinator reads this off every worker's reply to decide
-    whether to halve, merge entropies, or flip the BP phase.
+    All five fields are captured from a single worker reply at one
+    MC step, so the coordinator can use them as a consistent
+    snapshot. Read by the coordinator to decide whether to halve,
+    merge entropies, or flip the BP phase.
     """
 
     is_flat: bool
     fill_factor: float
     entropy: dict[int, float]
     step: int
-    window_entry: int | None
+    window_entry_step: int | None
 
 SyncPolicy = Literal["block", "halving"]
 """Entropy-sharing cadence between walkers in a multi-walker window.
@@ -56,7 +58,7 @@ def _validate_sync_policy(sync_policy: Any) -> None:
         )
 
 
-def decide_collective_halve(flags: list[bool], policy: SyncPolicy) -> bool:
+def decide_collective_halve(flags: list[bool]) -> bool:
     """Return ``True`` iff all walkers are flat (collective gate)."""
     if not flags:
         return False
@@ -123,11 +125,9 @@ class WangLandauWindowGroup:
     Between halvings, entropy-merge cadence is controlled by
     ``sync_policy``:
 
-    - ``"block"`` (default): merge every block. Fastest wall-clock
-      convergence; today's observable behaviour.
-    - ``"halving"``: merge only at collective halves. Vogel-style
-      independence — stronger correctness guarantees, slower
-      per-halving convergence.
+    - ``"block"`` (default): merge every block.
+    - ``"halving"``: merge only at collective halves (Vogel et al.
+      2013).
 
     Both policies share the same halve gate (all walkers flat).
 
@@ -199,7 +199,7 @@ class WangLandauWindowGroup:
 
         if phase == "halving":
             flags = [r.is_flat() for r in self._replicas]
-            if decide_collective_halve(flags, self._sync_policy):
+            if decide_collective_halve(flags):
                 for r in self._replicas:
                     r.force_halve()
                 self._merge_entropies_into_all()

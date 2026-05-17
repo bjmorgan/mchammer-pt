@@ -176,24 +176,22 @@ def test_decide_collective_halve_all_flat_returns_true():
     """All walkers flat → collective halve fires."""
     from mchammer_pt.wl_window_group import decide_collective_halve
 
-    assert decide_collective_halve([True, True], policy="block") is True
-    assert decide_collective_halve([True, True], policy="halving") is True
+    assert decide_collective_halve([True, True]) is True
 
 
 def test_decide_collective_halve_some_not_flat_returns_false():
     """Any walker not flat → no halve."""
     from mchammer_pt.wl_window_group import decide_collective_halve
 
-    assert decide_collective_halve([True, False], policy="block") is False
-    assert decide_collective_halve([True, False], policy="halving") is False
-    assert decide_collective_halve([False, False], policy="block") is False
+    assert decide_collective_halve([True, False]) is False
+    assert decide_collective_halve([False, False]) is False
 
 
 def test_decide_collective_halve_empty_returns_false():
     """Empty flag list: degenerate case, no halve."""
     from mchammer_pt.wl_window_group import decide_collective_halve
 
-    assert decide_collective_halve([], policy="block") is False
+    assert decide_collective_halve([]) is False
 
 
 def test_decide_bp_switch_all_eligible_returns_true():
@@ -373,3 +371,26 @@ def test_advance_halving_policy_merges_at_halving_event():
         # Merged entropy distributed to all walkers AFTER force_halve.
         assert r.ensemble._entropy[0] == pytest.approx(4.0)
         assert r.ensemble._entropy[1] == pytest.approx(6.0)
+
+
+def test_maybe_switch_to_one_over_t_refuses_unentered_walker():
+    """BP switch does not fire if any walker has not entered its window."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._fill_factor = 0.001  # tiny -> 1/t > f trivially
+        r.ensemble._phase = "halving"
+        r.ensemble._schedule = "1_over_t"
+        r.ensemble._step = 100
+    # Walker 0 entered; walker 1 has not.
+    replicas[0].ensemble._window_entry_step = 0
+    replicas[1].ensemble._window_entry_step = None
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._schedule = "1_over_t"
+    group._maybe_switch_to_one_over_t()
+
+    for r in replicas:
+        assert r.ensemble._phase == "halving"

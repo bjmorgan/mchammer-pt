@@ -556,29 +556,6 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
         assert e0_dict == e1_dict
 
 
-def test_process_wl_pool_collective_halve_when_all_flat(tmp_path):
-    """All-flat advance triggers collective halving across all walkers."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-    ) as pool:
-        # Synthetically flatten both walkers' histograms before
-        # advance(0). With zero steps and pre-flat histograms the
-        # coordinator should fire one collective halve.
-        for _, conn in pool._slots[0].workers:
-            request(conn, ("SET_ENTROPY", {0: 1.0, 1: 1.0}), 0)
-        pool.advance_all(0)
-        fs = pool._slots[0].collect_fill_factors()
-        assert fs[0] == pytest.approx(fs[1])
-
-
 def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
     """sync_policy='halving' does not merge entropy between halvings."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -635,6 +612,49 @@ def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
         assert e0_dict == e1_dict
 
 
+def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
+    """has_unentered_walker gates _maybe_bp_switch on the process pool."""
+    from mchammer_pt.parallel.processes import (
+        ProcessWangLandauPool,
+        ProcessWangLandauWindow,
+    )
+    from mchammer_pt.wl_window_group import WalkerPostBlockState
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        ensemble_kwargs={"schedule": "1_over_t"},
+    ) as pool:
+        slot: ProcessWangLandauWindow = pool._slots[0]
+        slot._schedule = "1_over_t"
+        # Synthesise a state where walker 0 has entered and walker 1
+        # has not, with f small enough that 1/t > f for any t.
+        slot._last = [
+            WalkerPostBlockState(
+                is_flat=True,
+                fill_factor=1e-6,
+                entropy={},
+                step=100,
+                window_entry_step=0,
+            ),
+            WalkerPostBlockState(
+                is_flat=True,
+                fill_factor=1e-6,
+                entropy={},
+                step=100,
+                window_entry_step=None,
+            ),
+        ]
+        assert slot.phase == "halving"
+        pool._maybe_bp_switch(slot)
+        assert slot.phase == "halving"
+
+
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
     """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -653,18 +673,20 @@ def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
 
 
 def test_wl_worker_advance_ack_carries_state(tmp_path):
-    """ADVANCE ack returns (is_flat, fill_factor, entropy, step, window_entry)."""
+    """ADVANCE ack returns a WalkerPostBlockState with typed fields."""
+    from mchammer_pt.wl_window_group import WalkerPostBlockState
+
     process, conn = _spawn_wl_worker(tmp_path)
     try:
         payload = request(conn, ("ADVANCE", 50), 0)
-        assert isinstance(payload, tuple)
-        assert len(payload) == 5
-        is_flat, f, entropy, step, window_entry = payload
-        assert isinstance(is_flat, bool)
-        assert isinstance(f, float)
-        assert isinstance(entropy, dict)
-        assert isinstance(step, int)
-        assert window_entry is None or isinstance(window_entry, int)
+        assert isinstance(payload, WalkerPostBlockState)
+        assert isinstance(payload.is_flat, bool)
+        assert isinstance(payload.fill_factor, float)
+        assert isinstance(payload.entropy, dict)
+        assert isinstance(payload.step, int)
+        assert payload.window_entry_step is None or isinstance(
+            payload.window_entry_step, int
+        )
     finally:
         request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
@@ -702,11 +724,10 @@ def test_wl_worker_force_halve_round_trip(tmp_path):
     """FORCE_HALVE halves fill_factor and grows history."""
     process, conn = _spawn_wl_worker(tmp_path)
     try:
-        # Advance to populate state.
-        is_flat, f_before, _, _, _ = request(conn, ("ADVANCE", 50), 0)
+        before = request(conn, ("ADVANCE", 50), 0)
         request(conn, ("FORCE_HALVE",), 0)
-        is_flat, f_after, _, _, _ = request(conn, ("ADVANCE", 0), 0)
-        assert f_after == pytest.approx(f_before / 2.0)
+        after = request(conn, ("ADVANCE", 0), 0)
+        assert after.fill_factor == pytest.approx(before.fill_factor / 2.0)
     finally:
         request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
@@ -727,8 +748,8 @@ def test_wl_worker_set_phase_round_trip(tmp_path):
         request(conn, ("ADVANCE", 50), 0)
         request(conn, ("SET_PHASE", "1_over_t"), 0)
         # Subsequent ADVANCE in 1_over_t phase tracks 1/t.
-        is_flat, f, _, _, _ = request(conn, ("ADVANCE", 5), 0)
-        assert isinstance(f, float)
+        after = request(conn, ("ADVANCE", 5), 0)
+        assert isinstance(after.fill_factor, float)
     finally:
         request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)

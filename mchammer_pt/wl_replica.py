@@ -328,9 +328,8 @@ class WangLandauReplica:
         """Return ``True`` if this walker's own histogram is flat.
 
         Uses mchammer's flatness criterion: every bin's count is
-        ``>= flatness_limit * mean(counts)``. Gated on
-        ``_reached_energy_window`` so walkers that have not yet
-        entered the window report ``False``.
+        ``>= flatness_limit * mean(counts)``. Walkers that have not
+        yet entered the window return ``False``.
         """
         e = self._ensemble
         if not e._reached_energy_window:

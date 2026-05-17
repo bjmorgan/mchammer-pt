@@ -592,7 +592,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand.
+        `windows` by hand. ``sync_policy`` has the same meaning as
+        on :class:`WangLandauParallelTempering`.
         """
         from mchammer.ensembles.wang_landau_ensemble import (
             get_bins_for_parallel_simulations,
@@ -651,6 +652,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
+        ``sync_policy`` has the same meaning as on
+        :class:`WangLandauParallelTempering`.
 
         Raises:
             NotImplementedError: if any ``n_walkers_per_window`` value

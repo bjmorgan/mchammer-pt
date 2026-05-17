@@ -327,7 +327,7 @@ class WangLandauWorker(BaseWorker):
             fill_factor=float(e._fill_factor),
             entropy=dict(e._entropy),
             step=int(e.step),
-            window_entry=(
+            window_entry_step=(
                 None
                 if e._window_entry_step is None
                 else int(e._window_entry_step)

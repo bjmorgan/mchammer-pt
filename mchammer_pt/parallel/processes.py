@@ -552,6 +552,9 @@ class ProcessWangLandauWindow:
         exchange_idx: index of the worker currently chosen for
             replica exchange (re-rolled by the coordinator each block).
         rng: per-window RNG for exchange-walker selection.
+        phase: collective WL phase, either ``"halving"`` or
+            ``"1_over_t"``. Flipped by the coordinator after a
+            collective BP switch.
     """
 
     def __init__(
@@ -574,7 +577,7 @@ class ProcessWangLandauWindow:
                 fill_factor=1.0,
                 entropy={},
                 step=0,
-                window_entry=None,
+                window_entry_step=None,
             )
             for _ in workers
         ]
@@ -609,15 +612,16 @@ class ProcessWangLandauWindow:
         return [s.fill_factor for s in self._last]
 
     def collect_ts(self) -> list[int]:
-        """Per-walker t = step - window_entry + 1, or 1 if not entered."""
-        return [
-            1 if s.window_entry is None else s.step - s.window_entry + 1
-            for s in self._last
-        ]
+        """Per-walker ``t = step - window_entry_step + 1``.
+
+        Requires every walker to have entered its window. Callers
+        should gate on :meth:`has_unentered_walker` before calling.
+        """
+        return [s.step - s.window_entry_step + 1 for s in self._last]
 
     def has_unentered_walker(self) -> bool:
         """True iff any walker has not yet reached its window."""
-        return any(s.window_entry is None for s in self._last)
+        return any(s.window_entry_step is None for s in self._last)
 
     def set_entropy_all(self, merged: dict[int, float]) -> None:
         """Send SET_ENTROPY to all workers with the merged dict."""
@@ -882,7 +886,7 @@ class ProcessWangLandauPool:
         """
         if slot.phase == "halving":
             flags = slot.collect_flatness_flags()
-            if decide_collective_halve(flags, slot._sync_policy):
+            if decide_collective_halve(flags):
                 slot.force_halve_all()
                 if len(slot.workers) > 1:
                     merged = merge_entropies(
