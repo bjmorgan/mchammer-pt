@@ -878,3 +878,110 @@ def test_wl_pt_sync_policy_halving_propagates():
         sync_policy="halving",
     )
     assert pt._pool.replicas[0]._sync_policy == "halving"
+
+
+@pytest.mark.parametrize("policy", ["block", "halving"])
+def test_wl_pt_w2_short_run_converges(policy):
+    """W=2 short serial run produces valid WindowResult under both policies."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=200,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        n_walkers_per_window=2,
+        sync_policy=policy,
+    )
+    pt.run(n_cycles=20)
+    results = pt.results()
+    assert len(results) == 2
+    for r in results:
+        df = r.get_entropy()
+        assert df is not None
+        assert len(df) > 0
+        assert df["entropy"].notna().all()
+        hist = r.get_histogram()
+        assert hist is not None
+        assert (hist["histogram"] > 0).any()
+
+
+def test_wl_pt_w2_one_over_t_collective_phase():
+    """W=2 with schedule='1_over_t': all walkers agree on phase post-run."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=200,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={
+            "schedule": "1_over_t",
+            "flatness_check_interval": 100,
+        },
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=20)
+    for slot in pt._pool.replicas:
+        phases = {r.ensemble._phase for r in slot._replicas}
+        assert len(phases) == 1
+        assert phases.pop() in {"halving", "1_over_t"}
+
+
+def test_wl_pt_w1_unified_path_produces_finite_results():
+    """W=1 through the unified WindowGroup coordinator produces valid output."""
+    import numpy as np
+
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=100,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=10)
+    results = pt.results()
+    assert len(results) == 2
+    for r in results:
+        df = r.get_entropy()
+        assert df is not None
+        assert len(df) > 0
+        assert np.all(np.isfinite(df["entropy"].to_numpy()))
