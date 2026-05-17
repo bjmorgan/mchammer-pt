@@ -859,8 +859,8 @@ def test_wl_pt_serial_w1_slot_is_window_group():
         assert isinstance(slot, WangLandauWindowGroup)
 
 
-def test_wl_pt_sync_policy_default_block():
-    """Default sync_policy on the orchestrator is 'block'."""
+def test_wl_pt_flatness_mode_default_pooled():
+    """Default flatness_mode on the orchestrator is 'pooled'."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -881,11 +881,12 @@ def test_wl_pt_sync_policy_default_block():
         random_seed=0,
         ensemble_cls=CoordinatedWangLandauEnsemble,
     )
-    assert pt._pool.replicas[0]._sync_policy == "block"
+    assert pt._pool.replicas[0]._flatness_mode == "pooled"
+    assert pt._pool.replicas[0]._merge_cadence == "at_halve"
 
 
-def test_wl_pt_sync_policy_halving_propagates():
-    """sync_policy='halving' reaches the window group."""
+def test_wl_pt_flatness_mode_per_walker_propagates():
+    """flatness_mode='per_walker' reaches the window group."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -905,14 +906,16 @@ def test_wl_pt_sync_policy_halving_propagates():
         block_size=5,
         random_seed=0,
         ensemble_cls=CoordinatedWangLandauEnsemble,
-        sync_policy="halving",
+        flatness_mode="per_walker",
     )
-    assert pt._pool.replicas[0]._sync_policy == "halving"
+    assert pt._pool.replicas[0]._flatness_mode == "per_walker"
 
 
-@pytest.mark.parametrize("bad", ["halve", "Block", " halving", "always", ""])
-def test_wl_pt_sync_policy_rejects_typos(bad):
-    """Invalid sync_policy values raise ValueError at construction."""
+@pytest.mark.parametrize(
+    "bad", ["per-walker", "Pooled", " pooled", "always", ""]
+)
+def test_wl_pt_flatness_mode_rejects_typos(bad):
+    """Invalid flatness_mode values raise ValueError at construction."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -924,7 +927,7 @@ def test_wl_pt_sync_policy_rejects_typos(bad):
             occupations=atoms.numbers
         )
     )
-    with pytest.raises(ValueError, match="sync_policy"):
+    with pytest.raises(ValueError, match="flatness_mode"):
         WangLandauParallelTempering(
             cluster_expansion=ce,
             atoms=[atoms, atoms],
@@ -933,13 +936,13 @@ def test_wl_pt_sync_policy_rejects_typos(bad):
             block_size=5,
             random_seed=0,
             ensemble_cls=CoordinatedWangLandauEnsemble,
-            sync_policy=bad,
+            flatness_mode=bad,
         )
 
 
-@pytest.mark.parametrize("policy", ["block", "halving"])
-def test_wl_pt_w2_short_run_converges(policy):
-    """W=2 short serial run produces valid WindowResult under both policies."""
+@pytest.mark.parametrize("flatness_mode", ["pooled", "per_walker"])
+def test_wl_pt_w2_short_run_converges(flatness_mode):
+    """W=2 short serial run produces valid WindowResult under both flatness modes."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -960,7 +963,7 @@ def test_wl_pt_w2_short_run_converges(policy):
         random_seed=0,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         n_walkers_per_window=2,
-        sync_policy=policy,
+        flatness_mode=flatness_mode,
     )
     pt.run(n_cycles=20)
     results = pt.results()

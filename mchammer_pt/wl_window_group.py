@@ -34,11 +34,6 @@ class WalkerPostBlockState(NamedTuple):
     window_entry_step: int | None
     histogram: dict[int, int]
 
-SyncPolicy = Literal["block", "halving"]  # DEPRECATED, removed in Task 8.
-"""Deprecated; replaced by ``FlatnessMode`` + ``MergeCadence``. Kept for
-the migration period only."""
-
-
 FlatnessMode = Literal["per_walker", "pooled"]
 """Flatness gate mode for collective halving.
 
@@ -63,17 +58,8 @@ In the 1/t phase, no mid-run merge fires regardless of this setting
 """
 
 
-_VALID_SYNC_POLICIES: tuple[str, ...] = ("block", "halving")
 _VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
 _VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
-
-
-def _validate_sync_policy(sync_policy: Any) -> None:
-    if sync_policy not in _VALID_SYNC_POLICIES:
-        raise ValueError(
-            f"sync_policy must be one of {_VALID_SYNC_POLICIES}; "
-            f"got {sync_policy!r}"
-        )
 
 
 def _validate_flatness_mode(flatness_mode: Any) -> None:

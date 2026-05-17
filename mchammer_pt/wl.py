@@ -34,8 +34,10 @@ from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
 from .wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
-    SyncPolicy,
-    _validate_sync_policy,
+    FlatnessMode,
+    MergeCadence,
+    _validate_flatness_mode,
+    _validate_merge_cadence,
 )
 
 
@@ -110,17 +112,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
             `WangLandauWindowGroup`; the coordinator runs a collective
             flatness gate and halves all walkers in lockstep. With
             count > 1 the group also merges entropies across walkers
-            (cadence controlled by ``sync_policy``). Checkpointing is
-            not supported for any window with count > 1.
-        sync_policy: entropy-sharing cadence between walkers in a
-            multi-walker window. ``"block"`` (default) merges every
-            block; ``"halving"`` (Vogel et al. 2013) merges only at
-            collective halving events. Both policies share the same
-            collective halving gate. The cadence applies only during
-            the halving phase: in the 1/t phase walkers merge entropy
-            every block regardless of ``sync_policy``, because there
-            is no flatness gate whose correctness the halving-cadence
-            preserves.
+            (cadence controlled by ``merge_cadence``). Checkpointing
+            is not supported for any window with count > 1.
+        flatness_mode: ``"per_walker"`` (every walker independently
+            flat; published Vogel et al. 2013) or ``"pooled"`` (default;
+            summed histogram flat -- faster by ~N x). Applies to the
+            collective halve gate in the halving phase.
+        merge_cadence: ``"at_halve"`` (default; Vogel cadence: merge
+            entropies at each collective halve) or ``"never"`` (no
+            mid-run merge).
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -147,7 +147,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -167,7 +168,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
         if int(block_size) < 1:
             raise ValueError(f"block_size must be >= 1; got {block_size}")
-        _validate_sync_policy(sync_policy)
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -244,7 +246,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     WangLandauWindowGroup(
                         walker_replicas,
                         random_seed=group_seeds[w],
-                        sync_policy=sync_policy,
+                        flatness_mode=flatness_mode,
+                        merge_cadence=merge_cadence,
                     )
                 )
             pool = SerialWangLandauPool(
@@ -487,11 +490,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
         # Wrap each restored replica in a single-walker
         # ``WangLandauWindowGroup`` so the coordinator drives halving.
         # Multi-walker resume is rejected at save-time.
+        # Single-walker resume; flatness_mode/merge_cadence are inert
+        # here (no halve gate or merge cadence applies with one
+        # walker), but the constructor requires them as keyword
+        # arguments.
         slots: list[WangLandauSlot] = [
             WangLandauWindowGroup(
                 [replica],
                 random_seed=group_seeds[i],
-                sync_policy="block",
+                flatness_mode="pooled",
+                merge_cadence="at_halve",
             )
             for i, replica in enumerate(replicas)
         ]
@@ -622,14 +630,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand. ``sync_policy`` has the same meaning as
-        on :class:`WangLandauParallelTempering`.
+        `windows` by hand. ``flatness_mode`` and ``merge_cadence``
+        have the same meaning as on
+        :class:`WangLandauParallelTempering`.
         """
         from mchammer.ensembles.wang_landau_ensemble import (
             get_bins_for_parallel_simulations,
@@ -665,7 +675,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
             n_walkers_per_window=n_walkers_per_window,
-            sync_policy=sync_policy,
+            flatness_mode=flatness_mode,
+            merge_cadence=merge_cadence,
         )
 
     @classmethod
@@ -684,14 +695,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
-        ``sync_policy`` has the same meaning as on
-        :class:`WangLandauParallelTempering`.
+        ``flatness_mode`` and ``merge_cadence`` have the same meaning
+        as on :class:`WangLandauParallelTempering`.
 
         Raises:
             NotImplementedError: if any ``n_walkers_per_window`` value
@@ -722,7 +734,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 n_walkers_per_window=n_walkers_per_window,
                 ensemble_cls=ensemble_cls,
                 ensemble_kwargs=ensemble_kwargs,
-                sync_policy=sync_policy,
+                flatness_mode=flatness_mode,
+                merge_cadence=merge_cadence,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -738,7 +751,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 pool=pool,
                 data_container_file=data_container_file,
                 n_walkers_per_window=n_walkers_per_window,
-                sync_policy=sync_policy,
+                flatness_mode=flatness_mode,
+                merge_cadence=merge_cadence,
             )
         except BaseException:
             pool.shutdown()
