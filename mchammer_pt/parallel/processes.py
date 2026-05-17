@@ -11,6 +11,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Literal
@@ -40,7 +41,7 @@ from ..wl_window_group import (
     decide_collective_halve,
     merge_entropies,
 )
-from ._comms import broadcast_gather, recv_reply, request
+from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
@@ -536,6 +537,22 @@ class ProcessPool:
         self.shutdown()
 
 
+@dataclass
+class _CoordinatorPlan:
+    """Pure-Python decision record produced by the coordinator's
+    decide phase and consumed by its execute phase.
+
+    All three actions are independent and applied as separate
+    batched IPC rounds: FORCE_HALVE first, SET_ENTROPY second,
+    SET_PHASE last (the same order as the previous serial
+    per-window coordinator).
+    """
+
+    halve: bool
+    merged_entropy: dict[int, float] | None
+    switch_to_phase: str | None
+
+
 class ProcessWangLandauWindow:
     """Per-window remote walkers + coordinator-facing methods.
 
@@ -876,11 +893,8 @@ class ProcessWangLandauPool:
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
         try:
-            # Fan out ADVANCE to every worker across every window in
-            # one broadcast, then gather replies. Walkers run MC in
-            # parallel across the whole pool; serialising across
-            # windows would cost a factor of ``len(self._slots)`` in
-            # wall-clock per block.
+            # Phase 1: broadcast ADVANCE; gather post-block state for
+            # every worker in every window in a single fan-out.
             all_targets: list[tuple[Connection, str]] = [
                 (conn, f"window {i} walker {w}")
                 for i, slot in enumerate(self._slots)
@@ -894,12 +908,64 @@ class ProcessWangLandauPool:
                 for w in range(len(slot.workers)):
                     slot._last[w] = payloads[offset]
                     offset += 1
-            # Per-window coordinator decisions and follow-up commands.
-            # These are typically small (one or two extra round-trips
-            # per slot per block) and run serially across windows;
-            # batching them is a future optimisation if needed.
+
+            # Phase 2: pure-Python coordinator decisions per slot.
+            plans = [self._compute_plan(slot) for slot in self._slots]
+
+            # Phase 3a: batched FORCE_HALVE across all halving slots.
+            halve_targets = [
+                (conn, f"window {i} walker {w}")
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.halve
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if halve_targets:
+                broadcast_gather(halve_targets, ("FORCE_HALVE",))
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.halve:
+                        slot._last = [
+                            s._replace(fill_factor=s.fill_factor / 2.0)
+                            for s in slot._last
+                        ]
+
+            # Phase 3b: batched SET_ENTROPY with per-slot merged dicts.
+            merge_targets = [
+                (
+                    conn,
+                    f"window {i} walker {w}",
+                    ("SET_ENTROPY", dict(plan.merged_entropy)),
+                )
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.merged_entropy is not None
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if merge_targets:
+                fanout_gather(merge_targets)
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.merged_entropy is not None:
+                        merged = dict(plan.merged_entropy)
+                        slot._last = [
+                            s._replace(entropy=dict(merged))
+                            for s in slot._last
+                        ]
+
+            # Phase 3c: batched SET_PHASE across switching slots.
+            switch_targets = [
+                (conn, f"window {i} walker {w}")
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.switch_to_phase is not None
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if switch_targets:
+                broadcast_gather(
+                    switch_targets, ("SET_PHASE", "1_over_t")
+                )
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.switch_to_phase is not None:
+                        slot.phase = plan.switch_to_phase
+
+            # Phase 4: per-slot exchange-walker selection (local-only).
             for slot in self._slots:
-                self._run_window_coordinator(slot)
                 slot.exchange_idx = int(
                     slot.rng.integers(0, len(slot.workers))
                 )
@@ -907,53 +973,50 @@ class ProcessWangLandauPool:
             self.shutdown()
             raise
 
-    def _run_window_coordinator(
+    def _compute_plan(
         self, slot: ProcessWangLandauWindow
-    ) -> None:
-        """Per-window coordinator routine on the process pool.
+    ) -> _CoordinatorPlan:
+        """Decide per-slot coordinator actions; no IPC.
 
-        Mirrors ``WangLandauWindowGroup._run_coordinator_block`` but
-        applies state via pipe commands to remote workers.
+        Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s
+        decision logic, but separated from the action phase so the
+        action phase can batch IPC across windows.
         """
+        plan = _CoordinatorPlan(
+            halve=False, merged_entropy=None, switch_to_phase=None
+        )
         if slot.phase == "halving":
             flags = slot.collect_flatness_flags()
             if decide_collective_halve(flags):
-                slot.force_halve_all()
+                plan.halve = True
                 if len(slot.workers) > 1:
-                    merged = merge_entropies(
+                    plan.merged_entropy = merge_entropies(
                         slot.collect_entropy_snapshots()
                     )
-                    slot.set_entropy_all(merged)
-                if slot._schedule == "1_over_t":
-                    self._maybe_bp_switch(slot)
+                # BP switch uses post-halve f; simulate the halve
+                # locally for the decision since the actual halve
+                # hasn't been sent yet.
+                if (
+                    slot._schedule == "1_over_t"
+                    and not slot.has_unentered_walker()
+                ):
+                    phases = ["halving"] * len(slot.workers)
+                    ts = slot.collect_ts()
+                    post_halve_fs = [
+                        f / 2.0 for f in slot.collect_fill_factors()
+                    ]
+                    if decide_bp_switch(phases, ts, post_halve_fs):
+                        plan.switch_to_phase = "1_over_t"
             elif slot._sync_policy == "block" and len(slot.workers) > 1:
-                merged = merge_entropies(
+                plan.merged_entropy = merge_entropies(
                     slot.collect_entropy_snapshots()
                 )
-                slot.set_entropy_all(merged)
         else:  # 1_over_t
             if len(slot.workers) > 1:
-                merged = merge_entropies(
+                plan.merged_entropy = merge_entropies(
                     slot.collect_entropy_snapshots()
                 )
-                slot.set_entropy_all(merged)
-
-    def _maybe_bp_switch(
-        self, slot: ProcessWangLandauWindow
-    ) -> None:
-        # Refuse to evaluate until every walker has entered the window;
-        # a non-entered walker has no defined ``t`` and the worker-side
-        # SET_PHASE handler would silently leave ``_fill_factor`` in
-        # the halving regime while flipping ``_phase`` to ``1_over_t``,
-        # tripping a TypeError on the next step.
-        if slot.has_unentered_walker():
-            return
-        phases = ["halving"] * len(slot.workers)
-        ts = slot.collect_ts()
-        fs = slot.collect_fill_factors()
-        if decide_bp_switch(phases, ts, fs):
-            slot.set_phase_all("1_over_t")
-            slot.phase = "1_over_t"
+        return plan
 
     def current_energies(self) -> np.ndarray:
         self._check_open()

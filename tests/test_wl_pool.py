@@ -613,7 +613,7 @@ def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
 
 
 def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
-    """has_unentered_walker gates _maybe_bp_switch on the process pool."""
+    """The coordinator's plan does not schedule a BP switch when any walker is unentered."""
     from mchammer_pt.parallel.processes import (
         ProcessWangLandauPool,
         ProcessWangLandauWindow,
@@ -633,7 +633,8 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
         slot: ProcessWangLandauWindow = pool._slots[0]
         slot._schedule = "1_over_t"
         # Synthesise a state where walker 0 has entered and walker 1
-        # has not, with f small enough that 1/t > f for any t.
+        # has not, with f small enough that 1/t > f for any t after
+        # a collective halve.
         slot._last = [
             WalkerPostBlockState(
                 is_flat=True,
@@ -650,9 +651,11 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 window_entry_step=None,
             ),
         ]
-        assert slot.phase == "halving"
-        pool._maybe_bp_switch(slot)
-        assert slot.phase == "halving"
+        plan = pool._compute_plan(slot)
+        # All flat ⇒ plan to halve, but BP switch refused because one
+        # walker has no defined ``t``.
+        assert plan.halve is True
+        assert plan.switch_to_phase is None
 
 
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):

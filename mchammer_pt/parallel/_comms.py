@@ -111,3 +111,34 @@ def broadcast_gather(
                 f"worker {msg[0]} ({label}) exited unexpectedly"
             ) from exc
     return [recv_reply(conn, msg[0], label) for conn, label in targets]
+
+
+def fanout_gather(
+    targets: list[tuple[Connection, str, tuple[Any, ...]]],
+) -> list[Any]:
+    """Send a per-target command, then gather validated replies.
+
+    Differs from ``broadcast_gather`` only in that each target gets
+    its own message — useful when callers want all workers to act in
+    parallel but with different payloads (e.g. per-window
+    ``SET_ENTROPY`` with different merged entropies). The send phase
+    is fully issued before any recv, so all workers run concurrently.
+
+    Args:
+        targets: list of ``(connection, label, msg)`` triples. Each
+            message is sent to its paired connection; the op tag
+            ``msg[0]`` drives reply validation.
+
+    Returns:
+        List of payloads in the same order as ``targets``.
+    """
+    for conn, label, msg in targets:
+        try:
+            conn.send(msg)
+        except BrokenPipeError as exc:
+            raise RuntimeError(
+                f"worker {msg[0]} ({label}) exited unexpectedly"
+            ) from exc
+    return [
+        recv_reply(conn, msg[0], label) for conn, label, msg in targets
+    ]
