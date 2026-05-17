@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``sync_policy`` parameter on ``WangLandauParallelTempering``,
+  ``from_bin_count``, and ``process_pool`` factories. Selects
+  between ``"block"`` (default; merge entropy every block) and
+  ``"halving"`` (Vogel et al. 2013: merge only at collective
+  halving events). Both policies share the same collective halving
+  gate: ``f`` halves only when every walker independently reports a
+  flat histogram against its own histogram. Has no observable
+  effect when every window has a single walker.
+- ``CoordinatedWangLandauEnsemble``, a subclass of mchammer's
+  ``WangLandauEnsemble`` with internal halving suppressed. Halving
+  is now driven by ``WangLandauWindowGroup`` after each block.
+  ``WangLandauReplica`` defaults ``ensemble_cls`` to this subclass
+  and rejects any ``ensemble_cls`` that is not a subclass of it.
+
+### Changed
+
+- Multi-walker windows now use a collective halving gate (every
+  walker must independently report flat) plus collective halving
+  via ``force_halve``. This replaces the previous per-walker
+  autonomous halving with force-halving of laggards. Halvings now
+  fire when every walker is flat rather than when the fastest one
+  is; the new default policy ``"block"`` still merges entropy
+  every block.
+- Single-walker runs are routed through ``WangLandauWindowGroup``
+  for path uniformity. The convergence criterion is unchanged; the
+  flatness check now fires at block boundaries rather than at
+  ``flatness_check_interval`` step boundaries.
+- Process-pool window state is now exposed through a
+  ``ProcessWangLandauWindow`` class with coordinator-facing
+  methods (replacing the previous private ``_WindowSlot``
+  dataclass). Worker opcodes ``GET_ENTROPY``, ``SET_ENTROPY``,
+  ``FORCE_HALVE``, and ``SET_PHASE`` carry the collective
+  coordination state. The ``ADVANCE`` ack now piggybacks
+  ``(is_flat, fill_factor, entropy_snapshot, step,
+  window_entry_step)`` so the coordinator can run with minimal
+  round-trips.
+
+### Notes
+
+- Output APIs (``WindowResult.get_entropy``, ``get_histogram``,
+  ``WangLandauParallelTempering.results``) are unchanged.
+- Multi-walker checkpointing remains unsupported.
+
 ## [0.8.0] - 2026-05-14
 
 ### Added
