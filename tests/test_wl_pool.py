@@ -17,9 +17,9 @@ def _spawn_wl_worker(tmp_path):
     import multiprocessing as mp
 
     from mchammer.calculators import ClusterExpansionCalculator
-    from mchammer.ensembles import WangLandauEnsemble
 
     from mchammer_pt.parallel._worker import _wl_worker
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     ce_path = tmp_path / "ce.ce"
@@ -47,7 +47,7 @@ def _spawn_wl_worker(tmp_path):
             e0 - 100.0,    # energy_limit_left
             e0 + 100.0,    # energy_limit_right
             42,            # seed
-            WangLandauEnsemble,
+            CoordinatedWangLandauEnsemble,
             {},
         ),
         daemon=True,
@@ -630,3 +630,79 @@ def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
     ) as pool:
         with pytest.raises(NotImplementedError, match="checkpointing"):
             pool.snapshot_for_checkpoint()
+
+
+def test_wl_worker_advance_ack_carries_state(tmp_path):
+    """ADVANCE ack returns (is_flat, fill_factor, entropy, step, window_entry)."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        payload = request(conn, ("ADVANCE", 50), 0)
+        assert isinstance(payload, tuple)
+        assert len(payload) == 5
+        is_flat, f, entropy, step, window_entry = payload
+        assert isinstance(is_flat, bool)
+        assert isinstance(f, float)
+        assert isinstance(entropy, dict)
+        assert isinstance(step, int)
+        assert window_entry is None or isinstance(window_entry, int)
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_get_entropy_round_trip(tmp_path):
+    """GET_ENTROPY returns the worker's current entropy dict."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        # Run some MC so entropy is non-empty.
+        request(conn, ("ADVANCE", 50), 0)
+        payload = request(conn, ("GET_ENTROPY",), 0)
+        assert isinstance(payload, dict)
+        assert all(isinstance(k, int) for k in payload)
+        assert all(isinstance(v, float) for v in payload.values())
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_set_entropy_overwrites_in_place(tmp_path):
+    """SET_ENTROPY replaces ensemble._entropy."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        merged = {0: 1.5, 1: 2.5}
+        request(conn, ("SET_ENTROPY", merged), 0)
+        got = request(conn, ("GET_ENTROPY",), 0)
+        assert got == merged
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_force_halve_round_trip(tmp_path):
+    """FORCE_HALVE halves fill_factor and grows history."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        # Advance to populate state.
+        is_flat, f_before, _, _, _ = request(conn, ("ADVANCE", 50), 0)
+        request(conn, ("FORCE_HALVE",), 0)
+        is_flat, f_after, _, _, _ = request(conn, ("ADVANCE", 0), 0)
+        assert f_after == pytest.approx(f_before / 2.0)
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
+def test_wl_worker_set_phase_round_trip(tmp_path):
+    """SET_PHASE switches ensemble._phase."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        # Advance to ensure _window_entry_step is set.
+        request(conn, ("ADVANCE", 50), 0)
+        request(conn, ("SET_PHASE", "1_over_t"), 0)
+        # Subsequent ADVANCE in 1_over_t phase tracks 1/t; just verify
+        # the worker still responds without error.
+        is_flat, f, _, _, _ = request(conn, ("ADVANCE", 5), 0)
+        assert isinstance(f, float)
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)

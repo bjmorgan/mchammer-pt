@@ -27,6 +27,9 @@ Shared opcodes (``BaseWorker``):
 
 REWL-only opcodes (``WangLandauWorker``):
 
+- ``("ADVANCE", n_steps)``
+  -> ``Reply("OK", ..., (is_flat, fill_factor, entropy, step,
+  window_entry_step))``
 - ``("LOG_G_AT", E_i, E_j)``
   -> ``Reply("OK", ..., (g_at_E_i, g_at_E_j))``
 - ``("CONVERGED",)`` -> ``Reply("OK", ..., bool)``
@@ -34,6 +37,10 @@ REWL-only opcodes (``WangLandauWorker``):
 - ``("GET_ENTROPY_SYNC_STATE",)`` -> ``Reply("OK", ..., dict)``
 - ``("APPLY_ENTROPY_SYNC", merged_entropy, extra_halvings)``
   -> ``Reply("OK", ..., None)``
+- ``("GET_ENTROPY",)`` -> ``Reply("OK", ..., dict)``
+- ``("SET_ENTROPY", merged_entropy)`` -> ``Reply("OK", ..., None)``
+- ``("FORCE_HALVE",)`` -> ``Reply("OK", ..., None)``
+- ``("SET_PHASE", phase)`` -> ``Reply("OK", ..., None)``
 
 Every reply is a ``Reply(status, op, payload)`` named tuple.
 ``status`` is ``"OK"``, ``"ERR_PICKLE"`` (unpicklable reply;
@@ -285,6 +292,10 @@ class WangLandauWorker(BaseWorker):
             "WL_STATS": self._handle_wl_stats,
             "GET_ENTROPY_SYNC_STATE": self._handle_get_entropy_sync_state,
             "APPLY_ENTROPY_SYNC": self._handle_apply_entropy_sync,
+            "GET_ENTROPY": self._handle_get_entropy,
+            "SET_ENTROPY": self._handle_set_entropy,
+            "FORCE_HALVE": self._handle_force_halve,
+            "SET_PHASE": self._handle_set_phase,
         })
 
     def _build_replica(self) -> WangLandauReplica:
@@ -311,6 +322,21 @@ class WangLandauWorker(BaseWorker):
         self._replica.refresh_last_state()
         self._reply(self._replica.data_container())
 
+    def _handle_advance(self, cmd: tuple[Any, ...]) -> None:
+        n_steps = int(cmd[1])
+        self._replica.advance(n_steps)
+        e = self._replica.ensemble
+        is_flat = self._replica.is_flat()
+        f = float(e._fill_factor)
+        entropy = dict(e._entropy)
+        step = int(e.step)
+        window_entry = (
+            None
+            if e._window_entry_step is None
+            else int(e._window_entry_step)
+        )
+        self._reply((is_flat, f, entropy, step, window_entry))
+
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:
         _, E_i, E_j = cmd
         self._reply((self._replica.log_g(E_i), self._replica.log_g(E_j)))
@@ -334,6 +360,30 @@ class WangLandauWorker(BaseWorker):
         for _ in range(extra_halvings):
             self._replica.force_halve()
         self._replica.ensemble._entropy = dict(merged_entropy)
+        self._reply(None)
+
+    def _handle_get_entropy(self, cmd: tuple[Any, ...]) -> None:
+        self._reply(dict(self._replica.ensemble._entropy))
+
+    def _handle_set_entropy(self, cmd: tuple[Any, ...]) -> None:
+        merged = cmd[1]
+        self._replica.ensemble._entropy = dict(merged)
+        self._reply(None)
+
+    def _handle_force_halve(self, cmd: tuple[Any, ...]) -> None:
+        self._replica.force_halve()
+        self._reply(None)
+
+    def _handle_set_phase(self, cmd: tuple[Any, ...]) -> None:
+        phase = str(cmd[1])
+        e = self._replica.ensemble
+        e._phase = phase
+        if phase == "1_over_t":
+            entry = e._window_entry_step
+            if entry is not None:
+                t = e.step - entry + 1
+                e._fill_factor = 1.0 / t
+                e._fill_factor_history[e.step] = e._fill_factor
         self._reply(None)
 
 
