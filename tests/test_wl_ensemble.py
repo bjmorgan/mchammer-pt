@@ -1,0 +1,81 @@
+"""Unit tests for CoordinatedWangLandauEnsemble."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+
+def _make_ensemble(**kwargs):
+    """Construct a CoordinatedWangLandauEnsemble on the toy CE fixture."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    return CoordinatedWangLandauEnsemble(
+        structure=atoms,
+        calculator=ClusterExpansionCalculator(atoms, ce),
+        energy_spacing=0.1,
+        energy_limit_left=None,
+        energy_limit_right=None,
+        random_seed=0,
+        dc_filename=None,
+        **kwargs,
+    )
+
+
+def test_update_entropy_does_not_halve_on_synthetic_flat_histogram():
+    """A synthetic flat histogram does not trigger halving in the subclass."""
+    e = _make_ensemble(flatness_check_interval=10)
+    # Pre-seed a flat histogram and entropy so that mchammer's check
+    # would normally fire halving on the next interval boundary.
+    e._histogram = {0: 1000, 1: 1000, 2: 1000}
+    e._entropy = {0: 1.0, 1: 1.0, 2: 1.0}
+    e._reached_energy_window = True
+    e._step = 100  # multiple of interval
+
+    f_before = e._fill_factor
+    history_len_before = len(e._fill_factor_history)
+
+    # Call _update_entropy directly with a current bin; this simulates
+    # what mchammer would do on a step.
+    e._update_entropy(0)
+
+    assert e._fill_factor == pytest.approx(f_before)
+    assert len(e._fill_factor_history) == history_len_before
+
+
+def test_update_entropy_reshifts_entropy_periodically():
+    """Periodic min-shift fires at flatness_check_interval boundaries."""
+    e = _make_ensemble(flatness_check_interval=10)
+    e._reached_energy_window = True
+    e._entropy = {0: 5.0, 1: 7.0, 2: 9.0}
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    e._step = 10  # boundary
+
+    e._update_entropy(0)
+    # After update: entropy[0] += 1.0 (current f), then min-shift.
+    # entropy = {0: 6.0, 1: 7.0, 2: 9.0}; min = 6.0; shifted to
+    # {0: 0.0, 1: 1.0, 2: 3.0}.
+    assert e._entropy[0] == pytest.approx(0.0)
+    assert e._entropy[1] == pytest.approx(1.0)
+    assert e._entropy[2] == pytest.approx(3.0)
+
+
+def test_update_entropy_one_over_t_phase_tracks_inverse_t():
+    """In 1/t phase, fill_factor tracks 1/(step - window_entry + 1)."""
+    e = _make_ensemble(
+        schedule="1_over_t", flatness_check_interval=1_000_000
+    )
+    e._reached_energy_window = True
+    e._phase = "1_over_t"
+    e._window_entry_step = 10
+    e._step = 110
+    e._fill_factor = 0.5  # whatever; should be overwritten
+
+    e._update_entropy(0)
+    # t = step - entry + 1 = 110 - 10 + 1 = 101
+    assert e._fill_factor == pytest.approx(1.0 / 101)
