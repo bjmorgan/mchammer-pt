@@ -104,6 +104,7 @@ class WangLandauSlot(Protocol):
     def cluster_expansion_path(self) -> str | None: ...
     @property
     def converged(self) -> bool: ...
+    def is_flat(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
     def current_energy(self) -> float: ...
     def current_occupations(self) -> np.ndarray: ...
@@ -307,6 +308,25 @@ class WangLandauReplica:
             self._rng_state = random.getstate()
         finally:
             random.setstate(previous_state)
+
+    def is_flat(self) -> bool:
+        """Return ``True`` if this walker's own histogram is flat.
+
+        Uses mchammer's flatness criterion: every bin's count is
+        ``>= flatness_limit * mean(counts)``. Gated on
+        ``_reached_energy_window`` so walkers that have not yet
+        entered the window report ``False``.
+        """
+        e = self._ensemble
+        if not e._reached_energy_window:
+            return False
+        if not e._histogram:
+            return False
+        histogram = np.array(list(e._histogram.values()))
+        if histogram.size == 0:
+            return False
+        limit = e._flatness_limit * np.average(histogram)
+        return bool(np.all(histogram >= limit))
 
     def force_halve(self) -> None:
         """Force one fill-factor halving, bypassing mchammer's flatness check.
