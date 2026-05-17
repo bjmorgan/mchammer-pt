@@ -86,25 +86,72 @@ def decide_bp_switch(
     return all((1.0 / t) > f for t, f in zip(ts, fs, strict=True))
 
 
-def merge_entropies(entropies: list[dict[int, float]]) -> dict[int, float]:
-    """Average bin-wise entropy estimates across multiple walkers.
+def merge_entropies(
+    entropies: list[dict[int, float]],
+) -> dict[int, float]:
+    """Combine per-walker entropy dicts into a single window estimate.
+
+    Each walker's ``_entropy`` carries a private additive constant (from
+    icet's periodic min-shift in ``_update_entropy`` and from
+    independent accumulation between merges). Naive averaging would
+    combine values whose additive constants differ; this function
+    aligns walkers first by subtracting each walker's mean computed
+    over the *common* set of bins all walkers visited, then averages
+    bin-wise over the walkers that visited each bin. The result is
+    finally shifted so ``min(merged) == 0`` (the icet convention,
+    matching ``_update_entropy``'s periodic reshift).
 
     Args:
-        entropies: list of {bin_index: entropy_value} dicts from each walker.
+        entropies: list of ``{bin_index: entropy_value}`` dicts from
+            each walker. Empty dicts (walkers that have not entered
+            their window) are filtered out before processing.
 
     Returns:
-        Merged entropy dict with bin-wise averages; missing bins contribute 0.0.
-        Unvisited bins are deliberately suppressed: frontier regions entered by
-        only a subset of walkers contribute a reduced entropy estimate until all
-        walkers reach them.
+        Merged entropy dict with ``min(merged) == 0``. Empty if no
+        walker has entered the window.
+
+    Raises:
+        RuntimeError: if no bin is visited by every (filtered) walker,
+            so rebasing across walkers is ill-defined.
     """
-    if not entropies:
+    # Filter out walkers with empty entropy dicts.
+    visited = [e for e in entropies if e]
+    if not visited:
         return {}
+    if len(visited) == 1:
+        # Single-walker fast path; min-shift to icet convention.
+        only = visited[0]
+        shift = min(only.values())
+        return {b: v - shift for b, v in only.items()}
+
+    # Intersection of bins visited by every walker.
+    common = set(visited[0].keys())
+    for e in visited[1:]:
+        common &= e.keys()
+    if not common:
+        raise RuntimeError(
+            "merge_entropies: walker coverage has no common bin; "
+            "cannot rebase across walkers."
+        )
+
+    # Per-walker mean over the common bins; subtract from each walker.
+    rebased: list[dict[int, float]] = []
+    for e in visited:
+        offset = sum(e[b] for b in common) / len(common)
+        rebased.append({b: v - offset for b, v in e.items()})
+
+    # Bin-wise average over walkers that visited each bin.
     all_bins: set[int] = set()
-    for e in entropies:
-        all_bins.update(e.keys())
-    n = len(entropies)
-    return {b: sum(e.get(b, 0.0) for e in entropies) / n for b in all_bins}
+    for r in rebased:
+        all_bins.update(r.keys())
+    merged: dict[int, float] = {}
+    for b in all_bins:
+        contributors = [r[b] for r in rebased if b in r]
+        merged[b] = sum(contributors) / len(contributors)
+
+    # Post-shift to icet convention: min(merged) == 0.
+    shift = min(merged.values())
+    return {b: v - shift for b, v in merged.items()}
 
 
 if TYPE_CHECKING:

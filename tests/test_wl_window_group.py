@@ -33,25 +33,115 @@ def _make_replicas(n: int = 2):
     ]
 
 
-def test_merge_entropies_averages_all_bins():
-    """Entropy is averaged bin-wise; unvisited bins treat as 0.0."""
+def test_merge_entropies_aligns_constants_via_intersection_mean():
+    """Two walkers with same shape offset by different constants merge cleanly."""
     from mchammer_pt.wl_window_group import merge_entropies
 
-    merged = merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
+    # Both walkers visit bins {0, 1, 2}. Walker A's S = m(E) + 10;
+    # walker B's S = m(E) + 50, where m = {0: 0.0, 1: 5.0, 2: 10.0}.
+    a = {0: 10.0, 1: 15.0, 2: 20.0}
+    b = {0: 50.0, 1: 55.0, 2: 60.0}
+    merged = merge_entropies([a, b])
 
-    # bin 0: (2.0 + 6.0) / 2 = 4.0
-    # bin 1: (4.0 + 0.0) / 2 = 2.0  (replica 1 never visited bin 1)
-    # bin 2: (0.0 + 8.0) / 2 = 4.0  (replica 0 never visited bin 2)
-    assert merged[0] == pytest.approx(4.0)
-    assert merged[1] == pytest.approx(2.0)
-    assert merged[2] == pytest.approx(4.0)
+    # After intersection-mean rebasing, walker A becomes {0: -5, 1: 0, 2: 5}
+    # and walker B becomes {0: -5, 1: 0, 2: 5}. Average = {0: -5, 1: 0, 2: 5}.
+    # Post-shift so min=0: {0: 0, 1: 5, 2: 10}.
+    assert merged[0] == pytest.approx(0.0)
+    assert merged[1] == pytest.approx(5.0)
+    assert merged[2] == pytest.approx(10.0)
 
 
-def test_merge_entropies_noop_on_empty_entropies():
-    """No KeyError or crash when all entropy dicts are empty."""
+def test_merge_entropies_no_coverage_boundary_distortion():
+    """Partial coverage does not introduce shape artefacts at coverage edges."""
     from mchammer_pt.wl_window_group import merge_entropies
 
+    # Walker A visits {0, 1, 2}; walker B visits {1, 2, 3}. Both share
+    # m(E) = E + 0.0 on their visited bins (zero additive constants).
+    a = {0: 0.0, 1: 1.0, 2: 2.0}
+    b = {1: 1.0, 2: 2.0, 3: 3.0}
+    merged = merge_entropies([a, b])
+
+    # Common bins = {1, 2}. A's mean over common = 1.5; B's mean = 1.5.
+    # Rebased A = {0: -1.5, 1: -0.5, 2: 0.5}
+    # Rebased B = {1: -0.5, 2: 0.5, 3: 1.5}
+    # Bin-wise average: {0: -1.5, 1: -0.5, 2: 0.5, 3: 1.5}.
+    # Post-shift so min=0: {0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0}.
+    # Shape is preserved across the coverage boundary at bins 0 and 3.
+    assert merged[0] == pytest.approx(0.0)
+    assert merged[1] == pytest.approx(1.0)
+    assert merged[2] == pytest.approx(2.0)
+    assert merged[3] == pytest.approx(3.0)
+
+
+def test_merge_entropies_partial_coverage_uses_visiting_walkers_only():
+    """Bin visited only by one walker takes that walker's rebased value."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    # Common = {1, 2}. Bin 0 is in A only; bin 3 is in B only.
+    a = {0: 0.0, 1: 1.0, 2: 2.0}
+    b = {1: 11.0, 2: 12.0, 3: 13.0}
+    merged = merge_entropies([a, b])
+
+    # Walker A mean over common = 1.5; rebased A = {0: -1.5, 1: -0.5, 2: 0.5}.
+    # Walker B mean over common = 11.5; rebased B = {1: -0.5, 2: 0.5, 3: 1.5}.
+    # Bin 0: only A contributes -> -1.5. Bin 3: only B contributes -> 1.5.
+    # Post-shift so min=0: {0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0}.
+    assert merged[0] == pytest.approx(0.0)
+    assert merged[1] == pytest.approx(1.0)
+    assert merged[2] == pytest.approx(2.0)
+    assert merged[3] == pytest.approx(3.0)
+
+
+def test_merge_entropies_filters_unentered_walkers():
+    """Walker with empty entropy dict is excluded from the merge."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    a = {0: 0.0, 1: 1.0}
+    empty: dict[int, float] = {}
+    merged = merge_entropies([a, empty])
+
+    # Only walker A contributes; result equals a min-shifted to 0.
+    assert merged == {0: 0.0, 1: 1.0}
+
+
+def test_merge_entropies_single_walker_fast_path():
+    """One walker after filtering returns its dict shifted so min=0."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    a = {0: 7.0, 1: 10.0, 2: 8.0}
+    merged = merge_entropies([a])
+
+    # Single walker: subtract its own min (7.0).
+    assert merged == {0: 0.0, 1: 3.0, 2: 1.0}
+
+
+def test_merge_entropies_no_walkers_returns_empty():
+    """All walkers empty (or zero walkers) returns empty dict."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    assert merge_entropies([]) == {}
     assert merge_entropies([{}, {}]) == {}
+
+
+def test_merge_entropies_empty_intersection_raises():
+    """Walkers with no shared bin cannot be rebased; raise RuntimeError."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    a = {0: 0.0, 1: 1.0}
+    b = {2: 2.0, 3: 3.0}
+    with pytest.raises(RuntimeError, match="no common bin"):
+        merge_entropies([a, b])
+
+
+def test_merge_entropies_min_value_is_zero():
+    """Result always satisfies the icet convention min(merged) == 0."""
+    from mchammer_pt.wl_window_group import merge_entropies
+
+    a = {0: 100.0, 1: 105.0, 2: 102.0}
+    b = {0: 200.0, 1: 205.0, 2: 202.0}
+    merged = merge_entropies([a, b])
+
+    assert min(merged.values()) == pytest.approx(0.0)
 
 
 def test_advance_calls_all_replicas_and_updates_exchange_idx():
@@ -318,10 +408,13 @@ def test_advance_block_policy_merges_entropy_every_block():
     group = WangLandauWindowGroup(replicas, random_seed=0, sync_policy="block")
     group._run_coordinator_block()
 
-    # Merged: {0: 4.0, 1: 6.0}; both walkers receive this.
+    # Both walkers have the same shape (slope 2 across bins 0 and 1)
+    # offset by different additive constants. After intersection-mean
+    # rebasing each walker becomes {0: -1, 1: 1}; the bin-wise average
+    # is the same; post-shift to min=0 yields {0: 0.0, 1: 2.0}.
     for r in replicas:
-        assert r.ensemble._entropy[0] == pytest.approx(4.0)
-        assert r.ensemble._entropy[1] == pytest.approx(6.0)
+        assert r.ensemble._entropy[0] == pytest.approx(0.0)
+        assert r.ensemble._entropy[1] == pytest.approx(2.0)
 
 
 def test_advance_halving_policy_skips_non_halving_merge():
@@ -365,12 +458,15 @@ def test_advance_halving_policy_merges_at_halving_event():
     )
     group._run_coordinator_block()
 
-    # Halve fires → merge fires.
+    # Halve fires -> merge fires. Same merge arithmetic as
+    # test_advance_block_policy_merges_entropy_every_block:
+    # identical shape with different additive constants collapses
+    # to {0: 0.0, 1: 2.0} after rebasing and min-shift.
     for r in replicas:
         assert r.ensemble._fill_factor == pytest.approx(0.5)
         # Merged entropy distributed to all walkers AFTER force_halve.
-        assert r.ensemble._entropy[0] == pytest.approx(4.0)
-        assert r.ensemble._entropy[1] == pytest.approx(6.0)
+        assert r.ensemble._entropy[0] == pytest.approx(0.0)
+        assert r.ensemble._entropy[1] == pytest.approx(2.0)
 
 
 def test_maybe_switch_to_one_over_t_refuses_unentered_walker():

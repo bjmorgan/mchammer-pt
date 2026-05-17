@@ -393,26 +393,6 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
     assert np.array_equal(pool.current_occupations(1), occ0_before)
 
 
-def test_merge_entropies_averages_bins():
-    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
-    result = _merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
-    assert result[0] == pytest.approx(4.0)  # (2 + 6) / 2
-    assert result[1] == pytest.approx(2.0)  # (4 + 0) / 2 — bin missing from replica 1
-    assert result[2] == pytest.approx(4.0)  # (0 + 8) / 2 — bin missing from replica 0
-
-
-def test_merge_entropies_single_replica_is_identity():
-    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
-    assert _merge_entropies([{1: 3.0, 2: 5.0}]) == {
-        1: pytest.approx(3.0), 2: pytest.approx(5.0)
-    }
-
-
-def test_merge_entropies_all_empty():
-    from mchammer_pt.wl_window_group import merge_entropies as _merge_entropies
-    assert _merge_entropies([{}, {}]) == {}
-
-
 def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
     """n_walkers_per_window=2 creates 2 workers per slot."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -713,7 +693,11 @@ def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
         )
         plan = pool._compute_plan(slot)
         assert plan.halve is True
-        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        # Both walkers have identical entropy {0: 1.0, 1: 2.0}; after
+        # intersection-mean rebasing each becomes {0: -0.5, 1: 0.5},
+        # the bin-wise average is the same, and the post-shift to
+        # min=0 yields {0: 0.0, 1: 1.0}.
+        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
         assert plan.switch_to_phase is None
 
 
@@ -742,7 +726,9 @@ def test_compute_plan_halving_not_flat_block_policy_merges_anyway(tmp_path):
         )
         plan = pool._compute_plan(slot)
         assert plan.halve is False
-        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        # See test_compute_plan_halving_all_flat_w2_block_policy for the
+        # merge arithmetic; identical inputs collapse to {0: 0.0, 1: 1.0}.
+        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
         assert plan.switch_to_phase is None
 
 
@@ -802,7 +788,9 @@ def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
         slot.phase = "1_over_t"
         plan = pool._compute_plan(slot)
         assert plan.halve is False
-        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        # See test_compute_plan_halving_all_flat_w2_block_policy for the
+        # merge arithmetic; identical inputs collapse to {0: 0.0, 1: 1.0}.
+        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
         assert plan.switch_to_phase is None
 
 
