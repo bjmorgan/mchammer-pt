@@ -526,3 +526,31 @@ def test_maybe_switch_to_one_over_t_does_not_grow_fill_factor_history():
         assert r.ensemble._fill_factor == pytest.approx(1.0 / 101)
         # History unchanged: still one halve entry, value 0.001 at step 100.
         assert r.ensemble._fill_factor_history == {100: 0.001}
+
+
+def test_validate_flatness_mode_accepts_known_values():
+    from mchammer_pt.wl_window_group import _validate_flatness_mode
+
+    _validate_flatness_mode("per_walker")
+    _validate_flatness_mode("pooled")
+
+
+def test_validate_flatness_mode_rejects_unknown_value():
+    from mchammer_pt.wl_window_group import _validate_flatness_mode
+
+    with pytest.raises(ValueError, match="flatness_mode must be one of"):
+        _validate_flatness_mode("bogus")
+
+
+def test_validate_merge_cadence_accepts_known_values():
+    from mchammer_pt.wl_window_group import _validate_merge_cadence
+
+    _validate_merge_cadence("at_halve")
+    _validate_merge_cadence("never")
+
+
+def test_validate_merge_cadence_rejects_unknown_value():
+    from mchammer_pt.wl_window_group import _validate_merge_cadence
+
+    with pytest.raises(ValueError, match="merge_cadence must be one of"):
+        _validate_merge_cadence("bogus")

@@ -33,21 +33,38 @@ class WalkerPostBlockState(NamedTuple):
     step: int
     window_entry_step: int | None
 
-SyncPolicy = Literal["block", "halving"]
-"""Entropy-sharing cadence between walkers in a multi-walker window.
+SyncPolicy = Literal["block", "halving"]  # DEPRECATED, removed in Task 8.
+"""Deprecated; replaced by ``FlatnessMode`` + ``MergeCadence``. Kept for
+the migration period only."""
 
-- ``"block"``: merge entropies after every block.
-- ``"halving"``: merge entropies only at collective halving events
-  (Vogel et al. 2013 multi-walker REWL).
 
-The cadence applies only during the halving phase. In the 1/t phase
-walkers merge entropies every block regardless of ``sync_policy``,
-because no flatness gate exists there and the independence argument
-that motivates halving-only cadence does not apply.
+FlatnessMode = Literal["per_walker", "pooled"]
+"""Flatness gate mode for collective halving.
+
+- ``"per_walker"``: halve when every walker is independently flat
+  (published Vogel et al. 2013).
+- ``"pooled"``: halve when the summed histogram across walkers is flat
+  (faster — ~N x — than per-walker since pooling has N x the samples
+  per bin). Default.
+"""
+
+
+MergeCadence = Literal["at_halve", "never"]
+"""Cadence at which walker entropies are merged in the halving phase.
+
+- ``"at_halve"``: merge entropies at each collective halve event
+  (Vogel et al. 2013). Default.
+- ``"never"``: no mid-run merge; walkers run fully independently until
+  the end-of-run finalisation step.
+
+In the 1/t phase, no mid-run merge fires regardless of this setting
+(see ``finalise_for_reporting``).
 """
 
 
 _VALID_SYNC_POLICIES: tuple[str, ...] = ("block", "halving")
+_VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
+_VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
 
 
 def _validate_sync_policy(sync_policy: Any) -> None:
@@ -55,6 +72,22 @@ def _validate_sync_policy(sync_policy: Any) -> None:
         raise ValueError(
             f"sync_policy must be one of {_VALID_SYNC_POLICIES}; "
             f"got {sync_policy!r}"
+        )
+
+
+def _validate_flatness_mode(flatness_mode: Any) -> None:
+    if flatness_mode not in _VALID_FLATNESS_MODES:
+        raise ValueError(
+            f"flatness_mode must be one of {_VALID_FLATNESS_MODES}; "
+            f"got {flatness_mode!r}"
+        )
+
+
+def _validate_merge_cadence(merge_cadence: Any) -> None:
+    if merge_cadence not in _VALID_MERGE_CADENCES:
+        raise ValueError(
+            f"merge_cadence must be one of {_VALID_MERGE_CADENCES}; "
+            f"got {merge_cadence!r}"
         )
 
 
