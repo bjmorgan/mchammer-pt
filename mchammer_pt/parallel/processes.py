@@ -876,8 +876,29 @@ class ProcessWangLandauPool:
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
         try:
+            # Fan out ADVANCE to every worker across every window in
+            # one broadcast, then gather replies. Walkers run MC in
+            # parallel across the whole pool; serialising across
+            # windows would cost a factor of ``len(self._slots)`` in
+            # wall-clock per block.
+            all_targets: list[tuple[Connection, str]] = [
+                (conn, f"window {i} walker {w}")
+                for i, slot in enumerate(self._slots)
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            payloads = broadcast_gather(
+                all_targets, ("ADVANCE", int(n_steps))
+            )
+            offset = 0
             for slot in self._slots:
-                slot.advance(int(n_steps))
+                for w in range(len(slot.workers)):
+                    slot._last[w] = payloads[offset]
+                    offset += 1
+            # Per-window coordinator decisions and follow-up commands.
+            # These are typically small (one or two extra round-trips
+            # per slot per block) and run serially across windows;
+            # batching them is a future optimisation if needed.
+            for slot in self._slots:
                 self._run_window_coordinator(slot)
                 slot.exchange_idx = int(
                     slot.rng.integers(0, len(slot.workers))
