@@ -955,48 +955,42 @@ class ProcessWangLandauPool:
         Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s
         decision logic, but separated from the action phase so the
         action phase can batch IPC across windows. In the 1/t phase
-        the mid-run merge is kept here for backwards-compat; it is
-        removed in Task 9 (Fix 2) when end-of-run merging is added.
+        no mid-run merge fires (regardless of ``merge_cadence``).
         """
         plan = _CoordinatorPlan(
             halve=False, merged_entropy=None, switch_to_phase=None
         )
-        if slot.phase == "halving":
-            if slot._flatness_mode == "per_walker":
-                should_halve = decide_collective_halve(
-                    slot.collect_flatness_flags()
-                )
-            else:  # pooled
-                should_halve = _summed_histogram_flat_from_snapshots(
-                    slot._last, slot._flatness_limit
-                )
-            if should_halve:
-                plan.halve = True
-                if (
-                    slot._merge_cadence == "at_halve"
-                    and len(slot.workers) > 1
-                ):
-                    plan.merged_entropy = merge_entropies(
-                        slot.collect_entropy_snapshots()
-                    )
-                if (
-                    slot._schedule == "1_over_t"
-                    and not slot.has_unentered_walker()
-                ):
-                    phases = ["halving"] * len(slot.workers)
-                    ts = slot.collect_ts()
-                    post_halve_fs = [
-                        f / 2.0 for f in slot.collect_fill_factors()
-                    ]
-                    if decide_bp_switch(phases, ts, post_halve_fs):
-                        plan.switch_to_phase = "1_over_t"
-        else:  # 1_over_t
-            # Mid-run merge in 1/t phase removed in Task 9.
-            # Keep for now so this task lands a clean delta.
-            if len(slot.workers) > 1:
+        if slot.phase != "halving":
+            return plan
+
+        if slot._flatness_mode == "per_walker":
+            should_halve = decide_collective_halve(
+                slot.collect_flatness_flags()
+            )
+        else:  # pooled
+            should_halve = _summed_histogram_flat_from_snapshots(
+                slot._last, slot._flatness_limit
+            )
+        if should_halve:
+            plan.halve = True
+            if (
+                slot._merge_cadence == "at_halve"
+                and len(slot.workers) > 1
+            ):
                 plan.merged_entropy = merge_entropies(
                     slot.collect_entropy_snapshots()
                 )
+            if (
+                slot._schedule == "1_over_t"
+                and not slot.has_unentered_walker()
+            ):
+                phases = ["halving"] * len(slot.workers)
+                ts = slot.collect_ts()
+                post_halve_fs = [
+                    f / 2.0 for f in slot.collect_fill_factors()
+                ]
+                if decide_bp_switch(phases, ts, post_halve_fs):
+                    plan.switch_to_phase = "1_over_t"
         return plan
 
     def current_energies(self) -> np.ndarray:

@@ -690,8 +690,8 @@ def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge(tmp_path):
         assert plan.switch_to_phase is None
 
 
-def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
-    """1/t phase + W=2 ⇒ always merges, regardless of merge_cadence."""
+def test_compute_plan_one_over_t_w2_no_midrun_merge(tmp_path):
+    """In 1/t phase, _compute_plan does not produce merged_entropy."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -717,9 +717,7 @@ def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
         slot.phase = "1_over_t"
         plan = pool._compute_plan(slot)
         assert plan.halve is False
-        # See test_compute_plan_halving_all_flat_w2_at_halve_cadence for the
-        # merge arithmetic; identical inputs collapse to {0: 0.0, 1: 1.0}.
-        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
+        assert plan.merged_entropy is None
         assert plan.switch_to_phase is None
 
 

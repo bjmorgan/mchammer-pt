@@ -50,11 +50,9 @@ MergeCadence = Literal["at_halve", "never"]
 
 - ``"at_halve"``: merge entropies at each collective halve event
   (Vogel et al. 2013). Default.
-- ``"never"``: no mid-run merge; walkers run fully independently until
-  the end-of-run finalisation step.
+- ``"never"``: no mid-run merge; walkers run fully independently.
 
-In the 1/t phase, no mid-run merge fires regardless of this setting
-(see ``finalise_for_reporting``).
+In the 1/t phase, no mid-run merge fires regardless of this setting.
 """
 
 
@@ -243,8 +241,7 @@ class WangLandauWindowGroup:
 
     - ``"at_halve"`` (default): merge entropies at each collective halve
       (Vogel et al. 2013 cadence).
-    - ``"never"``: no mid-run merge; a single end-of-run merge fires via
-      ``finalise_for_reporting()``.
+    - ``"never"``: no mid-run merge; walkers run fully independently.
 
     In the 1/t phase no mid-run merge fires regardless of cadence.
 
@@ -310,30 +307,27 @@ class WangLandauWindowGroup:
         Called after every block of MC steps. Reads each walker's
         current state, applies the configured flatness mode and merge
         cadence, mutates state in place. In the 1/t phase no mid-run
-        merge fires (regardless of ``merge_cadence``); end-of-run
-        merging is handled by ``finalise_for_reporting()``.
+        merge fires (regardless of ``merge_cadence``).
         """
         phase = self._replicas[0].ensemble._phase
 
-        if phase == "halving":
-            if self._flatness_mode == "per_walker":
-                should_halve = all(r.is_flat() for r in self._replicas)
-            else:  # pooled
-                should_halve = _summed_histogram_is_flat(self._replicas)
-            if should_halve:
-                for r in self._replicas:
-                    r.force_halve()
-                if (
-                    self._merge_cadence == "at_halve"
-                    and len(self._replicas) > 1
-                ):
-                    self._merge_entropies_into_all()
-                if self._schedule == "1_over_t":
-                    self._maybe_switch_to_one_over_t()
-        else:  # 1_over_t phase
-            # Mid-run merge in 1/t phase is removed in Task 9 (Fix 2).
-            # Keep for now so this task lands a clean delta.
-            self._merge_entropies_into_all()
+        if phase != "halving":
+            return
+
+        if self._flatness_mode == "per_walker":
+            should_halve = all(r.is_flat() for r in self._replicas)
+        else:  # pooled
+            should_halve = _summed_histogram_is_flat(self._replicas)
+        if should_halve:
+            for r in self._replicas:
+                r.force_halve()
+            if (
+                self._merge_cadence == "at_halve"
+                and len(self._replicas) > 1
+            ):
+                self._merge_entropies_into_all()
+            if self._schedule == "1_over_t":
+                self._maybe_switch_to_one_over_t()
 
     def _maybe_switch_to_one_over_t(self) -> None:
         """Flip every walker to 1/t phase if the collective condition holds.

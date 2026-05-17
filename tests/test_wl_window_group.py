@@ -685,3 +685,30 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
     assert _summed_histogram_flat_from_snapshots(snapshots, flatness_limit) == (
         _summed_histogram_is_flat(replicas)
     )
+
+
+def test_one_over_t_phase_no_midrun_merge_serial():
+    """In 1/t phase, walker entropies are not merged mid-run."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._phase = "1_over_t"
+        r.ensemble._schedule = "1_over_t"
+        r.ensemble._window_entry_step = 0
+        r.ensemble._fill_factor = 0.001
+    replicas[0].ensemble._entropy = {0: 1.0, 1: 2.0}
+    replicas[1].ensemble._entropy = {0: 3.0, 1: 4.0}
+
+    group = WangLandauWindowGroup(
+        replicas,
+        random_seed=0,
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+    )
+    group._run_coordinator_block()
+
+    # No merge in 1/t phase: per-walker entropies preserved.
+    assert replicas[0].ensemble._entropy[0] == pytest.approx(1.0)
+    assert replicas[1].ensemble._entropy[0] == pytest.approx(3.0)
