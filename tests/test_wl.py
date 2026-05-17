@@ -495,11 +495,8 @@ def test_wl_pt_resume_rejects_mismatched_ensemble_kwargs_hash(tmp_path):
 
 def test_wl_pt_process_pool_records_actual_ensemble_identity():
     """process_pool's checkpoint metadata reflects the workers' actual ensemble."""
-    from mchammer.ensembles import (  # type: ignore[import-untyped]
-        WangLandauEnsemble,
-    )
-
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     e0 = _initial_energy()
     with WangLandauParallelTempering.process_pool(
@@ -509,12 +506,12 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         energy_spacing=0.1,
         block_size=5,
         random_seed=0,
-        ensemble_cls=WangLandauEnsemble,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={"fill_factor_limit": 1e-3},
     ) as pt:
         expected_fqn = (
-            f"{WangLandauEnsemble.__module__}."
-            f"{WangLandauEnsemble.__qualname__}"
+            f"{CoordinatedWangLandauEnsemble.__module__}."
+            f"{CoordinatedWangLandauEnsemble.__qualname__}"
         )
         assert pt._ensemble_cls_fqn == expected_fqn
 
@@ -523,10 +520,10 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         assert pt._ensemble_kwargs_hash != empty_hash
 
 
-def test_wl_pt_n_walkers_1_creates_plain_replicas():
-    """n_walkers_per_window=1 (default) creates WangLandauReplica slots."""
+def test_wl_pt_n_walkers_1_wraps_in_window_groups():
+    """n_walkers_per_window=1 wraps each replica in a single-walker window group."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     e0 = _initial_energy()
     pt = WangLandauParallelTempering(
@@ -539,8 +536,9 @@ def test_wl_pt_n_walkers_1_creates_plain_replicas():
         n_walkers_per_window=1,
     )
     assert len(pt.pool) == 2
-    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
-    assert isinstance(pt.pool.replicas[1], WangLandauReplica)
+    for slot in pt.pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+        assert len(slot._replicas) == 1
 
 
 def test_wl_pt_n_walkers_2_creates_window_groups():
@@ -583,10 +581,9 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
         )
 
 
-def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
-    """n_walkers_per_window=[1, 2]: window 0 is a plain replica, window 1 is a group."""
+def test_wl_pt_n_walkers_per_window_sequence_creates_window_groups():
+    """n_walkers_per_window=[1, 2]: both windows wrap in WangLandauWindowGroup."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_replica import WangLandauReplica
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     e0 = _initial_energy()
@@ -599,7 +596,8 @@ def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
         random_seed=0,
         n_walkers_per_window=[1, 2],
     )
-    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
+    assert isinstance(pt.pool.replicas[0], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[0]._replicas) == 1
     assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
     assert len(pt.pool.replicas[1]._replicas) == 2
 

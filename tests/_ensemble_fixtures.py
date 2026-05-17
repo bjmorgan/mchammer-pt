@@ -13,6 +13,8 @@ from mchammer.ensembles import (  # type: ignore[import-untyped]
     WangLandauEnsemble,
 )
 
+from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
 
 class TaggedCanonicalEnsemble(CanonicalEnsemble):
     """CanonicalEnsemble subclass that stores an extra ``tag`` kwarg.
@@ -39,8 +41,8 @@ class HighAcceptanceCanonicalEnsemble(CanonicalEnsemble):
         return True
 
 
-class TaggedWangLandauEnsemble(WangLandauEnsemble):
-    """WangLandauEnsemble subclass that stores an extra ``tag`` kwarg.
+class TaggedWangLandauEnsemble(CoordinatedWangLandauEnsemble):
+    """CoordinatedWangLandauEnsemble subclass that stores an extra ``tag`` kwarg.
 
     Used to verify that ``ensemble_cls`` and ``ensemble_kwargs`` are
     forwarded through WangLandauReplica / orchestrator / pool

@@ -19,6 +19,8 @@ from ase import Atoms
 from icet import ClusterExpansion
 from mchammer.ensembles import WangLandauEnsemble
 
+from .wl_ensemble import CoordinatedWangLandauEnsemble
+
 from .base import BaseParallelTempering
 from .checkpoint import (
     _compute_ce_identity,
@@ -101,12 +103,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
         n_walkers_per_window: number of independent WL walkers per
             window. Accepts either a single ``int`` applied uniformly
             to all windows, or a ``Sequence[int]`` with one value per
-            window. Windows with a count of 1 use a plain
-            `WangLandauReplica`; windows with a count > 1 use a
-            `WangLandauWindowGroup` that advances all walkers in
-            sequence, synchronises fill factors, and averages
-            entropies each cycle. Checkpointing is not supported for
-            any window with count > 1.
+            window. Every window is wrapped in a
+            `WangLandauWindowGroup`; the coordinator runs a collective
+            flatness gate and halves all walkers in lockstep. With
+            count > 1 the group also merges entropies across walkers
+            (cadence controlled by ``sync_policy``). Checkpointing is
+            not supported for any window with count > 1.
+        sync_policy: entropy-sharing cadence between walkers in a
+            multi-walker window. ``"block"`` (default) merges every
+            block; ``"halving"`` (Vogel et al. 2013) merges only at
+            collective halving events. Both policies share the same
+            collective halving gate.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -128,7 +135,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",
@@ -194,7 +201,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         master_seed = int(child_seeds[-1].generate_state(1)[0])
 
         if pool is not None and (
-            ensemble_cls is not WangLandauEnsemble or ensemble_kwargs
+            ensemble_cls is not CoordinatedWangLandauEnsemble or ensemble_kwargs
         ):
             raise ValueError(
                 "ensemble_cls / ensemble_kwargs cannot be combined with an "
@@ -375,7 +382,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
@@ -472,7 +479,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
@@ -566,7 +573,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         bin_size_exponent: float = 1.0,
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",
@@ -625,7 +632,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         random_seed: int,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",

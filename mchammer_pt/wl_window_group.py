@@ -283,7 +283,9 @@ class WangLandauWindowGroup:
             r.refresh_last_state()
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+        if len(self._replicas) > 1:
+            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+        return self._replicas[0].snapshot_for_checkpoint()
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""
