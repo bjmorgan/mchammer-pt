@@ -799,3 +799,31 @@ def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
             n_walkers_per_window=2,
             data_container_file="test.hdf5",
         )
+
+
+def test_wl_pt_serial_w1_slot_is_window_group():
+    """Serial path always wraps replicas in WangLandauWindowGroup, even W=1."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=1,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+    )
+    for slot in pt._pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)

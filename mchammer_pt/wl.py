@@ -170,33 +170,27 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
         seed_sequence = np.random.SeedSequence(int(random_seed))
-        if all(w == 1 for w in walkers_per_window):
-            # Single-walker path: one seed per window plus one master seed.
-            child_seeds = seed_sequence.spawn(n_windows + 1)
-            replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
-            master_seed = int(child_seeds[-1].generate_state(1)[0])
-        else:
-            # Per-window path. Walker seeds are packed contiguously in
-            # window order, followed by one group seed per window.
-            total_walker_seeds = sum(walkers_per_window)
-            child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
-            offsets: list[int] = []
-            offset = 0
-            for ww in walkers_per_window:
-                offsets.append(offset)
-                offset += ww
-            walker_seeds = [
-                [
-                    int(child_seeds[offsets[w] + j].generate_state(1)[0])
-                    for j in range(walkers_per_window[w])
-                ]
-                for w in range(n_windows)
+        # Walker seeds are packed contiguously in window order, followed
+        # by one group seed per window, then one master seed.
+        total_walker_seeds = sum(walkers_per_window)
+        child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
+        offsets: list[int] = []
+        offset = 0
+        for ww in walkers_per_window:
+            offsets.append(offset)
+            offset += ww
+        walker_seeds = [
+            [
+                int(child_seeds[offsets[w] + j].generate_state(1)[0])
+                for j in range(walkers_per_window[w])
             ]
-            group_seeds = [
-                int(child_seeds[total_walker_seeds + w].generate_state(1)[0])
-                for w in range(n_windows)
-            ]
-            master_seed = int(child_seeds[-1].generate_state(1)[0])
+            for w in range(n_windows)
+        ]
+        group_seeds = [
+            int(child_seeds[total_walker_seeds + w].generate_state(1)[0])
+            for w in range(n_windows)
+        ]
+        master_seed = int(child_seeds[-1].generate_state(1)[0])
 
         if pool is not None and (
             ensemble_cls is not WangLandauEnsemble or ensemble_kwargs
@@ -209,62 +203,35 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 "process_pool(...) which forwards them."
             )
         if pool is None:
-            if all(w == 1 for w in walkers_per_window):
-                replicas = [
+            from .wl_window_group import WangLandauWindowGroup
+
+            slots: list[WangLandauSlot] = []
+            for w in range(n_windows):
+                lo, hi = windows[w]
+                W_w = walkers_per_window[w]
+                walker_replicas = [
                     WangLandauReplica(
                         cluster_expansion=cluster_expansion,
-                        atoms=a,
+                        atoms=atoms_list[w],
                         energy_spacing=energy_spacing,
                         energy_limit_left=lo,
                         energy_limit_right=hi,
-                        random_seed=seed,
+                        random_seed=walker_seeds[w][j],
                         ensemble_cls=ensemble_cls,
                         ensemble_kwargs=ensemble_kwargs,
                     )
-                    for a, (lo, hi), seed in zip(
-                        atoms_list, windows, replica_seeds, strict=True
-                    )
+                    for j in range(W_w)
                 ]
-                pool = SerialWangLandauPool(replicas, energy_spacing=energy_spacing)
-            else:
-                from .wl_window_group import WangLandauWindowGroup
-
-                slots: list[WangLandauSlot] = []
-                for w in range(n_windows):
-                    lo, hi = windows[w]
-                    W_w = walkers_per_window[w]
-                    if W_w == 1:
-                        slot: WangLandauSlot = (
-                            WangLandauReplica(
-                                cluster_expansion=cluster_expansion,
-                                atoms=atoms_list[w],
-                                energy_spacing=energy_spacing,
-                                energy_limit_left=lo,
-                                energy_limit_right=hi,
-                                random_seed=walker_seeds[w][0],
-                                ensemble_cls=ensemble_cls,
-                                ensemble_kwargs=ensemble_kwargs,
-                            )
-                        )
-                    else:
-                        walker_replicas = [
-                            WangLandauReplica(
-                                cluster_expansion=cluster_expansion,
-                                atoms=atoms_list[w],
-                                energy_spacing=energy_spacing,
-                                energy_limit_left=lo,
-                                energy_limit_right=hi,
-                                random_seed=walker_seeds[w][j],
-                                ensemble_cls=ensemble_cls,
-                                ensemble_kwargs=ensemble_kwargs,
-                            )
-                            for j in range(W_w)
-                        ]
-                        slot = WangLandauWindowGroup(
-                            walker_replicas, random_seed=group_seeds[w]
-                        )
-                    slots.append(slot)
-                pool = SerialWangLandauPool(slots, energy_spacing=energy_spacing)
+                slots.append(
+                    WangLandauWindowGroup(
+                        walker_replicas,
+                        random_seed=group_seeds[w],
+                        sync_policy="block",  # Task 13 will replace with kwarg
+                    )
+                )
+            pool = SerialWangLandauPool(
+                slots, energy_spacing=energy_spacing
+            )
         else:
             if len(pool) != len(windows):
                 raise ValueError(
