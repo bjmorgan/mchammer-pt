@@ -566,7 +566,7 @@ class ProcessWangLandauWindow:
         self.exchange_idx: int = 0
         self._sync_policy: SyncPolicy = sync_policy
         self._schedule: str = schedule
-        self._phase: str = "halving"
+        self.phase: str = "halving"
         self._last_flags: list[bool] = [False] * len(workers)
         self._last_fs: list[float] = [1.0] * len(workers)
         self._last_entropies: list[dict[int, float]] = [
@@ -883,7 +883,7 @@ class ProcessWangLandauPool:
         Mirrors ``WangLandauWindowGroup._run_coordinator_block`` but
         applies state via pipe commands to remote workers.
         """
-        if slot._phase == "halving":
+        if slot.phase == "halving":
             flags = slot.collect_flatness_flags()
             if decide_collective_halve(flags, slot._sync_policy):
                 slot.force_halve_all()
@@ -921,7 +921,7 @@ class ProcessWangLandauPool:
         fs = slot.collect_fill_factors()
         if decide_bp_switch(phases, ts, fs):
             slot.set_phase_all("1_over_t")
-            slot._phase = "1_over_t"
+            slot.phase = "1_over_t"
 
     def current_energies(self) -> np.ndarray:
         self._check_open()

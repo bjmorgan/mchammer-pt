@@ -43,13 +43,7 @@ def _validate_sync_policy(sync_policy: Any) -> None:
 
 
 def decide_collective_halve(flags: list[bool], policy: SyncPolicy) -> bool:
-    """Return ``True`` iff all walkers are flat (collective gate).
-
-    The halve decision is identical for both ``"block"`` and
-    ``"halving"`` policies; the policy parameter is accepted for
-    symmetry with other policy functions and to future-proof the
-    signature.
-    """
+    """Return ``True`` iff all walkers are flat (collective gate)."""
     if not flags:
         return False
     return all(flags)
@@ -58,17 +52,16 @@ def decide_collective_halve(flags: list[bool], policy: SyncPolicy) -> bool:
 def decide_bp_switch(
     phases: list[str], ts: list[int], fs: list[float]
 ) -> bool:
-    """Return ``True`` iff all walkers should flip from halving to 1/t.
+    """Return ``True`` iff every walker should flip to the 1/t phase.
+
+    The collective Belardinelli-Pereyra switch fires when every walker
+    is still in the halving phase and every walker satisfies
+    ``1/t > f``.
 
     Args:
         phases: per-walker ``_phase`` strings.
         ts: per-walker ``step - _window_entry_step + 1``.
         fs: per-walker ``_fill_factor`` after the collective halve.
-
-    The collective BP switch fires when every walker is still in the
-    halving phase and every walker satisfies the natural condition
-    ``1/t > f``. The check is symmetric with mchammer's per-walker
-    switch but enforced at the window level.
     """
     if not phases:
         return False

@@ -10,16 +10,11 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):
     """`WangLandauEnsemble` with internal halving suppressed.
 
     Bin counters and periodic entropy reshift behave identically to
-    upstream. The following behaviours are suppressed relative to
-    upstream: the flatness check, halving, `_fill_factor_history`
-    recording, histogram reset, BP-phase transition, `_entropy_history`
-    snapshots, and `_converged` writes in the 1/t branch.
-    A `WangLandauWindowGroup` coordinator runs the flatness check
-    across all walkers in the window and triggers collective halving
-    via `WangLandauReplica.force_halve()`.
-
-    Direct construction is supported; in normal use this class is
-    constructed by `WangLandauReplica`.
+    upstream. The flatness check, halving, ``_fill_factor_history``
+    recording, histogram reset, BP-phase transition,
+    ``_entropy_history`` snapshots, and ``_converged`` writes in the
+    1/t branch are all suppressed; ``WangLandauWindowGroup`` owns
+    those decisions and applies them via ``WangLandauReplica``.
     """
 
     def _update_entropy(self, bin_cur: int) -> None:
