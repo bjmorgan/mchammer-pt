@@ -46,6 +46,11 @@ def test_update_entropy_does_not_halve_on_synthetic_flat_histogram():
 
     assert e._fill_factor == pytest.approx(f_before)
     assert len(e._fill_factor_history) == history_len_before
+    # Bin updates survive: the called bin increments, others remain
+    # unchanged (upstream halving would zero them).
+    assert e._histogram[0] == 1001
+    assert e._histogram[1] == 1000
+    assert e._histogram[2] == 1000
 
 
 def test_update_entropy_reshifts_entropy_periodically():
