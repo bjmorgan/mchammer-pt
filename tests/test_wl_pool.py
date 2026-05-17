@@ -613,7 +613,7 @@ def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
 
 
 def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
-    """The coordinator's plan does not schedule a BP switch when any walker is unentered."""
+    """Coordinator plan omits BP switch when any walker has not entered."""
     from mchammer_pt.parallel.processes import (
         ProcessWangLandauPool,
         ProcessWangLandauWindow,
