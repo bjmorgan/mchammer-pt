@@ -36,12 +36,10 @@ from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
-    SyncPolicy,  # legacy, removed Task 7
     WalkerPostBlockState,
     _summed_histogram_flat_from_snapshots,
     _validate_flatness_mode,
     _validate_merge_cadence,
-    _validate_sync_policy,  # legacy, removed Task 7
     decide_bp_switch,
     decide_collective_halve,
     merge_entropies,
@@ -673,10 +671,12 @@ class ProcessWangLandauPool:
             schedule, pass ``ensemble_kwargs={'schedule':
             '1_over_t'}``. Spawned workers re-import by FQN;
             interactive-``__main__`` classes are not supported.
-        sync_policy: entropy-sharing cadence — see
-            ``WangLandauParallelTempering`` for details.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Must be picklable for the spawn boundary.
+        flatness_mode: ``"per_walker"`` (published Vogel) or ``"pooled"``
+            (default; halve when summed histogram is flat).
+        merge_cadence: ``"at_halve"`` (default; Vogel cadence) or
+            ``"never"`` (no mid-run merge, end-of-run finalisation only).
     """
 
     def __init__(
@@ -692,19 +692,14 @@ class ProcessWangLandauPool:
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
-        _validate_sync_policy(sync_policy)
-        self._sync_policy: SyncPolicy = sync_policy  # legacy, removed Task 7
-        # Migration shim: derive the new params from sync_policy until
-        # Task 7 promotes them to first-class constructor arguments.
-        # Both "block" and "halving" map to merge_cadence="at_halve" — the
-        # "block"-only every-block merge behaviour has no equivalent in
-        # the new API (it had no defensible interpretation under the
-        # corrected merge algorithm and is removed).
-        self._flatness_mode: FlatnessMode = "per_walker"
-        self._merge_cadence: MergeCadence = "at_halve"
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
         ]

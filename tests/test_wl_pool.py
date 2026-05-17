@@ -518,8 +518,8 @@ def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
         assert len(result[1]) == 2   # window 1: 2 walkers
 
 
-def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
-    """sync_policy='halving' does not merge entropy between halvings."""
+def test_process_wl_pool_at_halve_cadence_skips_non_halve_merge(tmp_path):
+    """merge_cadence='at_halve' + no halve event ⇒ no inter-walker merge."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -530,12 +530,13 @@ def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
         energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-        sync_policy="halving",
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
     ) as pool:
         # Push divergent entropies; if any merge happens during
         # advance(0) (no MC, so no halve possible), the two walker
-        # entropies would converge. Under "halving" policy with no
-        # halve event, they must stay distinct.
+        # entropies would converge. Under merge_cadence='at_halve' with
+        # no halve event, they must stay distinct.
         slot = pool._slots[0]
         _, c0 = slot.workers[0]
         _, c1 = slot.workers[1]
@@ -562,6 +563,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
         seeds=[0],
         n_walkers_per_window=2,
         ensemble_kwargs={"schedule": "1_over_t"},
+        flatness_mode="per_walker",
     ) as pool:
         slot: ProcessWangLandauWindow = pool._slots[0]
         slot._schedule = "1_over_t"
@@ -626,7 +628,7 @@ def _make_compute_plan_slot(
     return slot
 
 
-def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
+def test_compute_plan_halving_all_flat_w2_at_halve_cadence(tmp_path):
     """W=2 + all flat + halving phase ⇒ halve + merged entropy plan."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
@@ -638,7 +640,6 @@ def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
         energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-        sync_policy="block",
     ) as pool:
         slot = _make_compute_plan_slot(
             pool,
@@ -660,7 +661,7 @@ def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
         assert plan.switch_to_phase is None
 
 
-def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
+def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge(tmp_path):
     """halving phase + not flat + merge_cadence='at_halve' => no halve and no merge."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
@@ -672,7 +673,6 @@ def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
         energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-        sync_policy="halving",
     ) as pool:
         slot = _make_compute_plan_slot(
             pool,
@@ -691,7 +691,7 @@ def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
 
 
 def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
-    """1/t phase + W=2 ⇒ always merges, regardless of sync_policy."""
+    """1/t phase + W=2 ⇒ always merges, regardless of merge_cadence."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -702,7 +702,6 @@ def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
         energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-        sync_policy="halving",
         ensemble_kwargs={"schedule": "1_over_t"},
     ) as pool:
         slot = _make_compute_plan_slot(
@@ -718,7 +717,7 @@ def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
         slot.phase = "1_over_t"
         plan = pool._compute_plan(slot)
         assert plan.halve is False
-        # See test_compute_plan_halving_all_flat_w2_block_policy for the
+        # See test_compute_plan_halving_all_flat_w2_at_halve_cadence for the
         # merge arithmetic; identical inputs collapse to {0: 0.0, 1: 1.0}.
         assert plan.merged_entropy == {0: 0.0, 1: 1.0}
         assert plan.switch_to_phase is None
