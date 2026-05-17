@@ -539,13 +539,14 @@ class ProcessPool:
 
 @dataclass
 class _CoordinatorPlan:
-    """Pure-Python decision record produced by the coordinator's
-    decide phase and consumed by its execute phase.
+    """Decisions produced by the decide phase, consumed by the execute phase.
 
-    All three actions are independent and applied as separate
-    batched IPC rounds: FORCE_HALVE first, SET_ENTROPY second,
-    SET_PHASE last (the same order as the previous serial
-    per-window coordinator).
+    The execute phase applies actions in three independent batched
+    IPC rounds: FORCE_HALVE first, SET_ENTROPY second, SET_PHASE
+    last. The ordering is structural: FORCE_HALVE zeroes histograms
+    and halves the live ``_fill_factor``; SET_ENTROPY overwrites the
+    entropy dict on each walker; SET_PHASE flips ``_phase`` and
+    (for ``"1_over_t"``) updates ``_fill_factor`` to ``1/t``.
     """
 
     halve: bool
@@ -602,22 +603,6 @@ class ProcessWangLandauWindow:
         """Connection to the current exchange-representative walker."""
         return self.workers[self.exchange_idx][1]
 
-    def advance(self, n_steps: int) -> None:
-        """Send ADVANCE to all walkers; collect piggybacked state.
-
-        After this call, ``self._last[i]`` holds the post-block
-        ``WalkerPostBlockState`` for walker ``i``.
-        """
-        for _, conn in self.workers:
-            conn.send(("ADVANCE", int(n_steps)))
-        for i, (_, conn) in enumerate(self.workers):
-            reply = conn.recv()
-            if reply.status != "OK":
-                raise RuntimeError(
-                    f"worker {i} ADVANCE failed: {reply.payload}"
-                )
-            self._last[i] = reply.payload
-
     def collect_flatness_flags(self) -> list[bool]:
         return [s.is_flat for s in self._last]
 
@@ -647,44 +632,6 @@ class ProcessWangLandauWindow:
     def has_unentered_walker(self) -> bool:
         """True iff any walker has not yet reached its window."""
         return any(s.window_entry_step is None for s in self._last)
-
-    def set_entropy_all(self, merged: dict[int, float]) -> None:
-        """Send SET_ENTROPY to all workers with the merged dict."""
-        for _, conn in self.workers:
-            conn.send(("SET_ENTROPY", dict(merged)))
-        for i, (_, conn) in enumerate(self.workers):
-            reply = conn.recv()
-            if reply.status != "OK":
-                raise RuntimeError(
-                    f"worker {i} SET_ENTROPY failed: {reply.payload}"
-                )
-        for i, s in enumerate(self._last):
-            self._last[i] = s._replace(entropy=dict(merged))
-
-    def force_halve_all(self) -> None:
-        """Send FORCE_HALVE to all workers."""
-        for _, conn in self.workers:
-            conn.send(("FORCE_HALVE",))
-        for i, (_, conn) in enumerate(self.workers):
-            reply = conn.recv()
-            if reply.status != "OK":
-                raise RuntimeError(
-                    f"worker {i} FORCE_HALVE failed: {reply.payload}"
-                )
-        self._last = [
-            s._replace(fill_factor=s.fill_factor / 2.0) for s in self._last
-        ]
-
-    def set_phase_all(self, phase: str) -> None:
-        """Send SET_PHASE to all workers."""
-        for _, conn in self.workers:
-            conn.send(("SET_PHASE", str(phase)))
-        for i, (_, conn) in enumerate(self.workers):
-            reply = conn.recv()
-            if reply.status != "OK":
-                raise RuntimeError(
-                    f"worker {i} SET_PHASE failed: {reply.payload}"
-                )
 
 
 class ProcessWangLandauPool:
@@ -891,10 +838,13 @@ class ProcessWangLandauPool:
         return self._energy_spacing
 
     def advance_all(self, n_steps: int) -> None:
+        # Two-phase coordinator: ADVANCE, then DECIDE (pure), then
+        # batched EXECUTE (FORCE_HALVE, SET_ENTROPY, SET_PHASE, each
+        # parallelised across slots).
         self._check_open()
         try:
-            # Phase 1: broadcast ADVANCE; gather post-block state for
-            # every worker in every window in a single fan-out.
+            # ADVANCE: broadcast to every worker in every window in a
+            # single fan-out; gather post-block state into each slot.
             all_targets: list[tuple[Connection, str]] = [
                 (conn, f"window {i} walker {w}")
                 for i, slot in enumerate(self._slots)
@@ -903,16 +853,20 @@ class ProcessWangLandauPool:
             payloads = broadcast_gather(
                 all_targets, ("ADVANCE", int(n_steps))
             )
-            offset = 0
-            for slot in self._slots:
-                for w in range(len(slot.workers)):
-                    slot._last[w] = payloads[offset]
-                    offset += 1
+            walker_addrs = [
+                (slot, w)
+                for slot in self._slots
+                for w in range(len(slot.workers))
+            ]
+            for (slot, w), payload in zip(
+                walker_addrs, payloads, strict=True
+            ):
+                slot._last[w] = payload
 
-            # Phase 2: pure-Python coordinator decisions per slot.
+            # DECIDE: per-slot coordinator decisions; no IPC.
             plans = [self._compute_plan(slot) for slot in self._slots]
 
-            # Phase 3a: batched FORCE_HALVE across all halving slots.
+            # EXECUTE step 1: batched FORCE_HALVE across halving slots.
             halve_targets = [
                 (conn, f"window {i} walker {w}")
                 for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
@@ -928,7 +882,7 @@ class ProcessWangLandauPool:
                             for s in slot._last
                         ]
 
-            # Phase 3b: batched SET_ENTROPY with per-slot merged dicts.
+            # EXECUTE step 2: batched SET_ENTROPY with per-slot dicts.
             merge_targets = [
                 (
                     conn,
@@ -949,22 +903,24 @@ class ProcessWangLandauPool:
                             for s in slot._last
                         ]
 
-            # Phase 3c: batched SET_PHASE across switching slots.
+            # EXECUTE step 3: batched SET_PHASE with per-slot phase.
             switch_targets = [
-                (conn, f"window {i} walker {w}")
+                (
+                    conn,
+                    f"window {i} walker {w}",
+                    ("SET_PHASE", plan.switch_to_phase),
+                )
                 for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
                 if plan.switch_to_phase is not None
                 for w, (_, conn) in enumerate(slot.workers)
             ]
             if switch_targets:
-                broadcast_gather(
-                    switch_targets, ("SET_PHASE", "1_over_t")
-                )
+                fanout_gather(switch_targets)
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.switch_to_phase is not None:
                         slot.phase = plan.switch_to_phase
 
-            # Phase 4: per-slot exchange-walker selection (local-only).
+            # Exchange-walker selection (local-only, no IPC).
             for slot in self._slots:
                 slot.exchange_idx = int(
                     slot.rng.integers(0, len(slot.workers))

@@ -6,6 +6,10 @@ import numpy as np
 import pytest
 
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
+from mchammer_pt.parallel.processes import (
+    ProcessWangLandauPool,
+    ProcessWangLandauWindow,
+)
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
@@ -614,10 +618,6 @@ def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
 
 def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
     """Coordinator plan omits BP switch when any walker has not entered."""
-    from mchammer_pt.parallel.processes import (
-        ProcessWangLandauPool,
-        ProcessWangLandauWindow,
-    )
     from mchammer_pt.wl_window_group import WalkerPostBlockState
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -656,6 +656,183 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
         # walker has no defined ``t``.
         assert plan.halve is True
         assert plan.switch_to_phase is None
+
+
+def _make_compute_plan_slot(
+    pool: ProcessWangLandauPool,
+    *,
+    is_flat: bool,
+    schedule: str,
+    sync_policy: str,
+    window_entry_step: int | None,
+    fill_factor: float,
+    entropy: dict[int, float],
+) -> ProcessWangLandauWindow:
+    """Set up a slot's cached state for a _compute_plan test."""
+    from mchammer_pt.wl_window_group import WalkerPostBlockState
+
+    slot = pool._slots[0]
+    slot._schedule = schedule
+    slot._sync_policy = sync_policy  # type: ignore[assignment]
+    n = len(slot.workers)
+    slot._last = [
+        WalkerPostBlockState(
+            is_flat=is_flat,
+            fill_factor=fill_factor,
+            entropy=dict(entropy),
+            step=100,
+            window_entry_step=window_entry_step,
+        )
+        for _ in range(n)
+    ]
+    return slot
+
+
+def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
+    """W=2 + all flat + halving phase ⇒ halve + merged entropy plan."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="block",
+    ) as pool:
+        slot = _make_compute_plan_slot(
+            pool,
+            is_flat=True,
+            schedule="halving",
+            sync_policy="block",
+            window_entry_step=0,
+            fill_factor=1.0,
+            entropy={0: 1.0, 1: 2.0},
+        )
+        plan = pool._compute_plan(slot)
+        assert plan.halve is True
+        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        assert plan.switch_to_phase is None
+
+
+def test_compute_plan_halving_not_flat_block_policy_merges_anyway(tmp_path):
+    """sync_policy='block' + not flat ⇒ no halve, but merge fires."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="block",
+    ) as pool:
+        slot = _make_compute_plan_slot(
+            pool,
+            is_flat=False,
+            schedule="halving",
+            sync_policy="block",
+            window_entry_step=0,
+            fill_factor=1.0,
+            entropy={0: 1.0, 1: 2.0},
+        )
+        plan = pool._compute_plan(slot)
+        assert plan.halve is False
+        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        assert plan.switch_to_phase is None
+
+
+def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
+    """sync_policy='halving' + not flat ⇒ no halve and no merge."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="halving",
+    ) as pool:
+        slot = _make_compute_plan_slot(
+            pool,
+            is_flat=False,
+            schedule="halving",
+            sync_policy="halving",
+            window_entry_step=0,
+            fill_factor=1.0,
+            entropy={0: 1.0, 1: 2.0},
+        )
+        plan = pool._compute_plan(slot)
+        assert plan.halve is False
+        assert plan.merged_entropy is None
+        assert plan.switch_to_phase is None
+
+
+def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
+    """1/t phase + W=2 ⇒ always merges, regardless of sync_policy."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        sync_policy="halving",
+        ensemble_kwargs={"schedule": "1_over_t"},
+    ) as pool:
+        slot = _make_compute_plan_slot(
+            pool,
+            is_flat=False,
+            schedule="1_over_t",
+            sync_policy="halving",
+            window_entry_step=0,
+            fill_factor=0.001,
+            entropy={0: 1.0, 1: 2.0},
+        )
+        slot.phase = "1_over_t"
+        plan = pool._compute_plan(slot)
+        assert plan.halve is False
+        assert plan.merged_entropy == {0: 1.0, 1: 2.0}
+        assert plan.switch_to_phase is None
+
+
+def test_compute_plan_halving_collective_halve_triggers_bp_switch(tmp_path):
+    """All flat + 1/t schedule + 1/t > post-halve f ⇒ halve + switch_to_phase."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        ensemble_kwargs={"schedule": "1_over_t"},
+    ) as pool:
+        # f tiny ⇒ 1/t > f/2 trivially for any reasonable t.
+        slot = _make_compute_plan_slot(
+            pool,
+            is_flat=True,
+            schedule="1_over_t",
+            sync_policy="block",
+            window_entry_step=0,
+            fill_factor=1e-6,
+            entropy={0: 1.0, 1: 2.0},
+        )
+        plan = pool._compute_plan(slot)
+        assert plan.halve is True
+        assert plan.switch_to_phase == "1_over_t"
 
 
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):

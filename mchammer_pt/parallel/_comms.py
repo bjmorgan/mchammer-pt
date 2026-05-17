@@ -124,6 +124,19 @@ def fanout_gather(
     ``SET_ENTROPY`` with different merged entropies). The send phase
     is fully issued before any recv, so all workers run concurrently.
 
+    Replies are awaited in target order: a slow worker at position
+    ``k`` blocks the gather even if workers at positions > ``k`` have
+    already replied. The wall-clock cost is therefore the slowest
+    worker, not the sum of worker costs.
+
+    Send-phase ``BrokenPipeError`` (worker exited before its send
+    landed) raises ``RuntimeError`` mid-send: targets earlier in the
+    list have already received their message and may continue
+    processing, while targets at and after the failure point have
+    not. Recv-phase failures behave the same as ``broadcast_gather``
+    (``recv_reply`` raises and earlier successful recvs are
+    discarded).
+
     Args:
         targets: list of ``(connection, label, msg)`` triples. Each
             message is sent to its paired connection; the op tag

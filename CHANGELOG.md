@@ -46,6 +46,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window_entry_step)`` so the coordinator can run with minimal
   round-trips.
 
+### Fixed
+
+- ``WangLandauParallelTempering.resume`` now wraps each restored
+  replica in a single-walker ``WangLandauWindowGroup`` so the
+  coordinator drives halving. Before the fix, resumed runs used
+  bare ``WangLandauReplica`` slots, which under the default
+  ``CoordinatedWangLandauEnsemble`` (halving-suppressed) silently
+  produced no halving and never converged.
+- ``_fill_factor_history`` no longer records the Belardinelli-
+  Pereyra phase transition at the same step as the halve. The dict
+  now records halve events only, restoring symmetry with
+  ``_entropy_history`` so downstream analysis that pairs the two
+  dicts sees coherent post-halve state at each key.
+
+### Performance
+
+- Process-pool ``advance_all`` broadcasts ``ADVANCE`` across every
+  worker in every window in a single fan-out, then runs the
+  coordinator decisions in a separate pure phase, then batches
+  follow-up commands (``FORCE_HALVE`` / ``SET_ENTROPY`` /
+  ``SET_PHASE``) across slots via ``broadcast_gather`` /
+  ``fanout_gather``. Previously ``advance_all`` ran each window's
+  MC and follow-up commands serially, costing a factor of
+  ``len(slots)`` in wall-clock per block.
+
 ### Notes
 
 - Output APIs (``WindowResult.get_entropy``, ``get_histogram``,
