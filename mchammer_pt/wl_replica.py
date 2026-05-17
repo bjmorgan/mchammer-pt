@@ -179,7 +179,7 @@ class WangLandauReplica:
         energy_limit_right: float | None,
         random_seed: int,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
@@ -344,23 +344,26 @@ class WangLandauReplica:
         return bool(np.all(histogram >= limit))
 
     def force_halve(self) -> None:
-        """Force one fill-factor halving, bypassing mchammer's flatness check.
+        """Halve ``_fill_factor`` and record the event in history.
 
         Halves ``_fill_factor``, records the new value in both
-        ``_fill_factor_history`` and ``_entropy_history`` under a
-        fresh key, and resets the histogram to zero (preserving keys
-        so the flatness check stays valid). The entropy snapshot
-        mirrors mchammer's natural halving, which always records both
-        histories at the same step. Used by multi-walker entropy sync
-        to bring lagging walkers up to the most-halved fill factor.
+        ``_fill_factor_history`` and ``_entropy_history`` keyed by
+        the current MC step (matching upstream mchammer's halving
+        convention), and resets the histogram counts to zero while
+        preserving keys. Called by ``WangLandauWindowGroup`` when
+        the collective flatness gate fires. Sets ``_converged``
+        when ``_fill_factor <= _fill_factor_limit``, since
+        ``CoordinatedWangLandauEnsemble`` suppresses the
+        ``_converged`` write that upstream's ``_update_entropy``
+        would have performed.
         """
         from collections import OrderedDict
 
         e = self._ensemble
         e._fill_factor /= 2.0
-        next_key = max(e._fill_factor_history, default=-1) + 1
-        e._fill_factor_history[next_key] = e._fill_factor
-        e._entropy_history[next_key] = OrderedDict(
+        step_key = int(e.step)
+        e._fill_factor_history[step_key] = e._fill_factor
+        e._entropy_history[step_key] = OrderedDict(
             sorted(e._entropy.items())
         )
         e._histogram = dict.fromkeys(e._histogram, 0)
@@ -562,7 +565,7 @@ class WangLandauReplica:
         energy_limit_left: float | None,
         energy_limit_right: float | None,
         random_seed: int,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,

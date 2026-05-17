@@ -101,7 +101,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         data_container_file: optional path; if given, `run` writes a
             schema-3 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble`. To use the 1/t schedule, pass
+            ``CoordinatedWangLandauEnsemble``; must be a subclass of
+            it. To use the 1/t schedule, pass
             ``ensemble_kwargs={'schedule': '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
         n_walkers_per_window: number of independent WL walkers per
@@ -143,7 +144,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",
@@ -391,7 +392,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
@@ -488,7 +489,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         path: Path | str,
         *,
         cluster_expansion: ClusterExpansion,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
     ) -> WangLandauParallelTempering:
         """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
@@ -582,7 +583,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         bin_size_exponent: float = 1.0,
         pool: WangLandauPool | None = None,
         data_container_file: Path | str | None = None,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",
@@ -641,7 +642,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         random_seed: int,
         data_container_file: Path | str | None = None,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
         sync_policy: SyncPolicy = "block",

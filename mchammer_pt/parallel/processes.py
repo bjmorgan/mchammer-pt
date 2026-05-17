@@ -682,10 +682,13 @@ class ProcessWangLandauPool:
         n_walkers_per_window: walkers per energy window; > 1 enables
             multi-walker entropy sync after each block.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble`. To use the 1/t schedule, pass
-            ``ensemble_kwargs={'schedule': '1_over_t'}``. Spawned
-            workers re-import by FQN; interactive-``__main__``
-            classes are not supported.
+            ``CoordinatedWangLandauEnsemble``; must be a subclass of
+            it (the coordinator owns halving). To use the 1/t
+            schedule, pass ``ensemble_kwargs={'schedule':
+            '1_over_t'}``. Spawned workers re-import by FQN;
+            interactive-``__main__`` classes are not supported.
+        sync_policy: entropy-sharing cadence — see
+            ``WangLandauParallelTempering`` for details.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Must be picklable for the spawn boundary.
     """
@@ -699,7 +702,7 @@ class ProcessWangLandauPool:
         seeds: Sequence[int],
         *,
         n_walkers_per_window: int | Sequence[int] = 1,
-        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         sync_policy: SyncPolicy = "block",
     ) -> None:

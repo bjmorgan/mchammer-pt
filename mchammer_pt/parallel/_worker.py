@@ -34,9 +34,6 @@ REWL-only opcodes (``WangLandauWorker``):
   -> ``Reply("OK", ..., (g_at_E_i, g_at_E_j))``
 - ``("CONVERGED",)`` -> ``Reply("OK", ..., bool)``
 - ``("WL_STATS",)`` -> ``Reply("OK", ..., dict)``
-- ``("GET_ENTROPY_SYNC_STATE",)`` -> ``Reply("OK", ..., dict)``
-- ``("APPLY_ENTROPY_SYNC", merged_entropy, extra_halvings)``
-  -> ``Reply("OK", ..., None)``
 - ``("GET_ENTROPY",)`` -> ``Reply("OK", ..., dict)``
 - ``("SET_ENTROPY", merged_entropy)`` -> ``Reply("OK", ..., None)``
 - ``("FORCE_HALVE",)`` -> ``Reply("OK", ..., None)``
@@ -290,8 +287,6 @@ class WangLandauWorker(BaseWorker):
             "LOG_G_AT": self._handle_log_g_at,
             "CONVERGED": self._handle_converged,
             "WL_STATS": self._handle_wl_stats,
-            "GET_ENTROPY_SYNC_STATE": self._handle_get_entropy_sync_state,
-            "APPLY_ENTROPY_SYNC": self._handle_apply_entropy_sync,
             "GET_ENTROPY": self._handle_get_entropy,
             "SET_ENTROPY": self._handle_set_entropy,
             "FORCE_HALVE": self._handle_force_halve,
@@ -346,21 +341,6 @@ class WangLandauWorker(BaseWorker):
 
     def _handle_wl_stats(self, cmd: tuple[Any, ...]) -> None:
         self._reply(self._replica.window_stats())
-
-    def _handle_get_entropy_sync_state(self, cmd: tuple[Any, ...]) -> None:
-        e = self._replica.ensemble
-        self._reply({
-            "entropy": dict(e._entropy),
-            "fill_factor_history_len": len(e._fill_factor_history),
-            "histogram": dict(e._histogram),
-        })
-
-    def _handle_apply_entropy_sync(self, cmd: tuple[Any, ...]) -> None:
-        _, merged_entropy, extra_halvings = cmd
-        for _ in range(extra_halvings):
-            self._replica.force_halve()
-        self._replica.ensemble._entropy = dict(merged_entropy)
-        self._reply(None)
 
     def _handle_get_entropy(self, cmd: tuple[Any, ...]) -> None:
         self._reply(dict(self._replica.ensemble._entropy))

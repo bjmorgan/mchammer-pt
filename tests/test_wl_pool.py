@@ -59,44 +59,6 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
     return process, parent_conn
 
 
-def test_wl_worker_get_entropy_sync_state_returns_expected_keys(tmp_path):
-    """GET_ENTROPY_SYNC_STATE returns entropy, fill_factor_history_len, histogram."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        payload = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
-        assert set(payload.keys()) == {
-            "entropy", "fill_factor_history_len", "histogram"
-        }
-        assert isinstance(payload["entropy"], dict)
-        assert isinstance(payload["fill_factor_history_len"], int)
-        assert isinstance(payload["histogram"], dict)
-        assert payload["fill_factor_history_len"] >= 1
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
-
-
-def test_wl_worker_apply_entropy_sync_halvings_and_entropy(tmp_path):
-    """APPLY_ENTROPY_SYNC applies extra halvings and writes merged entropy."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        initial = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
-        initial_len = initial["fill_factor_history_len"]
-
-        merged_entropy = {0: 1.5, 1: 2.5}
-        request(conn, ("APPLY_ENTROPY_SYNC", merged_entropy, 2), 0)
-
-        after = request(conn, ("GET_ENTROPY_SYNC_STATE",), 0)
-        assert after["fill_factor_history_len"] == initial_len + 2
-        assert after["entropy"][0] == pytest.approx(1.5)
-        assert after["entropy"][1] == pytest.approx(2.5)
-        # Histogram values must be zeroed after halvings
-        assert all(v == 0 for v in after["histogram"].values())
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
-
-
 def _make_serial_wl_pool(n_replicas: int = 2):
     from mchammer.calculators import ClusterExpansionCalculator
 
@@ -573,7 +535,7 @@ def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
 
 
 def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
-    """After advance_all, both walkers in a slot have identical entropy dicts."""
+    """After advance_all under sync_policy='block', both walkers share entropy."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -587,14 +549,11 @@ def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
     ) as pool:
         pool.advance_all(50)
 
-        # Directly query both workers for their post-sync entropy
         _, conn0 = pool._slots[0].workers[0]
         _, conn1 = pool._slots[0].workers[1]
-        s0 = request(conn0, ("GET_ENTROPY_SYNC_STATE",), 0)
-        s1 = request(conn1, ("GET_ENTROPY_SYNC_STATE",), 1)
-
-        assert s0["entropy"] == s1["entropy"]
-        assert s0["fill_factor_history_len"] == s1["fill_factor_history_len"]
+        e0_dict = request(conn0, ("GET_ENTROPY",), 0)
+        e1_dict = request(conn1, ("GET_ENTROPY",), 1)
+        assert e0_dict == e1_dict
 
 
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
