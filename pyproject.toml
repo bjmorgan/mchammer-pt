@@ -30,7 +30,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "mypy", "ruff", "pandas-stubs"]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+    "pandas-stubs",
+    "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
+]
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]
