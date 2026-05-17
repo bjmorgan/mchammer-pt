@@ -307,3 +307,30 @@ def test_decide_bp_switch_already_switched_returns_false():
         )
         is False
     )
+
+
+def test_is_flat_all_walkers_flat_returns_true():
+    """Group's is_flat returns True iff all walkers are flat."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._histogram = {0: 1000, 1: 1000}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    assert group.is_flat() is True
+
+
+def test_is_flat_one_walker_not_flat_returns_false():
+    """Group's is_flat returns False if any walker is not flat."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 1000, 1: 1000}
+    replicas[1].ensemble._reached_energy_window = True
+    replicas[1].ensemble._histogram = {0: 100, 1: 1000}  # not flat
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    assert group.is_flat() is False

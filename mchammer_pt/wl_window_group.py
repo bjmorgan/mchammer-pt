@@ -199,6 +199,10 @@ class WangLandauWindowGroup:
     def converged(self) -> bool:
         return all(r.converged for r in self._replicas)
 
+    def is_flat(self) -> bool:
+        """Return ``True`` iff every walker in the group is flat."""
+        return all(r.is_flat() for r in self._replicas)
+
     def data_container(self) -> WangLandauDataContainer:
         """Data container for the first walker in the group."""
         return self._replicas[0].data_container()
