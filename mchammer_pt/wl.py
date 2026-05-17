@@ -34,7 +34,11 @@ from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
-from .wl_window_group import _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED, SyncPolicy
+from .wl_window_group import (
+    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    SyncPolicy,
+    _validate_sync_policy,
+)
 
 
 def _validate_windows(
@@ -113,7 +117,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
             multi-walker window. ``"block"`` (default) merges every
             block; ``"halving"`` (Vogel et al. 2013) merges only at
             collective halving events. Both policies share the same
-            collective halving gate.
+            collective halving gate. The cadence applies only during
+            the halving phase: in the 1/t phase walkers merge entropy
+            every block regardless of ``sync_policy``, because there
+            is no flatness gate whose correctness the halving-cadence
+            preserves.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -158,6 +166,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
         if int(block_size) < 1:
             raise ValueError(f"block_size must be >= 1; got {block_size}")
+        _validate_sync_policy(sync_policy)
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows

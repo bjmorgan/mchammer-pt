@@ -20,12 +20,26 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
 SyncPolicy = Literal["block", "halving"]
 """Entropy-sharing cadence between walkers in a multi-walker window.
 
-- ``"block"``: merge entropies after every block. Fastest wall-clock
-  convergence; suitable for smooth landscapes (default).
-- ``"halving"``: merge entropies only at collective halving events.
-  Implements Vogel et al. 2013 multi-walker REWL; stronger
-  independence at the cost of slower per-halving convergence.
+- ``"block"``: merge entropies after every block.
+- ``"halving"``: merge entropies only at collective halving events
+  (Vogel et al. 2013 multi-walker REWL).
+
+The cadence applies only during the halving phase. In the 1/t phase
+walkers merge entropies every block regardless of ``sync_policy``,
+because no flatness gate exists there and the independence argument
+that motivates halving-only cadence does not apply.
 """
+
+
+_VALID_SYNC_POLICIES: tuple[str, ...] = ("block", "halving")
+
+
+def _validate_sync_policy(sync_policy: Any) -> None:
+    if sync_policy not in _VALID_SYNC_POLICIES:
+        raise ValueError(
+            f"sync_policy must be one of {_VALID_SYNC_POLICIES}; "
+            f"got {sync_policy!r}"
+        )
 
 
 def decide_collective_halve(flags: list[bool], policy: SyncPolicy) -> bool:
@@ -137,6 +151,7 @@ class WangLandauWindowGroup:
                         "all replicas in a WangLandauWindowGroup must share "
                         "the same energy window and spacing"
                     )
+        _validate_sync_policy(sync_policy)
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0

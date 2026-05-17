@@ -35,6 +35,7 @@ from ..wl_replica import WangLandauReplica
 from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     SyncPolicy,
+    _validate_sync_policy,
     decide_bp_switch,
     decide_collective_halve,
     merge_entropies,
@@ -559,6 +560,7 @@ class ProcessWangLandauWindow:
         sync_policy: SyncPolicy = "block",
         schedule: str = "halving",
     ) -> None:
+        _validate_sync_policy(sync_policy)
         self.workers = workers
         self.rng = rng
         self.exchange_idx: int = 0
@@ -702,6 +704,7 @@ class ProcessWangLandauPool:
         sync_policy: SyncPolicy = "block",
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
+        _validate_sync_policy(sync_policy)
         self._sync_policy: SyncPolicy = sync_policy
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
@@ -903,6 +906,13 @@ class ProcessWangLandauPool:
     def _maybe_bp_switch(
         self, slot: ProcessWangLandauWindow
     ) -> None:
+        # Refuse to evaluate until every walker has entered the window;
+        # a non-entered walker has no defined ``t`` and the worker-side
+        # SET_PHASE handler would silently leave ``_fill_factor`` in
+        # the halving regime while flipping ``_phase`` to ``1_over_t``,
+        # tripping a TypeError on the next step.
+        if any(e is None for e in slot._last_window_entries):
+            return
         phases = ["halving"] * len(slot.workers)
         ts = slot.collect_ts()
         fs = slot.collect_fill_factors()
