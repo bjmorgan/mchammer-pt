@@ -615,14 +615,15 @@ class ProcessWangLandauWindow:
 
         Requires every walker to have entered its window. Callers
         should gate on :meth:`has_unentered_walker` before calling.
-        Raises ``AssertionError`` if any walker has not yet entered.
+        Raises ``RuntimeError`` if any walker has not yet entered.
         """
         ts: list[int] = []
         for s in self._last:
-            assert s.window_entry_step is not None, (
-                "collect_ts called on slot with unentered walker; "
-                "gate on has_unentered_walker() first"
-            )
+            if s.window_entry_step is None:
+                raise RuntimeError(
+                    "collect_ts called on slot with unentered walker; "
+                    "gate on has_unentered_walker() first"
+                )
             ts.append(s.step - s.window_entry_step + 1)
         return ts
 

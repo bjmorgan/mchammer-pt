@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
 
@@ -31,10 +33,11 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             entry = self.step
 
         if self._phase == "1_over_t":
-            assert entry is not None, (
-                "_phase == '1_over_t' implies _window_entry_step is set"
-            )
-            t = self.step - entry + 1
+            # By construction, ``_phase == '1_over_t'`` only after
+            # ``_window_entry_step`` has been set (the coordinator
+            # flips the phase post-entry). Narrow for the type
+            # checker.
+            t = self.step - cast(int, entry) + 1
             self._fill_factor = 1.0 / t
 
         self._entropy[bin_cur] = (
