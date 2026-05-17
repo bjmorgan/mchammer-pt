@@ -364,6 +364,8 @@ class WangLandauReplica:
             sorted(e._entropy.items())
         )
         e._histogram = dict.fromkeys(e._histogram, 0)
+        if e._fill_factor <= e._fill_factor_limit:
+            e._converged = True
 
     @property
     def converged(self) -> bool:

@@ -8,7 +8,6 @@ plumbing.
 
 from __future__ import annotations
 
-import dataclasses
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
@@ -31,9 +30,13 @@ from mchammer.observers.base_observer import (
 
 from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
+from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    SyncPolicy,
+    decide_bp_switch,
+    decide_collective_halve,
     merge_entropies,
 )
 from ._comms import broadcast_gather, recv_reply, request
@@ -532,17 +535,128 @@ class ProcessPool:
         self.shutdown()
 
 
-@dataclasses.dataclass
-class _WindowSlot:
-    """Per-window state for ``ProcessWangLandauPool``."""
+class ProcessWangLandauWindow:
+    """Per-window remote walkers + coordinator-facing methods.
 
-    workers: list[tuple[mp.process.BaseProcess, Connection]]
-    exchange_idx: int
-    rng: np.random.Generator
+    Holds W worker subprocesses for a single energy window. Exposes
+    the same coordinator-facing interface as
+    ``WangLandauWindowGroup`` but implemented via pipe commands to
+    the workers. Owns the local communication pattern; the policy
+    decisions live in ``wl_window_group`` free functions and are
+    invoked by ``ProcessWangLandauPool.advance_all``.
+
+    Attributes:
+        workers: list of (Process, Connection) pairs, one per walker.
+        exchange_idx: index of the worker currently chosen for
+            replica exchange (re-rolled by the coordinator each block).
+        rng: per-window RNG for exchange-walker selection.
+    """
+
+    def __init__(
+        self,
+        workers: list[tuple[mp.process.BaseProcess, Connection]],
+        rng: np.random.Generator,
+        sync_policy: SyncPolicy = "block",
+        schedule: str = "halving",
+    ) -> None:
+        self.workers = workers
+        self.rng = rng
+        self.exchange_idx: int = 0
+        self._sync_policy: SyncPolicy = sync_policy
+        self._schedule: str = schedule
+        self._phase: str = "halving"
+        self._last_flags: list[bool] = [False] * len(workers)
+        self._last_fs: list[float] = [1.0] * len(workers)
+        self._last_entropies: list[dict[int, float]] = [
+            {} for _ in workers
+        ]
+        self._last_steps: list[int] = [0] * len(workers)
+        self._last_window_entries: list[int | None] = [None] * len(workers)
 
     def exchange_conn(self) -> Connection:
         """Connection to the current exchange-representative walker."""
         return self.workers[self.exchange_idx][1]
+
+    def advance(self, n_steps: int) -> None:
+        """Send ADVANCE to all walkers; collect piggybacked state.
+
+        After this call, ``_last_flags``, ``_last_fs``,
+        ``_last_entropies``, ``_last_steps``, ``_last_window_entries``
+        contain the per-walker post-block state.
+        """
+        for _, conn in self.workers:
+            conn.send(("ADVANCE", int(n_steps)))
+        for i, (_, conn) in enumerate(self.workers):
+            reply = conn.recv()
+            if reply.status != "OK":
+                raise RuntimeError(
+                    f"worker {i} ADVANCE failed: {reply.payload}"
+                )
+            is_flat, f, entropy, step, win_entry = reply.payload
+            self._last_flags[i] = bool(is_flat)
+            self._last_fs[i] = float(f)
+            self._last_entropies[i] = dict(entropy)
+            self._last_steps[i] = int(step)
+            self._last_window_entries[i] = (
+                None if win_entry is None else int(win_entry)
+            )
+
+    def collect_flatness_flags(self) -> list[bool]:
+        return list(self._last_flags)
+
+    def collect_entropy_snapshots(self) -> list[dict[int, float]]:
+        return [dict(e) for e in self._last_entropies]
+
+    def collect_fill_factors(self) -> list[float]:
+        return list(self._last_fs)
+
+    def collect_ts(self) -> list[int]:
+        """Per-walker t = step - window_entry + 1, or 1 if not entered."""
+        ts: list[int] = []
+        for s, e in zip(
+            self._last_steps, self._last_window_entries, strict=True
+        ):
+            if e is None:
+                ts.append(1)
+            else:
+                ts.append(s - e + 1)
+        return ts
+
+    def set_entropy_all(self, merged: dict[int, float]) -> None:
+        """Send SET_ENTROPY to all workers with the merged dict."""
+        for _, conn in self.workers:
+            conn.send(("SET_ENTROPY", dict(merged)))
+        for i, (_, conn) in enumerate(self.workers):
+            reply = conn.recv()
+            if reply.status != "OK":
+                raise RuntimeError(
+                    f"worker {i} SET_ENTROPY failed: {reply.payload}"
+                )
+        for i in range(len(self.workers)):
+            self._last_entropies[i] = dict(merged)
+
+    def force_halve_all(self) -> None:
+        """Send FORCE_HALVE to all workers."""
+        for _, conn in self.workers:
+            conn.send(("FORCE_HALVE",))
+        for i, (_, conn) in enumerate(self.workers):
+            reply = conn.recv()
+            if reply.status != "OK":
+                raise RuntimeError(
+                    f"worker {i} FORCE_HALVE failed: {reply.payload}"
+                )
+        self._last_fs = [f / 2.0 for f in self._last_fs]
+
+    def set_phase_all(self, phase: str) -> None:
+        """Send SET_PHASE to all workers."""
+        for _, conn in self.workers:
+            conn.send(("SET_PHASE", str(phase)))
+        for i, (_, conn) in enumerate(self.workers):
+            reply = conn.recv()
+            if reply.status != "OK":
+                raise RuntimeError(
+                    f"worker {i} SET_PHASE failed: {reply.payload}"
+                )
 
 
 class ProcessWangLandauPool:
@@ -583,10 +697,12 @@ class ProcessWangLandauPool:
         seeds: Sequence[int],
         *,
         n_walkers_per_window: int | Sequence[int] = 1,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[WangLandauEnsemble] = CoordinatedWangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        sync_policy: SyncPolicy = "block",
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
+        self._sync_policy: SyncPolicy = sync_policy
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
         ]
@@ -619,7 +735,7 @@ class ProcessWangLandauPool:
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
-        self._slots: list[_WindowSlot] = []
+        self._slots: list[ProcessWangLandauWindow] = []
 
         # Cover both spawn-time and handshake-time failures with one
         # cleanup path. A failure on window N leaves N-1 fully started
@@ -667,10 +783,11 @@ class ProcessWangLandauPool:
                         conn.close()
                         proc.terminate()
                     raise
-                self._slots.append(_WindowSlot(
+                self._slots.append(ProcessWangLandauWindow(
                     workers=workers,
-                    exchange_idx=0,
                     rng=np.random.default_rng(rng_seed),
+                    sync_policy=self._sync_policy,
+                    schedule=str(extra_kwargs.get("schedule", "halving")),
                 ))
 
             for i, slot in enumerate(self._slots):
@@ -741,44 +858,57 @@ class ProcessWangLandauPool:
 
     def advance_all(self, n_steps: int) -> None:
         self._check_open()
-        all_targets = [
-            (conn, f"window {i} walker {w}")
-            for i, slot in enumerate(self._slots)
-            for w, (_, conn) in enumerate(slot.workers)
-        ]
-        broadcast_gather(all_targets, ("ADVANCE", int(n_steps)))
-
         try:
-            for i, slot in enumerate(self._slots):
-                if len(slot.workers) == 1:
-                    continue
-                slot_targets = [
-                    (conn, f"window {i} walker {w}")
-                    for w, (_, conn) in enumerate(slot.workers)
-                ]
-                states = broadcast_gather(
-                    slot_targets, ("GET_ENTROPY_SYNC_STATE",)
-                )
-                target_len = max(
-                    s["fill_factor_history_len"] for s in states
-                )
-                merged = merge_entropies(
-                    [s["entropy"] for s in states]
-                )
-                for w, (_, conn) in enumerate(slot.workers):
-                    extra = target_len - states[w]["fill_factor_history_len"]
-                    conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
-                for w, (_, conn) in enumerate(slot.workers):
-                    recv_reply(
-                        conn, "APPLY_ENTROPY_SYNC",
-                        f"window {i} walker {w}",
-                    )
+            for slot in self._slots:
+                slot.advance(int(n_steps))
+                self._run_window_coordinator(slot)
                 slot.exchange_idx = int(
                     slot.rng.integers(0, len(slot.workers))
                 )
         except Exception:
             self.shutdown()
             raise
+
+    def _run_window_coordinator(
+        self, slot: ProcessWangLandauWindow
+    ) -> None:
+        """Per-window coordinator routine on the process pool.
+
+        Mirrors ``WangLandauWindowGroup._run_coordinator_block`` but
+        applies state via pipe commands to remote workers.
+        """
+        if slot._phase == "halving":
+            flags = slot.collect_flatness_flags()
+            if decide_collective_halve(flags, slot._sync_policy):
+                slot.force_halve_all()
+                if len(slot.workers) > 1:
+                    merged = merge_entropies(
+                        slot.collect_entropy_snapshots()
+                    )
+                    slot.set_entropy_all(merged)
+                if slot._schedule == "1_over_t":
+                    self._maybe_bp_switch(slot)
+            elif slot._sync_policy == "block" and len(slot.workers) > 1:
+                merged = merge_entropies(
+                    slot.collect_entropy_snapshots()
+                )
+                slot.set_entropy_all(merged)
+        else:  # 1_over_t
+            if len(slot.workers) > 1:
+                merged = merge_entropies(
+                    slot.collect_entropy_snapshots()
+                )
+                slot.set_entropy_all(merged)
+
+    def _maybe_bp_switch(
+        self, slot: ProcessWangLandauWindow
+    ) -> None:
+        phases = ["halving"] * len(slot.workers)
+        ts = slot.collect_ts()
+        fs = slot.collect_fill_factors()
+        if decide_bp_switch(phases, ts, fs):
+            slot.set_phase_all("1_over_t")
+            slot._phase = "1_over_t"
 
     def current_energies(self) -> np.ndarray:
         self._check_open()

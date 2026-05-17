@@ -487,10 +487,9 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    # Use a single-bin window (width 0.1 = energy_spacing) so the histogram
-    # is trivially flat after one in-window step.  flatness_check_interval=1
-    # fires the convergence check every step; fill_factor_limit=0.5 means one
-    # halving (fill_factor 1.0 -> 0.5) is enough to converge.
+    # fill_factor_limit=0.5 means a single halving (1.0 -> 0.5) converges.
+    # We drive halving directly via FORCE_HALVE on individual workers to
+    # decouple this test from coordinator dynamics.
     with ProcessWangLandauPool(
         ce_path=ce_path,
         initial_atoms=[atoms],
@@ -498,38 +497,21 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-        ensemble_kwargs={"flatness_check_interval": 1, "fill_factor_limit": 0.5},
+        ensemble_kwargs={"fill_factor_limit": 0.5},
     ) as pool:
         _, conn0 = pool._slots[0].workers[0]
         _, conn1 = pool._slots[0].workers[1]
 
-        def _query_converged(conn):
-            return bool(request(conn, ("CONVERGED",), 0))
-
-        assert not _query_converged(conn0)
-        assert not _query_converged(conn1)
-
-        converged_w0 = False
-        for _ in range(200):
-            request(conn0, ("ADVANCE", 1), 0)
-            if _query_converged(conn0):
-                converged_w0 = True
-                break
-        assert converged_w0, "walker 0 did not converge — test is inconclusive"
-
-        # Walker 0 converged; walker 1 has not been advanced.
-        # Now conn0 and conn1 are both fully drained, so converged_flags()
-        # will consume both replies without leaving orphans.
         assert not pool.converged_flags()[0]
 
-        # Now converge walker 1 the same way
-        converged_w1 = False
-        for _ in range(200):
-            request(conn1, ("ADVANCE", 1), 0)
-            if _query_converged(conn1):
-                converged_w1 = True
-                break
-        assert converged_w1, "walker 1 did not converge — test is inconclusive"
+        # Halve only walker 0; slot must still be reported unconverged.
+        request(conn0, ("FORCE_HALVE",), 0)
+        assert bool(request(conn0, ("CONVERGED",), 0))
+        assert not bool(request(conn1, ("CONVERGED",), 0))
+        assert not pool.converged_flags()[0]
+
+        # Halve walker 1 as well; slot now converges.
+        request(conn1, ("FORCE_HALVE",), 0)
         assert pool.converged_flags()[0]
 
 
