@@ -394,3 +394,39 @@ def test_maybe_switch_to_one_over_t_refuses_unentered_walker():
 
     for r in replicas:
         assert r.ensemble._phase == "halving"
+
+
+def test_maybe_switch_to_one_over_t_does_not_grow_fill_factor_history():
+    """BP switch updates ``_fill_factor`` but leaves ``_fill_factor_history``.
+
+    ``_fill_factor_history`` records halve events (shared keys with
+    ``_entropy_history``). The BP switch is a phase transition, not a
+    halve, so it must not add a history entry — otherwise the halve
+    at the same step would be silently overwritten and downstream
+    analysis that pairs the two history dicts would see inconsistent
+    state.
+    """
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._fill_factor = 0.001  # tiny -> 1/t > f trivially
+        r.ensemble._phase = "halving"
+        r.ensemble._schedule = "1_over_t"
+        r.ensemble._step = 100
+        r.ensemble._window_entry_step = 0
+        # Pre-existing halve entry at step 100 to ensure we'd notice
+        # if the BP switch wrote a new key or overwrote this one.
+        r.ensemble._fill_factor_history = {100: 0.001}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._schedule = "1_over_t"
+    group._maybe_switch_to_one_over_t()
+
+    for r in replicas:
+        assert r.ensemble._phase == "1_over_t"
+        # _fill_factor updated to 1/t; t = step - entry + 1 = 101.
+        assert r.ensemble._fill_factor == pytest.approx(1.0 / 101)
+        # History unchanged: still one halve entry, value 0.001 at step 100.
+        assert r.ensemble._fill_factor_history == {100: 0.001}

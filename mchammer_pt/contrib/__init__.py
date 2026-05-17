@@ -25,12 +25,15 @@ across the process-pool spawn boundary.
 
 from __future__ import annotations
 
+from ..wl_ensemble import CoordinatedWangLandauEnsemble
+
 __all__: list[str] = []
 
 try:
     from mchammer_moves import CustomWangLandauEnsemble
-
-    from ..wl_ensemble import CoordinatedWangLandauEnsemble
+except ImportError:  # mchammer-moves not installed; class unavailable
+    pass
+else:
 
     class CoordinatedCustomWangLandauEnsemble(
         CoordinatedWangLandauEnsemble, CustomWangLandauEnsemble
@@ -45,5 +48,3 @@ try:
         """
 
     __all__.append("CoordinatedCustomWangLandauEnsemble")
-except ImportError:  # mchammer-moves not installed; class unavailable
-    pass
