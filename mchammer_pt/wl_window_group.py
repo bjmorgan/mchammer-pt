@@ -93,14 +93,28 @@ if TYPE_CHECKING:
 class WangLandauWindowGroup:
     """A group of independent Wang-Landau walkers sharing one energy window.
 
-    Each cycle: all walkers advance independently, fill factors are
-    synchronised (detect-and-resync), and entropies are averaged bin-wise
-    so every walker starts the next cycle from the best shared ln g estimate.
+    Owns the collective halving decision: all walkers must report
+    flat against their own histograms before any halve fires. At a
+    collective halve, all walkers' fill factors halve in lockstep,
+    histograms reset, and entropies are merged bin-wise across the
+    group.
+
+    Between halvings, entropy-merge cadence is controlled by
+    ``sync_policy``:
+
+    - ``"block"`` (default): merge every block. Fastest wall-clock
+      convergence; today's observable behaviour.
+    - ``"halving"``: merge only at collective halves. Vogel-style
+      independence — stronger correctness guarantees, slower
+      per-halving convergence.
+
+    Both policies share the same halve gate (all walkers flat).
 
     Args:
         replicas: pre-constructed WangLandauReplica instances, all
             with the same energy window and energy spacing.
         random_seed: seed for the exchange-walker selection RNG.
+        sync_policy: entropy-sharing cadence. See ``SyncPolicy``.
     """
 
     def __init__(
@@ -108,6 +122,7 @@ class WangLandauWindowGroup:
         replicas: list[WangLandauReplica],
         *,
         random_seed: int,
+        sync_policy: SyncPolicy = "block",
     ) -> None:
         if len(replicas) < 1:
             raise ValueError(
@@ -125,23 +140,12 @@ class WangLandauWindowGroup:
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
+        self._sync_policy: SyncPolicy = sync_policy
+        # All walkers in a group share _schedule (set via ensemble_kwargs).
+        self._schedule: str = self._replicas[0].ensemble._schedule
 
-    def _sync_fill_factors(self) -> None:
-        """Force-halve lagging replicas to match the most-halved one.
-
-        Detect-and-resync: after mchammer's per-walker auto-halving,
-        replicas may be at different fill factors. We count halvings via
-        len(_fill_factor_history) and force-halve any replica that is
-        behind the leader.
-        """
-        halvings = [len(r.ensemble._fill_factor_history) for r in self._replicas]
-        target = max(halvings)
-        for r, h in zip(self._replicas, halvings, strict=True):
-            for _ in range(target - h):
-                r.force_halve()
-
-    def _merge_entropies(self) -> None:
-        """Average ln g bin-wise across all replicas and write back to each."""
+    def _merge_entropies_into_all(self) -> None:
+        """Average ln g bin-wise across all replicas and write back."""
         merged = merge_entropies(
             [dict(r.ensemble._entropy) for r in self._replicas]
         )
@@ -149,15 +153,59 @@ class WangLandauWindowGroup:
             r.ensemble._entropy = dict(merged)
 
     def advance(self, n_steps: int) -> None:
-        """Advance all W replicas, sync fill factors, merge entropies.
-
-        Re-selects the exchange walker after each cycle.
-        """
+        """Advance all W replicas, then run the coordinator block."""
         for r in self._replicas:
             r.advance(int(n_steps))
-        self._sync_fill_factors()
-        self._merge_entropies()
-        self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
+        self._run_coordinator_block()
+        self._exchange_idx = int(
+            self._rng.integers(0, len(self._replicas))
+        )
+
+    def _run_coordinator_block(self) -> None:
+        """Per-block coordinator routine: flatness check, halve, merge.
+
+        Called after every block of MC steps. Reads each walker's
+        current state, applies the sync policy, mutates state in
+        place.
+        """
+        phase = self._replicas[0].ensemble._phase
+
+        if phase == "halving":
+            flags = [r.is_flat() for r in self._replicas]
+            if decide_collective_halve(flags, self._sync_policy):
+                for r in self._replicas:
+                    r.force_halve()
+                self._merge_entropies_into_all()
+                if self._schedule == "1_over_t":
+                    self._maybe_switch_to_one_over_t()
+            elif self._sync_policy == "block":
+                self._merge_entropies_into_all()
+        else:  # 1_over_t phase
+            self._merge_entropies_into_all()
+
+    def _maybe_switch_to_one_over_t(self) -> None:
+        """Flip every walker to 1/t phase if the collective condition holds.
+
+        Called immediately after a collective halve. If every walker
+        satisfies ``1/t > f``, flip the phase and set
+        ``_fill_factor = 1/t`` on every walker.
+        """
+        phases = [r.ensemble._phase for r in self._replicas]
+        ts: list[int] = []
+        fs: list[float] = []
+        for r in self._replicas:
+            entry = r.ensemble._window_entry_step
+            if entry is None:
+                return
+            ts.append(r.ensemble.step - entry + 1)
+            fs.append(float(r.ensemble._fill_factor))
+        if decide_bp_switch(phases, ts, fs):
+            for r, t in zip(self._replicas, ts, strict=True):
+                r.ensemble._phase = "1_over_t"
+                r.ensemble._fill_factor = 1.0 / t
+                r.ensemble._fill_factor_history[r.ensemble.step] = (
+                    r.ensemble._fill_factor
+                )
 
     @property
     def ensemble(self) -> Any:

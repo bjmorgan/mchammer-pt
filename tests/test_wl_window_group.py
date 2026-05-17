@@ -33,117 +33,44 @@ def _make_replicas(n: int = 2):
     ]
 
 
-def test_sync_fill_factors_force_halves_lagging_replica():
-    """A replica with fewer halvings is force-halved to match the most-halved one."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
-
-    replicas = _make_replicas(2)
-    # Replica 0: 2 halvings already done.
-    replicas[0].ensemble._fill_factor = 0.25
-    replicas[0].ensemble._fill_factor_history = {0: 0.5, 1: 0.25}
-    replicas[0].ensemble._histogram = {}
-    # Replica 1: only 1 halving.
-    replicas[1].ensemble._fill_factor = 0.5
-    replicas[1].ensemble._fill_factor_history = {0: 0.5}
-    replicas[1].ensemble._histogram = {0: 10, 1: 8}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._sync_fill_factors()
-
-    assert replicas[1].ensemble._fill_factor == pytest.approx(0.25)
-    assert len(replicas[1].ensemble._fill_factor_history) == 2
-    # Post-halving value (0.25) stored under the new key.
-    assert replicas[1].ensemble._fill_factor_history[1] == pytest.approx(0.25)
-    # Histogram keys preserved, values zeroed.
-    assert replicas[1].ensemble._histogram == {0: 0, 1: 0}
-
-
-def test_sync_fill_factors_noop_when_already_in_sync():
-    """No mutation when all replicas have the same halving count."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
-
-    replicas = _make_replicas(2)
-    for r in replicas:
-        r.ensemble._fill_factor = 0.5
-        r.ensemble._fill_factor_history = {0: 0.5}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._sync_fill_factors()
-
-    for r in replicas:
-        assert r.ensemble._fill_factor == pytest.approx(0.5)
-        assert len(r.ensemble._fill_factor_history) == 1
-
-
-def test_sync_fill_factors_multi_halving_gap():
-    """A replica with a 3-halving gap receives 3 halvings with unique keys."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
-
-    replicas = _make_replicas(2)
-    # Replica 0: 3 halvings.
-    replicas[0].ensemble._fill_factor = 0.125
-    replicas[0].ensemble._fill_factor_history = {0: 0.5, 1: 0.25, 2: 0.125}
-    replicas[0].ensemble._histogram = {}
-    # Replica 1: no halvings yet.
-    replicas[1].ensemble._fill_factor = 1.0
-    replicas[1].ensemble._fill_factor_history = {}
-    replicas[1].ensemble._histogram = {0: 5, 1: 3}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._sync_fill_factors()
-
-    assert replicas[1].ensemble._fill_factor == pytest.approx(0.125)
-    assert len(replicas[1].ensemble._fill_factor_history) == 3
-    # All three synthetic keys must be distinct integers.
-    keys = list(replicas[1].ensemble._fill_factor_history.keys())
-    assert len(set(keys)) == 3
-    assert replicas[1].ensemble._histogram == {0: 0, 1: 0}
-
-
 def test_merge_entropies_averages_all_bins():
     """Entropy is averaged bin-wise; unvisited bins treat as 0.0."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+    from mchammer_pt.wl_window_group import merge_entropies
 
-    replicas = _make_replicas(2)
-    replicas[0].ensemble._entropy = {0: 2.0, 1: 4.0}
-    replicas[1].ensemble._entropy = {0: 6.0, 2: 8.0}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._merge_entropies()
+    merged = merge_entropies([{0: 2.0, 1: 4.0}, {0: 6.0, 2: 8.0}])
 
     # bin 0: (2.0 + 6.0) / 2 = 4.0
     # bin 1: (4.0 + 0.0) / 2 = 2.0  (replica 1 never visited bin 1)
     # bin 2: (0.0 + 8.0) / 2 = 4.0  (replica 0 never visited bin 2)
-    assert replicas[0].ensemble._entropy[0] == pytest.approx(4.0)
-    assert replicas[0].ensemble._entropy[1] == pytest.approx(2.0)
-    assert replicas[0].ensemble._entropy[2] == pytest.approx(4.0)
-    assert replicas[1].ensemble._entropy == replicas[0].ensemble._entropy
+    assert merged[0] == pytest.approx(4.0)
+    assert merged[1] == pytest.approx(2.0)
+    assert merged[2] == pytest.approx(4.0)
 
 
 def test_merge_entropies_noop_on_empty_entropies():
     """No KeyError or crash when all entropy dicts are empty."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+    from mchammer_pt.wl_window_group import merge_entropies
 
-    replicas = _make_replicas(2)
-    for r in replicas:
-        r.ensemble._entropy = {}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._merge_entropies()
-
-    for r in replicas:
-        assert r.ensemble._entropy == {}
+    assert merge_entropies([{}, {}]) == {}
 
 
 def test_advance_calls_all_replicas_and_updates_exchange_idx():
-    """advance() advances all replicas and leaves _exchange_idx in range."""
+    """advance() advances each replica then runs the coordinator block."""
+    from unittest.mock import MagicMock
+
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
-    replicas = _make_replicas(3)
+    replicas = _make_replicas(2)
     group = WangLandauWindowGroup(replicas, random_seed=0)
-    group.advance(n_steps=5)
+    for r in replicas:
+        r.advance = MagicMock()
+    group._run_coordinator_block = MagicMock()
 
-    assert 0 <= group._exchange_idx < 3
+    group.advance(100)
+
+    for r in replicas:
+        r.advance.assert_called_once_with(100)
+    group._run_coordinator_block.assert_called_once()
 
 
 def test_exchange_methods_target_same_replica():
@@ -334,3 +261,115 @@ def test_is_flat_one_walker_not_flat_returns_false():
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
     assert group.is_flat() is False
+
+
+def test_advance_collective_halve_fires_when_all_flat():
+    """All walkers flat after block → collective halve fires."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._histogram = {0: 1000, 1: 1000}
+        r.ensemble._entropy = {0: 5.0, 1: 5.0}
+        r.ensemble._fill_factor = 1.0
+        r.ensemble._fill_factor_history = {}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._run_coordinator_block()
+
+    for r in replicas:
+        assert r.ensemble._fill_factor == pytest.approx(0.5)
+        assert len(r.ensemble._fill_factor_history) == 1
+        assert all(v == 0 for v in r.ensemble._histogram.values())
+
+
+def test_advance_no_halve_when_one_walker_not_flat():
+    """No halve when any walker fails flatness."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 1000, 1: 1000}
+    replicas[0].ensemble._entropy = {0: 5.0, 1: 5.0}
+    replicas[0].ensemble._fill_factor = 1.0
+    replicas[1].ensemble._reached_energy_window = True
+    replicas[1].ensemble._histogram = {0: 100, 1: 1000}  # not flat
+    replicas[1].ensemble._entropy = {0: 5.0, 1: 5.0}
+    replicas[1].ensemble._fill_factor = 1.0
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._run_coordinator_block()
+
+    for r in replicas:
+        assert r.ensemble._fill_factor == pytest.approx(1.0)
+
+
+def test_advance_block_policy_merges_entropy_every_block():
+    """sync_policy='block' merges entropy every block, even without halve."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 100, 1: 1000}  # not flat
+    replicas[0].ensemble._entropy = {0: 2.0, 1: 4.0}
+    replicas[1].ensemble._reached_energy_window = True
+    replicas[1].ensemble._histogram = {0: 100, 1: 1000}
+    replicas[1].ensemble._entropy = {0: 6.0, 1: 8.0}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0, sync_policy="block")
+    group._run_coordinator_block()
+
+    # Merged: {0: 4.0, 1: 6.0}; both walkers receive this.
+    for r in replicas:
+        assert r.ensemble._entropy[0] == pytest.approx(4.0)
+        assert r.ensemble._entropy[1] == pytest.approx(6.0)
+
+
+def test_advance_halving_policy_skips_non_halving_merge():
+    """sync_policy='halving' does not merge entropy when no halve fires."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 100, 1: 1000}  # not flat
+    replicas[0].ensemble._entropy = {0: 2.0, 1: 4.0}
+    replicas[1].ensemble._reached_energy_window = True
+    replicas[1].ensemble._histogram = {0: 100, 1: 1000}
+    replicas[1].ensemble._entropy = {0: 6.0, 1: 8.0}
+
+    group = WangLandauWindowGroup(
+        replicas, random_seed=0, sync_policy="halving"
+    )
+    group._run_coordinator_block()
+
+    # No merge; original per-walker values preserved.
+    assert replicas[0].ensemble._entropy[0] == pytest.approx(2.0)
+    assert replicas[1].ensemble._entropy[0] == pytest.approx(6.0)
+
+
+def test_advance_halving_policy_merges_at_halving_event():
+    """sync_policy='halving' merges entropy at collective halve."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._histogram = {0: 1000, 1: 1000}
+    replicas[0].ensemble._entropy = {0: 2.0, 1: 4.0}
+    replicas[1].ensemble._entropy = {0: 6.0, 1: 8.0}
+    for r in replicas:
+        r.ensemble._fill_factor = 1.0
+        r.ensemble._fill_factor_history = {}
+
+    group = WangLandauWindowGroup(
+        replicas, random_seed=0, sync_policy="halving"
+    )
+    group._run_coordinator_block()
+
+    # Halve fires → merge fires.
+    for r in replicas:
+        assert r.ensemble._fill_factor == pytest.approx(0.5)
+        # Merged entropy distributed to all walkers AFTER force_halve.
+        assert r.ensemble._entropy[0] == pytest.approx(4.0)
+        assert r.ensemble._entropy[1] == pytest.approx(6.0)
