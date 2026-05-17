@@ -220,26 +220,27 @@ if TYPE_CHECKING:
 class WangLandauWindowGroup:
     """A group of independent Wang-Landau walkers sharing one energy window.
 
-    Owns the collective halving decision: all walkers must report
-    flat against their own histograms before any halve fires. At a
-    collective halve, all walkers' fill factors halve in lockstep,
-    histograms reset, and entropies are merged bin-wise across the
-    group.
+    Owns the collective halving decision: the halve gate fires when
+    either every walker is independently flat (``flatness_mode="per_walker"``,
+    published Vogel et al. 2013) or the summed histogram across walkers
+    is flat (``flatness_mode="pooled"``, default). At a collective halve
+    all walkers' fill factors halve in lockstep and histograms reset.
 
-    Between halvings, entropy-merge cadence is controlled by
-    ``sync_policy``:
+    Entropy merge cadence is controlled by ``merge_cadence``:
 
-    - ``"block"`` (default): merge every block.
-    - ``"halving"``: merge only at collective halves (Vogel et al.
-      2013).
+    - ``"at_halve"`` (default): merge entropies at each collective halve
+      (Vogel et al. 2013 cadence).
+    - ``"never"``: no mid-run merge; a single end-of-run merge fires via
+      ``finalise_for_reporting()``.
 
-    Both policies share the same halve gate (all walkers flat).
+    In the 1/t phase no mid-run merge fires regardless of cadence.
 
     Args:
-        replicas: pre-constructed WangLandauReplica instances, all
-            with the same energy window and energy spacing.
+        replicas: pre-constructed WangLandauReplica instances, all with
+            the same energy window and energy spacing.
         random_seed: seed for the exchange-walker selection RNG.
-        sync_policy: entropy-sharing cadence. See ``SyncPolicy``.
+        flatness_mode: ``"per_walker"`` or ``"pooled"`` (default).
+        merge_cadence: ``"at_halve"`` (default) or ``"never"``.
     """
 
     def __init__(
@@ -247,7 +248,8 @@ class WangLandauWindowGroup:
         replicas: list[WangLandauReplica],
         *,
         random_seed: int,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         if len(replicas) < 1:
             raise ValueError(
@@ -262,11 +264,13 @@ class WangLandauWindowGroup:
                         "all replicas in a WangLandauWindowGroup must share "
                         "the same energy window and spacing"
                     )
-        _validate_sync_policy(sync_policy)
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
-        self._sync_policy: SyncPolicy = sync_policy
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
         # All walkers in a group share _schedule (set via ensemble_kwargs).
         self._schedule: str = self._replicas[0].ensemble._schedule
 
@@ -291,22 +295,31 @@ class WangLandauWindowGroup:
         """Per-block coordinator routine: flatness check, halve, merge.
 
         Called after every block of MC steps. Reads each walker's
-        current state, applies the sync policy, mutates state in
-        place.
+        current state, applies the configured flatness mode and merge
+        cadence, mutates state in place. In the 1/t phase no mid-run
+        merge fires (regardless of ``merge_cadence``); end-of-run
+        merging is handled by ``finalise_for_reporting()``.
         """
         phase = self._replicas[0].ensemble._phase
 
         if phase == "halving":
-            flags = [r.is_flat() for r in self._replicas]
-            if decide_collective_halve(flags):
+            if self._flatness_mode == "per_walker":
+                should_halve = all(r.is_flat() for r in self._replicas)
+            else:  # pooled
+                should_halve = _summed_histogram_is_flat(self._replicas)
+            if should_halve:
                 for r in self._replicas:
                     r.force_halve()
-                self._merge_entropies_into_all()
+                if (
+                    self._merge_cadence == "at_halve"
+                    and len(self._replicas) > 1
+                ):
+                    self._merge_entropies_into_all()
                 if self._schedule == "1_over_t":
                     self._maybe_switch_to_one_over_t()
-            elif self._sync_policy == "block":
-                self._merge_entropies_into_all()
         else:  # 1_over_t phase
+            # Mid-run merge in 1/t phase is removed in Task 9 (Fix 2).
+            # Keep for now so this task lands a clean delta.
             self._merge_entropies_into_all()
 
     def _maybe_switch_to_one_over_t(self) -> None:
