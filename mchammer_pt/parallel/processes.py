@@ -595,6 +595,7 @@ class ProcessWangLandauWindow:
                 entropy={},
                 step=0,
                 window_entry_step=None,
+                histogram={},
             )
             for _ in workers
         ]

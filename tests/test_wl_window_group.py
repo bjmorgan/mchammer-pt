@@ -647,3 +647,41 @@ def test_summed_histogram_flat_when_per_walker_is_not():
     assert replicas[0].is_flat() is False
     assert replicas[1].is_flat() is False
     assert _summed_histogram_is_flat(replicas) is True
+
+
+def test_summed_histogram_flat_from_snapshots_matches_live():
+    """Snapshot-based helper agrees with the live-replica helper."""
+    from mchammer_pt.wl_window_group import (
+        WalkerPostBlockState,
+        _summed_histogram_flat_from_snapshots,
+        _summed_histogram_is_flat,
+    )
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 100, 1: 1000}
+    replicas[1].ensemble._histogram = {0: 1000, 1: 100}
+
+    snapshots = [
+        WalkerPostBlockState(
+            is_flat=replicas[0].is_flat(),
+            fill_factor=1.0,
+            entropy={},
+            step=0,
+            window_entry_step=0,
+            histogram={0: 100, 1: 1000},
+        ),
+        WalkerPostBlockState(
+            is_flat=replicas[1].is_flat(),
+            fill_factor=1.0,
+            entropy={},
+            step=0,
+            window_entry_step=0,
+            histogram={0: 1000, 1: 100},
+        ),
+    ]
+    flatness_limit = replicas[0].ensemble._flatness_limit
+    assert _summed_histogram_flat_from_snapshots(snapshots, flatness_limit) == (
+        _summed_histogram_is_flat(replicas)
+    )

@@ -622,6 +622,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 entropy={},
                 step=100,
                 window_entry_step=0,
+                histogram={},
             ),
             WalkerPostBlockState(
                 is_flat=True,
@@ -629,6 +630,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 entropy={},
                 step=100,
                 window_entry_step=None,
+                histogram={},
             ),
         ]
         plan = pool._compute_plan(slot)
@@ -662,6 +664,7 @@ def _make_compute_plan_slot(
             entropy=dict(entropy),
             step=100,
             window_entry_step=window_entry_step,
+            histogram={},
         )
         for _ in range(n)
     ]

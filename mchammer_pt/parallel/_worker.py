@@ -332,6 +332,7 @@ class WangLandauWorker(BaseWorker):
                 if e._window_entry_step is None
                 else int(e._window_entry_step)
             ),
+            histogram=dict(e._histogram),
         ))
 
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:

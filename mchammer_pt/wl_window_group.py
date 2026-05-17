@@ -21,10 +21,10 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
 class WalkerPostBlockState(NamedTuple):
     """State a worker reports after each ``ADVANCE``.
 
-    All five fields are captured from a single worker reply at one
-    MC step, so the coordinator can use them as a consistent
-    snapshot. Read by the coordinator to decide whether to halve,
-    merge entropies, or flip the BP phase.
+    Captured from a single worker reply at one MC step so the
+    coordinator can use them as a consistent snapshot. Read by the
+    coordinator to decide whether to halve, merge entropies, or flip
+    the BP phase.
     """
 
     is_flat: bool
@@ -32,6 +32,7 @@ class WalkerPostBlockState(NamedTuple):
     entropy: dict[int, float]
     step: int
     window_entry_step: int | None
+    histogram: dict[int, int]
 
 SyncPolicy = Literal["block", "halving"]  # DEPRECATED, removed in Task 8.
 """Deprecated; replaced by ``FlatnessMode`` + ``MergeCadence``. Kept for
@@ -117,6 +118,32 @@ def _summed_histogram_is_flat(replicas: list[WangLandauReplica]) -> bool:
     if not combined:
         return False
     flatness_limit = replicas[0].ensemble._flatness_limit
+    counts = np.array(list(combined.values()))
+    limit = flatness_limit * float(np.average(counts))
+    return bool(np.all(counts >= limit))
+
+
+def _summed_histogram_flat_from_snapshots(
+    snapshots: list[WalkerPostBlockState],
+    flatness_limit: float,
+) -> bool:
+    """Snapshot-based pooled flatness for use by the process pool.
+
+    Pools the per-walker histograms carried by each ``WalkerPostBlockState``
+    and applies the same flatness criterion as ``_summed_histogram_is_flat``.
+    Returns False if any walker has not yet entered its window
+    (``window_entry_step is None``).
+    """
+    if not snapshots:
+        return False
+    if any(s.window_entry_step is None for s in snapshots):
+        return False
+    combined: dict[int, int] = {}
+    for s in snapshots:
+        for k, v in s.histogram.items():
+            combined[k] = combined.get(k, 0) + v
+    if not combined:
+        return False
     counts = np.array(list(combined.values()))
     limit = flatness_limit * float(np.average(counts))
     return bool(np.all(counts >= limit))
