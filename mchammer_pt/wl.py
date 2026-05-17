@@ -32,7 +32,7 @@ from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
-from .wl_window_group import _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED
+from .wl_window_group import _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED, SyncPolicy
 
 
 def _validate_windows(
@@ -131,6 +131,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
+        sync_policy: SyncPolicy = "block",
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -226,7 +227,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     WangLandauWindowGroup(
                         walker_replicas,
                         random_seed=group_seeds[w],
-                        sync_policy="block",  # Task 13 will replace with kwarg
+                        sync_policy=sync_policy,
                     )
                 )
             pool = SerialWangLandauPool(
@@ -568,6 +569,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
+        sync_policy: SyncPolicy = "block",
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
@@ -609,6 +611,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
             n_walkers_per_window=n_walkers_per_window,
+            sync_policy=sync_policy,
         )
 
     @classmethod
@@ -625,6 +628,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
         n_walkers_per_window: int | Sequence[int] = 1,
+        sync_policy: SyncPolicy = "block",
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
@@ -660,6 +664,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 n_walkers_per_window=n_walkers_per_window,
                 ensemble_cls=ensemble_cls,
                 ensemble_kwargs=ensemble_kwargs,
+                sync_policy=sync_policy,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -675,6 +680,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 pool=pool,
                 data_container_file=data_container_file,
                 n_walkers_per_window=n_walkers_per_window,
+                sync_policy=sync_policy,
             )
         except BaseException:
             pool.shutdown()

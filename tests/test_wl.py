@@ -827,3 +827,54 @@ def test_wl_pt_serial_w1_slot_is_window_group():
     )
     for slot in pt._pool.replicas:
         assert isinstance(slot, WangLandauWindowGroup)
+
+
+def test_wl_pt_sync_policy_default_block():
+    """Default sync_policy on the orchestrator is 'block'."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+    )
+    assert pt._pool.replicas[0]._sync_policy == "block"
+
+
+def test_wl_pt_sync_policy_halving_propagates():
+    """sync_policy='halving' reaches the window group."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        sync_policy="halving",
+    )
+    assert pt._pool.replicas[0]._sync_policy == "halving"
