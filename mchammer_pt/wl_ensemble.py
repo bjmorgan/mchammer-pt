@@ -18,20 +18,14 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):
     """
 
     def _update_entropy(self, bin_cur: int) -> None:
-        # Mainline icet's WangLandauEnsemble lacks _schedule and _phase
-        # (the patched fork added them for the 1/t schedule). Treat
-        # missing attributes as ``schedule="halving"`` /
-        # ``phase="halving"`` and skip the 1/t prologue.
-        schedule = getattr(self, "_schedule", "halving")
-        phase = getattr(self, "_phase", "halving")
         if (
-            schedule == "1_over_t"
+            self._schedule == "1_over_t"
             and self._reached_energy_window
             and self._window_entry_step is None
         ):
             self._window_entry_step = self.step
 
-        if phase == "1_over_t":
+        if self._phase == "1_over_t":
             t = self.step - self._window_entry_step + 1
             self._fill_factor = 1.0 / t
 

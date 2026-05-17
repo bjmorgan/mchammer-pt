@@ -164,12 +164,7 @@ class WangLandauWindowGroup:
         self._exchange_idx: int = 0
         self._sync_policy: SyncPolicy = sync_policy
         # All walkers in a group share _schedule (set via ensemble_kwargs).
-        # Mainline icet's WangLandauEnsemble has no _schedule attribute
-        # (the patched fork added it); default to "halving" there since
-        # mainline only supports that schedule.
-        self._schedule: str = getattr(
-            self._replicas[0].ensemble, "_schedule", "halving"
-        )
+        self._schedule: str = self._replicas[0].ensemble._schedule
 
     def _merge_entropies_into_all(self) -> None:
         """Average ln g bin-wise across all replicas and write back."""
