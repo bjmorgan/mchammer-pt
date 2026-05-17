@@ -289,10 +289,9 @@ def test_wl_replica_restore_state_does_not_mutate_caller_container(tmp_path):
 
 def test_is_flat_returns_false_before_window_reached():
     """Walker outside its window is not flat."""
-    from mchammer_pt.wl_replica import WangLandauReplica
-
     from mchammer.calculators import ClusterExpansionCalculator
 
+    from mchammer_pt.wl_replica import WangLandauReplica
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -316,10 +315,9 @@ def test_is_flat_returns_false_before_window_reached():
 
 def test_is_flat_returns_true_on_flat_histogram():
     """A perfectly flat histogram passes mchammer's flatness criterion."""
-    from mchammer_pt.wl_replica import WangLandauReplica
-
     from mchammer.calculators import ClusterExpansionCalculator
 
+    from mchammer_pt.wl_replica import WangLandauReplica
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -343,10 +341,9 @@ def test_is_flat_returns_true_on_flat_histogram():
 
 def test_is_flat_returns_false_on_uneven_histogram():
     """A histogram with one bin below limit*mean is not flat."""
-    from mchammer_pt.wl_replica import WangLandauReplica
-
     from mchammer.calculators import ClusterExpansionCalculator
 
+    from mchammer_pt.wl_replica import WangLandauReplica
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -370,11 +367,10 @@ def test_is_flat_returns_false_on_uneven_histogram():
 
 def test_default_ensemble_cls_is_coordinated():
     """The default ensemble_cls is CoordinatedWangLandauEnsemble."""
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
-    from mchammer_pt.wl_replica import WangLandauReplica
-
     from mchammer.calculators import ClusterExpansionCalculator
 
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl_replica import WangLandauReplica
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -396,12 +392,11 @@ def test_default_ensemble_cls_is_coordinated():
 
 def test_non_coordinated_ensemble_cls_rejected():
     """Passing the plain WangLandauEnsemble raises TypeError."""
+    from mchammer.calculators import ClusterExpansionCalculator
     from mchammer.ensembles import WangLandauEnsemble
 
     from mchammer_pt.wl_replica import WangLandauReplica
-
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
-    from mchammer.calculators import ClusterExpansionCalculator
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(

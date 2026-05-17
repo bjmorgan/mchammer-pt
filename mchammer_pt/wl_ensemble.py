@@ -6,7 +6,7 @@ import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
 
 
-class CoordinatedWangLandauEnsemble(WangLandauEnsemble):
+class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     """`WangLandauEnsemble` with internal halving suppressed.
 
     Bin counters and periodic entropy reshift behave identically to
@@ -18,15 +18,23 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):
     """
 
     def _update_entropy(self, bin_cur: int) -> None:
+        # ``_window_entry_step`` is inherited from upstream's
+        # ``WangLandauEnsemble`` (typed Any to mypy because mchammer
+        # has no stubs); narrow it explicitly.
+        entry: int | None = self._window_entry_step  # type: ignore[has-type]
         if (
             self._schedule == "1_over_t"
             and self._reached_energy_window
-            and self._window_entry_step is None
+            and entry is None
         ):
             self._window_entry_step = self.step
+            entry = self.step
 
         if self._phase == "1_over_t":
-            t = self.step - self._window_entry_step + 1
+            assert entry is not None, (
+                "_phase == '1_over_t' implies _window_entry_step is set"
+            )
+            t = self.step - entry + 1
             self._fill_factor = 1.0 / t
 
         self._entropy[bin_cur] = (

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce

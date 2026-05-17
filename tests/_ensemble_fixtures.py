@@ -10,7 +10,6 @@ from typing import Any
 
 from mchammer.ensembles import (  # type: ignore[import-untyped]
     CanonicalEnsemble,
-    WangLandauEnsemble,
 )
 
 from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble

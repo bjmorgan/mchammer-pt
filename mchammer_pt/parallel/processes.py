@@ -22,7 +22,6 @@ from mchammer.data_containers.base_data_container import (
 )
 from mchammer.ensembles import (
     CanonicalEnsemble,
-    WangLandauEnsemble,
 )
 from mchammer.observers.base_observer import (
     BaseObserver,
@@ -616,8 +615,16 @@ class ProcessWangLandauWindow:
 
         Requires every walker to have entered its window. Callers
         should gate on :meth:`has_unentered_walker` before calling.
+        Raises ``AssertionError`` if any walker has not yet entered.
         """
-        return [s.step - s.window_entry_step + 1 for s in self._last]
+        ts: list[int] = []
+        for s in self._last:
+            assert s.window_entry_step is not None, (
+                "collect_ts called on slot with unentered walker; "
+                "gate on has_unentered_walker() first"
+            )
+            ts.append(s.step - s.window_entry_step + 1)
+        return ts
 
     def has_unentered_walker(self) -> bool:
         """True iff any walker has not yet reached its window."""
@@ -703,7 +710,9 @@ class ProcessWangLandauPool:
         seeds: Sequence[int],
         *,
         n_walkers_per_window: int | Sequence[int] = 1,
-        ensemble_cls: type[CoordinatedWangLandauEnsemble] = CoordinatedWangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         sync_policy: SyncPolicy = "block",
     ) -> None:

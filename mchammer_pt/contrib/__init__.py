@@ -28,9 +28,7 @@ from __future__ import annotations
 __all__: list[str] = []
 
 try:
-    from mchammer_moves import (  # type: ignore[import-untyped]
-        CustomWangLandauEnsemble,
-    )
+    from mchammer_moves import CustomWangLandauEnsemble
 
     from ..wl_ensemble import CoordinatedWangLandauEnsemble
 

@@ -35,7 +35,6 @@ def test_coordinated_custom_wl_ensemble_mro_resolves_disjoint_overrides():
 def test_coordinated_custom_wl_ensemble_runs_under_orchestrator():
     """Short serial run with PairSwap reaches results() with finite entropy."""
     import numpy as np
-
     from mchammer.calculators import ClusterExpansionCalculator
     from mchammer_moves import PairSwap
 

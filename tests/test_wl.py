@@ -803,8 +803,8 @@ def test_wl_pt_serial_w1_slot_is_window_group():
     """Serial path always wraps replicas in WangLandauWindowGroup, even W=1."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -831,8 +831,8 @@ def test_wl_pt_sync_policy_default_block():
     """Default sync_policy on the orchestrator is 'block'."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -856,8 +856,8 @@ def test_wl_pt_sync_policy_halving_propagates():
     """sync_policy='halving' reaches the window group."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -883,8 +883,8 @@ def test_wl_pt_sync_policy_rejects_typos(bad):
     """Invalid sync_policy values raise ValueError at construction."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -910,8 +910,8 @@ def test_wl_pt_w2_short_run_converges(policy):
     """W=2 short serial run produces valid WindowResult under both policies."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -947,8 +947,8 @@ def test_wl_pt_w2_one_over_t_collective_phase():
     """W=2 with schedule='1_over_t': all walkers agree on phase post-run."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -980,11 +980,10 @@ def test_wl_pt_w2_one_over_t_collective_phase():
 def test_wl_pt_w1_unified_path_produces_finite_results():
     """W=1 through the unified WindowGroup coordinator produces valid output."""
     import numpy as np
-
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
