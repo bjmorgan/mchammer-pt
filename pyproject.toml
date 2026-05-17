@@ -40,7 +40,6 @@ dev = [
     "mypy",
     "ruff",
     "pandas-stubs",
-    "pre-commit",
     "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
 ]
 
