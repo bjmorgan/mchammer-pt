@@ -34,9 +34,14 @@ from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
-    SyncPolicy,
+    FlatnessMode,
+    MergeCadence,
+    SyncPolicy,  # legacy, removed Task 7
     WalkerPostBlockState,
-    _validate_sync_policy,
+    _summed_histogram_flat_from_snapshots,
+    _validate_flatness_mode,
+    _validate_merge_cadence,
+    _validate_sync_policy,  # legacy, removed Task 7
     decide_bp_switch,
     decide_collective_halve,
     merge_entropies,
@@ -578,15 +583,22 @@ class ProcessWangLandauWindow:
         self,
         workers: list[tuple[mp.process.BaseProcess, Connection]],
         rng: np.random.Generator,
-        sync_policy: SyncPolicy = "block",
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
         schedule: str = "halving",
     ) -> None:
-        _validate_sync_policy(sync_policy)
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
         self.workers = workers
         self.rng = rng
         self.exchange_idx: int = 0
-        self._sync_policy: SyncPolicy = sync_policy
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
         self._schedule: str = schedule
+        # icet default; pooled flatness uses the same constant. Tuning of
+        # _flatness_limit would require an additional handshake; not
+        # exposed by this version.
+        self._flatness_limit: float = 0.8
         self.phase: str = "halving"
         self._last: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
@@ -684,7 +696,15 @@ class ProcessWangLandauPool:
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_sync_policy(sync_policy)
-        self._sync_policy: SyncPolicy = sync_policy
+        self._sync_policy: SyncPolicy = sync_policy  # legacy, removed Task 7
+        # Migration shim: derive the new params from sync_policy until
+        # Task 7 promotes them to first-class constructor arguments.
+        # Both "block" and "halving" map to merge_cadence="at_halve" — the
+        # "block"-only every-block merge behaviour has no equivalent in
+        # the new API (it had no defensible interpretation under the
+        # corrected merge algorithm and is removed).
+        self._flatness_mode: FlatnessMode = "per_walker"
+        self._merge_cadence: MergeCadence = "at_halve"
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
         ]
@@ -768,7 +788,8 @@ class ProcessWangLandauPool:
                 self._slots.append(ProcessWangLandauWindow(
                     workers=workers,
                     rng=np.random.default_rng(rng_seed),
-                    sync_policy=self._sync_policy,
+                    flatness_mode=self._flatness_mode,
+                    merge_cadence=self._merge_cadence,
                     schedule=str(extra_kwargs.get("schedule", "halving")),
                 ))
 
@@ -938,22 +959,31 @@ class ProcessWangLandauPool:
 
         Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s
         decision logic, but separated from the action phase so the
-        action phase can batch IPC across windows.
+        action phase can batch IPC across windows. In the 1/t phase
+        the mid-run merge is kept here for backwards-compat; it is
+        removed in Task 9 (Fix 2) when end-of-run merging is added.
         """
         plan = _CoordinatorPlan(
             halve=False, merged_entropy=None, switch_to_phase=None
         )
         if slot.phase == "halving":
-            flags = slot.collect_flatness_flags()
-            if decide_collective_halve(flags):
+            if slot._flatness_mode == "per_walker":
+                should_halve = decide_collective_halve(
+                    slot.collect_flatness_flags()
+                )
+            else:  # pooled
+                should_halve = _summed_histogram_flat_from_snapshots(
+                    slot._last, slot._flatness_limit
+                )
+            if should_halve:
                 plan.halve = True
-                if len(slot.workers) > 1:
+                if (
+                    slot._merge_cadence == "at_halve"
+                    and len(slot.workers) > 1
+                ):
                     plan.merged_entropy = merge_entropies(
                         slot.collect_entropy_snapshots()
                     )
-                # BP switch uses post-halve f; simulate the halve
-                # locally for the decision since the actual halve
-                # hasn't been sent yet.
                 if (
                     slot._schedule == "1_over_t"
                     and not slot.has_unentered_walker()
@@ -965,11 +995,9 @@ class ProcessWangLandauPool:
                     ]
                     if decide_bp_switch(phases, ts, post_halve_fs):
                         plan.switch_to_phase = "1_over_t"
-            elif slot._sync_policy == "block" and len(slot.workers) > 1:
-                plan.merged_entropy = merge_entropies(
-                    slot.collect_entropy_snapshots()
-                )
         else:  # 1_over_t
+            # Mid-run merge in 1/t phase removed in Task 9.
+            # Keep for now so this task lands a clean delta.
             if len(slot.workers) > 1:
                 plan.merged_entropy = merge_entropies(
                     slot.collect_entropy_snapshots()

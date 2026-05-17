@@ -518,28 +518,6 @@ def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
         assert len(result[1]) == 2   # window 1: 2 walkers
 
 
-def test_process_wl_pool_advance_all_syncs_entropy(tmp_path):
-    """After advance_all under sync_policy='block', both walkers share entropy."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-    ) as pool:
-        pool.advance_all(50)
-
-        _, conn0 = pool._slots[0].workers[0]
-        _, conn1 = pool._slots[0].workers[1]
-        e0_dict = request(conn0, ("GET_ENTROPY",), 0)
-        e1_dict = request(conn1, ("GET_ENTROPY",), 1)
-        assert e0_dict == e1_dict
-
-
 def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
     """sync_policy='halving' does not merge entropy between halvings."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -569,31 +547,6 @@ def test_process_wl_pool_halving_policy_skips_non_halving_merge(tmp_path):
         e0_dict = request(c0, ("GET_ENTROPY",), 0)
         e1_dict = request(c1, ("GET_ENTROPY",), 1)
         assert e0_dict != e1_dict
-
-
-def test_process_wl_pool_block_policy_merges_each_block(tmp_path):
-    """sync_policy='block' merges entropy every block, regardless of halve."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        sync_policy="block",
-    ) as pool:
-        slot = pool._slots[0]
-        _, c0 = slot.workers[0]
-        _, c1 = slot.workers[1]
-        request(c0, ("SET_ENTROPY", {0: 2.0, 1: 4.0}), 0)
-        request(c1, ("SET_ENTROPY", {0: 6.0, 1: 8.0}), 1)
-        pool.advance_all(0)
-        e0_dict = request(c0, ("GET_ENTROPY",), 0)
-        e1_dict = request(c1, ("GET_ENTROPY",), 1)
-        assert e0_dict == e1_dict
 
 
 def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
@@ -645,7 +598,8 @@ def _make_compute_plan_slot(
     *,
     is_flat: bool,
     schedule: str,
-    sync_policy: str,
+    flatness_mode: str,
+    merge_cadence: str,
     window_entry_step: int | None,
     fill_factor: float,
     entropy: dict[int, float],
@@ -655,7 +609,8 @@ def _make_compute_plan_slot(
 
     slot = pool._slots[0]
     slot._schedule = schedule
-    slot._sync_policy = sync_policy  # type: ignore[assignment]
+    slot._flatness_mode = flatness_mode  # type: ignore[assignment]
+    slot._merge_cadence = merge_cadence  # type: ignore[assignment]
     n = len(slot.workers)
     slot._last = [
         WalkerPostBlockState(
@@ -689,7 +644,8 @@ def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
             pool,
             is_flat=True,
             schedule="halving",
-            sync_policy="block",
+            flatness_mode="per_walker",
+            merge_cadence="at_halve",
             window_entry_step=0,
             fill_factor=1.0,
             entropy={0: 1.0, 1: 2.0},
@@ -704,39 +660,8 @@ def test_compute_plan_halving_all_flat_w2_block_policy(tmp_path):
         assert plan.switch_to_phase is None
 
 
-def test_compute_plan_halving_not_flat_block_policy_merges_anyway(tmp_path):
-    """sync_policy='block' + not flat ⇒ no halve, but merge fires."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        sync_policy="block",
-    ) as pool:
-        slot = _make_compute_plan_slot(
-            pool,
-            is_flat=False,
-            schedule="halving",
-            sync_policy="block",
-            window_entry_step=0,
-            fill_factor=1.0,
-            entropy={0: 1.0, 1: 2.0},
-        )
-        plan = pool._compute_plan(slot)
-        assert plan.halve is False
-        # See test_compute_plan_halving_all_flat_w2_block_policy for the
-        # merge arithmetic; identical inputs collapse to {0: 0.0, 1: 1.0}.
-        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
-        assert plan.switch_to_phase is None
-
-
 def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
-    """sync_policy='halving' + not flat ⇒ no halve and no merge."""
+    """halving phase + not flat + merge_cadence='at_halve' => no halve and no merge."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
@@ -753,7 +678,8 @@ def test_compute_plan_halving_not_flat_halving_policy_skips_merge(tmp_path):
             pool,
             is_flat=False,
             schedule="halving",
-            sync_policy="halving",
+            flatness_mode="per_walker",
+            merge_cadence="at_halve",
             window_entry_step=0,
             fill_factor=1.0,
             entropy={0: 1.0, 1: 2.0},
@@ -783,7 +709,8 @@ def test_compute_plan_one_over_t_w2_always_merges(tmp_path):
             pool,
             is_flat=False,
             schedule="1_over_t",
-            sync_policy="halving",
+            flatness_mode="per_walker",
+            merge_cadence="at_halve",
             window_entry_step=0,
             fill_factor=0.001,
             entropy={0: 1.0, 1: 2.0},
@@ -816,7 +743,8 @@ def test_compute_plan_halving_collective_halve_triggers_bp_switch(tmp_path):
             pool,
             is_flat=True,
             schedule="1_over_t",
-            sync_policy="block",
+            flatness_mode="per_walker",
+            merge_cadence="at_halve",
             window_entry_step=0,
             fill_factor=1e-6,
             entropy={0: 1.0, 1: 2.0},
