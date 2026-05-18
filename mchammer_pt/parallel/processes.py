@@ -676,12 +676,16 @@ def _merge_per_window_stats(
 
 
 def _compute_plan(slot: ProcessWangLandauWindow) -> _CoordinatorPlan:
-    """Decide per-slot coordinator actions from the slot's cached
-    post-block state; no IPC.
+    """Decide per-slot coordinator actions from the slot's cached state.
 
-    Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s decision
-    logic, but separated from the action phase so the action phase can
-    batch IPC across windows. Pure function on slot state.
+    Pure function on ``slot._last``; no IPC. Returns a
+    ``_CoordinatorPlan`` describing which collective actions (halve,
+    merge entropies, switch BP phase) the coordinator should apply for
+    this slot in the current block.
+
+    In the 1/t phase no mid-run merge fires, regardless of
+    ``merge_cadence`` — walker entropies are reconciled only at
+    end-of-run via ``finalise_for_reporting``.
     """
     plan = _CoordinatorPlan(
         halve=False, merged_entropy=None, switch_to_phase=None

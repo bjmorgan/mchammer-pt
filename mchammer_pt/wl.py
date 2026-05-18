@@ -334,15 +334,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         return float((g_i_Ei - g_i_Ej) + (g_j_Ej - g_j_Ei))
 
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
-        """Per-orchestrator meta written into the checkpoint.
+        """Return the WL-specific checkpoint metadata.
 
-        ``flatness_mode`` and ``merge_cadence`` are persisted so that
-        resume reconstructs the original configuration. Multi-walker
-        checkpointing is currently rejected at save time, which makes
-        these values inert today; persisting them now is forward
-        compatibility for a planned multi-walker checkpoint path,
-        where silently substituting defaults on resume would be a
-        latent bug.
+        Contains the window edges, energy spacing, flatness mode, and
+        merge cadence.
         """
         return {
             "windows": _windows_to_array(self._windows),
@@ -385,8 +380,18 @@ class WangLandauParallelTempering(BaseParallelTempering):
             # KeyboardInterrupt and exceptions from inside the loop —
             # otherwise per-walker entropies remain unreconciled in the
             # data containers and pt.results() returns divergent values.
+            #
+            # If finalise_for_reporting itself raises here, Python
+            # chains the in-flight cycle-loop exception via
+            # ``__context__`` and both are visible in the traceback.
             self._pool.finalise_for_reporting()
         if self._data_container_file is not None:
+            # Checkpoint write is deliberately outside the try/finally:
+            # on a mid-run exception the on-disk file reflects the last
+            # successful ``save_checkpoint()`` call. Callers who want
+            # the post-exception in-memory state can read
+            # ``pt.results()``, which is consistent because
+            # ``finalise_for_reporting`` ran in the finally above.
             _write_checkpoint(self, Path(self._data_container_file))
         return history
 
@@ -463,8 +468,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
-        # Pre-W1 checkpoints predate these keys; fall back to the
-        # original defaults so older files resume without complaint.
+        # Checkpoints written before ``flatness_mode`` and
+        # ``merge_cadence`` were persisted in meta resume with the
+        # values that were the defaults at the time of writing
+        # ("pooled" and "at_halve").
         flatness_mode: FlatnessMode = str(
             meta.get("flatness_mode", "pooled")
         )  # type: ignore[assignment]
@@ -520,9 +527,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
         # Wrap each restored replica in a single-walker
         # ``WangLandauWindowGroup`` so the coordinator drives halving.
-        # Multi-walker resume is rejected at save time; the values are
-        # inert for single-walker groups but persisted via meta so that
-        # they round-trip once multi-walker checkpointing lands.
         slots: list[WangLandauSlot] = [
             WangLandauWindowGroup(
                 [replica],
@@ -610,8 +614,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
-        # Pre-W1 checkpoints predate these keys; fall back to the
-        # original defaults so older files resume without complaint.
+        # Checkpoints written before ``flatness_mode`` and
+        # ``merge_cadence`` were persisted in meta resume with the
+        # values that were the defaults at the time of writing
+        # ("pooled" and "at_halve").
         flatness_mode: FlatnessMode = str(
             meta.get("flatness_mode", "pooled")
         )  # type: ignore[assignment]

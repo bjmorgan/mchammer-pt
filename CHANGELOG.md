@@ -52,14 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ``merge_entropies`` rewritten to rebase each walker's entropy by
   the mean over the intersection of bins all walkers visited,
   then average bin-wise over the walkers that visited each bin,
-  then shift so ``min(merged) == 0``. Each walker's ``_entropy``
-  carries a private additive constant (icet's ``_update_entropy``
-  periodically subtracts each walker's own ``np.min``); the
-  previous naive arithmetic mean averaged values with different
-  constants and treated bins visited by only some walkers as
-  zero-valued in the others, producing a curve with
-  coverage-boundary artefacts. Intersection-mean rebasing
-  preserves the shape across partial coverage.
+  then shift so ``min(merged) == 0``. The previous naive arithmetic
+  mean combined values with different additive constants and
+  treated bins visited by only some walkers as zero-valued in the
+  others, producing a curve with coverage-boundary artefacts.
+  Intersection-mean rebasing preserves the shape across partial
+  coverage.
 - Single-walker runs are routed through ``WangLandauWindowGroup``
   for path uniformity. The convergence criterion is unchanged; the
   flatness check now fires at block boundaries rather than at
