@@ -6,10 +6,12 @@ The helper builds a real worker (``WangLandauWorker`` for WL,
 ``CanonicalWorker`` for canonical) and dispatches each ``send()``
 inline through ``worker._handle``, capturing replies into an internal
 queue. The worker's full handler table runs against a real replica
-instance -- no hand-written fake.
+instance -- no hand-written fake. Pickle is bypassed; payloads pass
+by reference.
 
-Tier-2 (real-subprocess) opcode tests remain in place to pin the IPC
-protocol so the in-process tier cannot silently drift.
+Tests that must exercise the real ``mp.Pipe`` pickle boundary or
+real-process isolation cannot use this helper -- spawn a subprocess
+directly (see ``tests/test_wl_pool.py::_spawn_wl_worker``).
 """
 
 from __future__ import annotations

@@ -19,12 +19,12 @@ from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
     """Build an :class:`InProcessWorkerConn` around a real WL replica.
 
-    Mirrors the seeds, energy limits and ensemble class used by
-    :func:`_spawn_wl_worker` so opcode tests can swap one for the other
-    without changing the rest of the test body. Used by the tier-1
-    in-process opcode round-trip tests; the surviving subprocess pin
-    (``test_wl_worker_advance_ack_carries_state``) still uses
-    :func:`_spawn_wl_worker` to exercise the real pickle boundary.
+    Uses the same seeds, energy limits and ensemble class as
+    :func:`_spawn_wl_worker`, so an opcode test body can swap one
+    helper for the other without further changes. Prefer this helper
+    for tests that only need to exercise a worker handler; reach for
+    :func:`_spawn_wl_worker` when the test must cross the real
+    ``mp.Pipe`` pickle boundary.
     """
     from mchammer.calculators import ClusterExpansionCalculator
 
