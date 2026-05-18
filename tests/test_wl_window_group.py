@@ -348,53 +348,19 @@ def test_validate_merge_cadence_rejects_unknown_value():
         _validate_merge_cadence("bogus")
 
 
-def test_summed_histogram_is_flat_false_when_unentered():
-    """Pooled flatness false if any walker has not entered the window."""
-    from mchammer_pt.wl_coordinator import _summed_histogram_is_flat
-
-    replicas = _make_replicas(2)
-    replicas[0].ensemble._reached_energy_window = True
-    replicas[0].ensemble._histogram = {0: 1000, 1: 1000}
-    replicas[1].ensemble._reached_energy_window = False  # not entered
-    replicas[1].ensemble._histogram = {}
-    assert _summed_histogram_is_flat(replicas) is False
-
-
-def test_summed_histogram_flat_when_per_walker_is_not():
-    """Pooled flat but per-walker not: pooling fixes the gap."""
-    from mchammer_pt.wl_coordinator import _summed_histogram_is_flat
-
-    replicas = _make_replicas(2)
-    for r in replicas:
-        r.ensemble._reached_energy_window = True
-    # Walker A has skewed coverage; walker B has the complementary skew.
-    replicas[0].ensemble._histogram = {0: 100, 1: 1000}
-    replicas[1].ensemble._histogram = {0: 1000, 1: 100}
-    # Per-walker A: limit = 0.8 * 550 = 440; 100 < 440 -> not flat.
-    # Per-walker B: same shape, not flat.
-    # Pooled: {0: 1100, 1: 1100}, mean 1100, limit 880; both >= 880 -> flat.
-    assert replicas[0].is_flat() is False
-    assert replicas[1].is_flat() is False
-    assert _summed_histogram_is_flat(replicas) is True
-
-
-def test_summed_histogram_flat_from_snapshots_matches_live():
-    """Snapshot-based helper agrees with the live-replica helper."""
+def test_summed_histogram_flat_from_snapshots_pooled_case():
+    """Pooled flatness from snapshots: pooling fixes per-walker gaps."""
     from mchammer_pt.wl_coordinator import (
         WalkerPostBlockState,
         _summed_histogram_flat_from_snapshots,
-        _summed_histogram_is_flat,
     )
 
-    replicas = _make_replicas(2)
-    for r in replicas:
-        r.ensemble._reached_energy_window = True
-    replicas[0].ensemble._histogram = {0: 100, 1: 1000}
-    replicas[1].ensemble._histogram = {0: 1000, 1: 100}
-
+    # Walker A has skewed coverage; walker B has the complementary skew.
+    # Per-walker: each would fail the flatness test independently.
+    # Pooled: combined histogram is even, passes the test.
     snapshots = [
         WalkerPostBlockState(
-            is_flat=replicas[0].is_flat(),
+            is_flat=False,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -403,7 +369,7 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
             reached_energy_window=True,
         ),
         WalkerPostBlockState(
-            is_flat=replicas[1].is_flat(),
+            is_flat=False,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -412,10 +378,9 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
             reached_energy_window=True,
         ),
     ]
-    flatness_limit = replicas[0].ensemble._flatness_limit
-    assert _summed_histogram_flat_from_snapshots(snapshots, flatness_limit) == (
-        _summed_histogram_is_flat(replicas)
-    )
+    # Pooled: {0: 1100, 1: 1100}, mean 1100, limit 880 (0.8 * 1100);
+    # both >= 880 -> True.
+    assert _summed_histogram_flat_from_snapshots(snapshots, 0.8) is True
 
 
 def test_summed_histogram_flat_from_snapshots_false_when_unentered():

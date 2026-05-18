@@ -14,8 +14,6 @@ from typing import Any, Literal
 
 import numpy as np
 
-from .wl_replica import WangLandauReplica
-
 _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
     "checkpointing is not yet supported for n_walkers_per_window > 1; "
     "pass data_container_file=None and avoid save_checkpoint() / "
@@ -122,30 +120,6 @@ class CoordinatorPlan:
     switch_to_phase: str | None
 
 
-def _summed_histogram_is_flat(replicas: list[WangLandauReplica]) -> bool:
-    """Pool histograms across replicas; flatness criterion on the sum.
-
-    Mirrors mchammer's per-walker flatness rule (every bin's count is
-    >= flatness_limit * mean(counts)) but applied to the summed
-    histogram across walkers. Returns False if any walker has not yet
-    entered its window.
-    """
-    if not replicas:
-        return False
-    if not all(r.ensemble._reached_energy_window for r in replicas):
-        return False
-    combined: dict[int, int] = {}
-    for r in replicas:
-        for k, v in r.ensemble._histogram.items():
-            combined[k] = combined.get(k, 0) + v
-    if not combined:
-        return False
-    flatness_limit = replicas[0].ensemble._flatness_limit
-    counts = np.array(list(combined.values()))
-    limit = flatness_limit * float(np.average(counts))
-    return bool(np.all(counts >= limit))
-
-
 def _summed_histogram_flat_from_snapshots(
     snapshots: list[WalkerPostBlockState],
     flatness_limit: float,
@@ -153,8 +127,9 @@ def _summed_histogram_flat_from_snapshots(
     """Snapshot-based pooled flatness for use by the process pool.
 
     Pools the per-walker histograms carried by each ``WalkerPostBlockState``
-    and applies the same flatness criterion as ``_summed_histogram_is_flat``.
-    Returns False if any walker has not yet entered its window.
+    and applies the flatness criterion: every bin count must be at least
+    ``flatness_limit * mean(counts)``. Returns False if any walker has not
+    yet entered its window.
     """
     if not snapshots:
         return False
