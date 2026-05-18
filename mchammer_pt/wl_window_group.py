@@ -11,14 +11,13 @@ from mchammer.observers.base_observer import BaseObserver
 
 from .wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    CoordinatorPlan,
     FlatnessMode,
     MergeCadence,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
-    _summed_histogram_is_flat,
     _validate_flatness_mode,
     _validate_merge_cadence,
-    decide_bp_switch,
     merge_entropies,
 )
 from .wl_replica import WangLandauReplica
@@ -85,76 +84,73 @@ class WangLandauWindowGroup:
         self._merge_cadence: MergeCadence = merge_cadence
         # All walkers in a group share _schedule (set via ensemble_kwargs).
         self._schedule: str = self._replicas[0].ensemble._schedule
-
-    def _merge_entropies_into_all(self) -> None:
-        """Average ln g bin-wise across all replicas and write back."""
-        merged = merge_entropies(
-            [dict(r.ensemble._entropy) for r in self._replicas]
-        )
-        for r in self._replicas:
-            r.ensemble._entropy = dict(merged)
+        self.walker_states: list[WalkerPostBlockState] = [
+            WalkerPostBlockState(
+                is_flat=False,
+                fill_factor=1.0,
+                entropy={},
+                step=0,
+                window_entry_step=None,
+                histogram={},
+                reached_energy_window=False,
+            )
+            for _ in self._replicas
+        ]
 
     def advance(self, n_steps: int) -> None:
-        """Advance all W replicas, then run the coordinator block."""
+        """Advance all W replicas; refresh walker_states.
+
+        The coordinator's decide/apply runs at the pool level after advance.
+        """
         for r in self._replicas:
             r.advance(int(n_steps))
-        self._run_coordinator_block()
-        self._exchange_idx = int(
-            self._rng.integers(0, len(self._replicas))
+        self.walker_states = [
+            self._snapshot_replica(r) for r in self._replicas
+        ]
+
+    def _snapshot_replica(self, replica: WangLandauReplica) -> WalkerPostBlockState:
+        """Read live ensemble state into a WalkerPostBlockState."""
+        e = replica.ensemble
+        return WalkerPostBlockState(
+            is_flat=replica.is_flat(),
+            fill_factor=float(e._fill_factor),
+            entropy=dict(e._entropy),
+            step=int(e.step),
+            window_entry_step=(
+                None if e._window_entry_step is None
+                else int(e._window_entry_step)
+            ),
+            histogram=dict(e._histogram),
+            reached_energy_window=bool(e._reached_energy_window),
         )
 
-    def _run_coordinator_block(self) -> None:
-        """Per-block coordinator routine: flatness check, halve, merge.
+    def apply_plan(self, plan: CoordinatorPlan) -> None:
+        """Apply the coordinator's plan to every walker.
 
-        Called after every block of MC steps. Reads each walker's
-        current state, applies the configured flatness mode and merge
-        cadence, mutates state in place. In the 1/t phase no mid-run
-        merge fires (regardless of ``merge_cadence``).
+        Order: halve (zeroes histograms, halves fill factors) -> write
+        merged entropy -> set phase. Matches the process pool's three
+        batched IPC rounds.
         """
-        phase = self._replicas[0].ensemble._phase
-
-        if phase != "halving":
-            return
-
-        if self._flatness_mode == "per_walker":
-            should_halve = all(r.is_flat() for r in self._replicas)
-        else:  # pooled
-            should_halve = _summed_histogram_is_flat(self._replicas)
-        if should_halve:
+        if plan.halve:
             for r in self._replicas:
                 r.force_halve()
-            if (
-                self._merge_cadence == "at_halve"
-                and len(self._replicas) > 1
-            ):
-                self._merge_entropies_into_all()
-            if self._schedule == "1_over_t":
-                self._maybe_switch_to_one_over_t()
+        if plan.merged_entropy is not None:
+            merged = dict(plan.merged_entropy)
+            for r in self._replicas:
+                r.ensemble._entropy = dict(merged)
+        if plan.switch_to_phase is not None:
+            phase = plan.switch_to_phase
+            for r in self._replicas:
+                r.ensemble._phase = phase
+                if phase == "1_over_t":
+                    entry = r.ensemble._window_entry_step
+                    if entry is not None:
+                        t = r.ensemble.step - entry + 1
+                        r.ensemble._fill_factor = 1.0 / t
 
-    def _maybe_switch_to_one_over_t(self) -> None:
-        """Flip every walker to 1/t phase if the collective condition holds.
-
-        Called immediately after a collective halve. If every walker
-        satisfies ``1/t > f``, flip the phase and set
-        ``_fill_factor = 1/t`` on every walker. Does not write to
-        ``_fill_factor_history``: that dict records halve events,
-        which share keys with ``_entropy_history``; in the 1/t phase
-        ``_fill_factor`` is reconstructed from
-        ``step - _window_entry_step + 1``.
-        """
-        phases = [r.ensemble._phase for r in self._replicas]
-        ts: list[int] = []
-        fs: list[float] = []
-        for r in self._replicas:
-            entry = r.ensemble._window_entry_step
-            if entry is None:
-                return
-            ts.append(r.ensemble.step - entry + 1)
-            fs.append(float(r.ensemble._fill_factor))
-        if decide_bp_switch(phases, ts, fs):
-            for r, t in zip(self._replicas, ts, strict=True):
-                r.ensemble._phase = "1_over_t"
-                r.ensemble._fill_factor = 1.0 / t
+    def reroll_exchange_idx(self) -> None:
+        """Re-select the exchange-representative walker."""
+        self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
 
     def finalise_for_reporting(self) -> None:
         """Merge per-walker entropies into a single window estimate.
@@ -169,7 +165,11 @@ class WangLandauWindowGroup:
         """
         if len(self._replicas) <= 1:
             return
-        self._merge_entropies_into_all()
+        merged = merge_entropies(
+            [dict(r.ensemble._entropy) for r in self._replicas]
+        )
+        for r in self._replicas:
+            r.ensemble._entropy = dict(merged)
         self.refresh_last_state()
 
     @property
