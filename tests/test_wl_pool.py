@@ -9,6 +9,7 @@ from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from mchammer_pt.parallel.processes import (
     ProcessWangLandauPool,
     ProcessWangLandauWindow,
+    _compute_plan,
 )
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
@@ -590,7 +591,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 reached_energy_window=False,
             ),
         ]
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         # All flat ⇒ plan to halve, but BP switch refused because one
         # walker has no defined ``t``.
         assert plan.halve is True
@@ -654,7 +655,7 @@ def test_compute_plan_halving_all_flat_w2_at_halve_cadence(tmp_path):
             fill_factor=1.0,
             entropy={0: 1.0, 1: 2.0},
         )
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         assert plan.halve is True
         # Both walkers have identical entropy {0: 1.0, 1: 2.0}; after
         # intersection-mean rebasing each becomes {0: -0.5, 1: 0.5},
@@ -713,7 +714,7 @@ def test_compute_plan_pooled_flatness_default_schedule_halves(tmp_path):
                 reached_energy_window=True,
             ),
         ]
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         assert plan.halve is True
 
 
@@ -740,7 +741,7 @@ def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge(tmp_path):
             fill_factor=1.0,
             entropy={0: 1.0, 1: 2.0},
         )
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         assert plan.halve is False
         assert plan.merged_entropy is None
         assert plan.switch_to_phase is None
@@ -771,7 +772,7 @@ def test_compute_plan_one_over_t_w2_no_midrun_merge(tmp_path):
             entropy={0: 1.0, 1: 2.0},
         )
         slot.phase = "1_over_t"
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         assert plan.halve is False
         assert plan.merged_entropy is None
         assert plan.switch_to_phase is None
@@ -802,7 +803,7 @@ def test_compute_plan_halving_collective_halve_triggers_bp_switch(tmp_path):
             fill_factor=1e-6,
             entropy={0: 1.0, 1: 2.0},
         )
-        plan = pool._compute_plan(slot)
+        plan = _compute_plan(slot)
         assert plan.halve is True
         assert plan.switch_to_phase == "1_over_t"
 

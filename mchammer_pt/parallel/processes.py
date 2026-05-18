@@ -646,6 +646,49 @@ class ProcessWangLandauWindow:
         return any(s.window_entry_step is None for s in self._last)
 
 
+def _compute_plan(slot: ProcessWangLandauWindow) -> _CoordinatorPlan:
+    """Decide per-slot coordinator actions from the slot's cached
+    post-block state; no IPC.
+
+    Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s decision
+    logic, but separated from the action phase so the action phase can
+    batch IPC across windows. Pure function on slot state.
+    """
+    plan = _CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase=None
+    )
+    if slot.phase != "halving":
+        return plan
+
+    if slot._flatness_mode == "per_walker":
+        should_halve = all(slot.collect_flatness_flags())
+    else:  # pooled
+        should_halve = _summed_histogram_flat_from_snapshots(
+            slot._last, slot._flatness_limit
+        )
+    if should_halve:
+        plan.halve = True
+        if (
+            slot._merge_cadence == "at_halve"
+            and len(slot.workers) > 1
+        ):
+            plan.merged_entropy = merge_entropies(
+                slot.collect_entropy_snapshots()
+            )
+        if (
+            slot._schedule == "1_over_t"
+            and not slot.has_unentered_walker()
+        ):
+            phases = ["halving"] * len(slot.workers)
+            ts = slot.collect_ts()
+            post_halve_fs = [
+                f / 2.0 for f in slot.collect_fill_factors()
+            ]
+            if decide_bp_switch(phases, ts, post_halve_fs):
+                plan.switch_to_phase = "1_over_t"
+    return plan
+
+
 class ProcessWangLandauPool:
     """Persistent-worker REWL pool.
 
@@ -883,7 +926,7 @@ class ProcessWangLandauPool:
                 slot._last[w] = payload
 
             # DECIDE: per-slot coordinator decisions; no IPC.
-            plans = [self._compute_plan(slot) for slot in self._slots]
+            plans = [_compute_plan(slot) for slot in self._slots]
 
             # EXECUTE step 1: batched FORCE_HALVE across halving slots.
             halve_targets = [
@@ -990,50 +1033,6 @@ class ProcessWangLandauPool:
         except Exception:
             self.shutdown()
             raise
-
-    def _compute_plan(
-        self, slot: ProcessWangLandauWindow
-    ) -> _CoordinatorPlan:
-        """Decide per-slot coordinator actions; no IPC.
-
-        Mirrors ``WangLandauWindowGroup._run_coordinator_block``'s
-        decision logic, but separated from the action phase so the
-        action phase can batch IPC across windows. In the 1/t phase
-        no mid-run merge fires (regardless of ``merge_cadence``).
-        """
-        plan = _CoordinatorPlan(
-            halve=False, merged_entropy=None, switch_to_phase=None
-        )
-        if slot.phase != "halving":
-            return plan
-
-        if slot._flatness_mode == "per_walker":
-            should_halve = all(slot.collect_flatness_flags())
-        else:  # pooled
-            should_halve = _summed_histogram_flat_from_snapshots(
-                slot._last, slot._flatness_limit
-            )
-        if should_halve:
-            plan.halve = True
-            if (
-                slot._merge_cadence == "at_halve"
-                and len(slot.workers) > 1
-            ):
-                plan.merged_entropy = merge_entropies(
-                    slot.collect_entropy_snapshots()
-                )
-            if (
-                slot._schedule == "1_over_t"
-                and not slot.has_unentered_walker()
-            ):
-                phases = ["halving"] * len(slot.workers)
-                ts = slot.collect_ts()
-                post_halve_fs = [
-                    f / 2.0 for f in slot.collect_fill_factors()
-                ]
-                if decide_bp_switch(phases, ts, post_halve_fs):
-                    plan.switch_to_phase = "1_over_t"
-        return plan
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
