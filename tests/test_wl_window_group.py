@@ -817,9 +817,9 @@ def test_finalise_for_reporting_idempotent():
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
     group.finalise_for_reporting()
-    state_after_first = {b: replicas[0].ensemble._entropy[b] for b in (0, 1)}
+    state_after_first = [dict(r.ensemble._entropy) for r in replicas]
 
     group.finalise_for_reporting()
-    state_after_second = {b: replicas[0].ensemble._entropy[b] for b in (0, 1)}
+    state_after_second = [dict(r.ensemble._entropy) for r in replicas]
 
     assert state_after_second == state_after_first

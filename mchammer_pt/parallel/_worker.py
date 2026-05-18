@@ -233,6 +233,13 @@ class CanonicalWorker(BaseWorker):
         which is only meaningful inside a spawned subprocess. Used by
         in-process tests that drive the worker's handler table against
         a real replica without crossing the pickle boundary.
+
+        Because the build path is skipped, ``_ce_path`` /
+        ``_atoms_dict`` and other build-input attributes are not set.
+        All current handlers operate via ``self._replica``; a handler
+        that needs build-time inputs should accept them as part of the
+        command payload rather than reading them off ``self`` directly,
+        otherwise it will fail when driven via this constructor.
         """
         worker = cls.__new__(cls)
         BaseWorker.__init__(worker, reply_sink=reply_sink)
@@ -311,6 +318,13 @@ class WangLandauWorker(BaseWorker):
         which is only meaningful inside a spawned subprocess. Used by
         in-process tests that drive the worker's handler table against
         a real replica without crossing the pickle boundary.
+
+        Because the build path is skipped, ``_ce_path`` /
+        ``_atoms_dict`` and other build-input attributes are not set.
+        All current handlers operate via ``self._replica``; a handler
+        that needs build-time inputs should accept them as part of the
+        command payload rather than reading them off ``self`` directly,
+        otherwise it will fail when driven via this constructor.
         """
         worker = cls.__new__(cls)
         BaseWorker.__init__(worker, reply_sink=reply_sink)

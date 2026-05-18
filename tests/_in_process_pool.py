@@ -85,10 +85,6 @@ def make_in_process_pool(
             cluster_expansion_path=str(ce_path),
         )
         conn = InProcessWorkerConn.for_canonical(replica)
-        # _workers expects (Process, Connection); the in-process
-        # substitutes are duck-typed for the surface the pool uses
-        # (send/recv/poll/close on conn; join/is_alive/terminate on
-        # the process). Mypy can't see this without unsafe casts.
         pool._workers.append((_DummyProcess(), conn))  # type: ignore[arg-type]
     pool._ensemble_cls_fqn = (
         f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
