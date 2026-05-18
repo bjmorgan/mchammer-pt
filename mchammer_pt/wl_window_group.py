@@ -32,12 +32,21 @@ class WangLandauWindowGroup:
     Runs W walkers in a single energy window, snapshots their state
     after each block, and applies coordinator plans (halve, merge
     entropy, phase switch) to all walkers in lockstep. Policy decisions
-    (flatness mode, merge cadence) live at the pool level and are passed
-    in via ``CoordinatorPlan``; the group executes plans mechanically.
+    (flatness mode, merge cadence) live at the pool level; the pool
+    consults the group's per-walker snapshots, decides what to do, and
+    hands the group a ``CoordinatorPlan`` containing the resulting
+    actions (not the policy inputs). The group executes the plan
+    mechanically.
+
+    All replicas must share the same energy window, energy spacing,
+    schedule, and flatness limit. The constructor enforces these
+    invariants because coordinator decisions are taken against
+    walker 0's cached values and applied uniformly across the group.
 
     Args:
         replicas: pre-constructed WangLandauReplica instances, all with
-            the same energy window and energy spacing.
+            the same energy window, energy spacing, schedule, and
+            flatness limit.
         random_seed: seed for the exchange-walker selection RNG.
     """
 
@@ -54,19 +63,31 @@ class WangLandauWindowGroup:
             )
         w0 = replicas[0].energy_window
         s0 = replicas[0].energy_spacing
+        sched0 = replicas[0].ensemble._schedule
+        fl0 = replicas[0].ensemble._flatness_limit
         for r in replicas[1:]:
             if r.energy_window != w0 or r.energy_spacing != s0:
                 raise ValueError(
                     "all replicas in a WangLandauWindowGroup must share "
                     "the same energy window and spacing"
                 )
+            if r.ensemble._schedule != sched0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    f"the same schedule; got {sched0!r} on replica 0 and "
+                    f"{r.ensemble._schedule!r} on a subsequent replica"
+                )
+            if r.ensemble._flatness_limit != fl0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    f"the same flatness_limit; got {fl0!r} on replica 0 "
+                    f"and {r.ensemble._flatness_limit!r} on a subsequent "
+                    "replica"
+                )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
-        # All walkers in a group share _schedule (set via ensemble_kwargs).
-        self._schedule: Schedule = cast(
-            Schedule, self._replicas[0].ensemble._schedule
-        )
+        self._schedule: Schedule = cast(Schedule, sched0)
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
                 is_flat=False,

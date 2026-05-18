@@ -226,6 +226,70 @@ def test_mismatched_windows_raises():
         WangLandauWindowGroup([r0, r1], random_seed=0)
 
 
+def test_mismatched_schedules_raises():
+    """Replicas with different WL schedules cannot form a group."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    common_kwargs = dict(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+    )
+    r0 = WangLandauReplica(
+        **common_kwargs, random_seed=0,
+        ensemble_kwargs={"schedule": "halving"},
+    )
+    r1 = WangLandauReplica(
+        **common_kwargs, random_seed=1,
+        ensemble_kwargs={"schedule": "1_over_t"},
+    )
+    with pytest.raises(ValueError, match="same schedule"):
+        WangLandauWindowGroup([r0, r1], random_seed=0)
+
+
+def test_mismatched_flatness_limits_raises():
+    """Replicas with different flatness_limits cannot form a group."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    common_kwargs = dict(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+    )
+    r0 = WangLandauReplica(
+        **common_kwargs, random_seed=0,
+        ensemble_kwargs={"flatness_limit": 0.8},
+    )
+    r1 = WangLandauReplica(
+        **common_kwargs, random_seed=1,
+        ensemble_kwargs={"flatness_limit": 0.5},
+    )
+    with pytest.raises(ValueError, match="same flatness_limit"):
+        WangLandauWindowGroup([r0, r1], random_seed=0)
+
+
 def test_snapshot_for_checkpoint_raises():
     """snapshot_for_checkpoint raises NotImplementedError."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
