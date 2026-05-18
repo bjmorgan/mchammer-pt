@@ -646,6 +646,35 @@ class ProcessWangLandauWindow:
         return any(s.window_entry_step is None for s in self._last)
 
 
+def _merge_per_window_stats(
+    slot_stats: list[dict[str, Any]],
+    flatness_mode: FlatnessMode,
+) -> dict[str, Any]:
+    """Merge per-walker WL stats dicts for one window into a single dict.
+
+    Single-walker slots are returned as-is. Multi-walker slots get a
+    summed histogram, the per-walker flat-min, and the slot's
+    flatness mode attached. Pure function on the IPC payload.
+    """
+    if len(slot_stats) == 1:
+        return slot_stats[0]
+    combined_hist: dict[int, int] = {}
+    for s in slot_stats:
+        for k, v in s["histogram"].items():
+            combined_hist[k] = combined_hist.get(k, 0) + v
+    per_walker_flat_min = _compute_per_walker_flat_min(
+        [s["histogram"] for s in slot_stats]
+    )
+    return {
+        "fill_factor": slot_stats[0]["fill_factor"],
+        "halvings": slot_stats[0]["halvings"],
+        "histogram": combined_hist,
+        "converged": all(s["converged"] for s in slot_stats),
+        "flatness_mode": flatness_mode,
+        "per_walker_flat_min": per_walker_flat_min,
+    }
+
+
 def _compute_plan(slot: ProcessWangLandauWindow) -> _CoordinatorPlan:
     """Decide per-slot coordinator actions from the slot's cached
     post-block state; no IPC.
@@ -1123,24 +1152,7 @@ class ProcessWangLandauPool:
             n_workers = len(slot.workers)
             slot_stats = all_stats[offset:offset + n_workers]
             offset += n_workers
-            if n_workers == 1:
-                result.append(slot_stats[0])
-            else:
-                combined_hist: dict[int, int] = {}
-                for s in slot_stats:
-                    for k, v in s["histogram"].items():
-                        combined_hist[k] = combined_hist.get(k, 0) + v
-                per_walker_flat_min = _compute_per_walker_flat_min(
-                    [s["histogram"] for s in slot_stats]
-                )
-                result.append({
-                    "fill_factor": slot_stats[0]["fill_factor"],
-                    "halvings": slot_stats[0]["halvings"],
-                    "histogram": combined_hist,
-                    "converged": all(s["converged"] for s in slot_stats),
-                    "flatness_mode": slot._flatness_mode,
-                    "per_walker_flat_min": per_walker_flat_min,
-                })
+            result.append(_merge_per_window_stats(slot_stats, slot._flatness_mode))
         return result
 
     def per_window_data_containers(self) -> list[list[BaseDataContainer]]:

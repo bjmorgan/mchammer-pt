@@ -10,6 +10,7 @@ from mchammer_pt.parallel.processes import (
     ProcessWangLandauPool,
     ProcessWangLandauWindow,
     _compute_plan,
+    _merge_per_window_stats,
 )
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
@@ -174,6 +175,19 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert isinstance(s["histogram"], dict)
         assert isinstance(s["converged"], bool)
         assert s["fill_factor"] > 0.0
+
+
+def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
+    """Single-walker slot: the per-walker stats dict is returned as-is."""
+    s = {
+        "fill_factor": 0.5,
+        "halvings": 1,
+        "histogram": {0: 10, 1: 20},
+        "converged": False,
+    }
+    out = _merge_per_window_stats([s], flatness_mode="pooled")
+    assert out is s
+    assert set(out.keys()) == {"fill_factor", "halvings", "histogram", "converged"}
 
 
 def test_serial_wl_pool_swap_configurations_refreshes_window_flag():
@@ -460,6 +474,31 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
         # Halve walker 1 as well; slot now converges.
         request(conn1, ("FORCE_HALVE",), 0)
         assert pool.converged_flags()[0]
+
+
+def test_merge_per_window_stats_multi_walker_sums_histograms():
+    """Multi-walker slot: histogram is summed; fill_factor/halvings come
+    from walker 0; converged is the AND across walkers; flatness_mode and
+    per_walker_flat_min are attached."""
+    s0 = {
+        "fill_factor": 0.5,
+        "halvings": 2,
+        "histogram": {0: 10, 1: 20, 2: 30},
+        "converged": False,
+    }
+    s1 = {
+        "fill_factor": 0.25,
+        "halvings": 3,
+        "histogram": {1: 5, 2: 15, 3: 25},
+        "converged": True,
+    }
+    out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
+    assert out["fill_factor"] == 0.5
+    assert out["halvings"] == 2
+    assert out["histogram"] == {0: 10, 1: 25, 2: 45, 3: 25}
+    assert out["converged"] is False
+    assert out["flatness_mode"] == "pooled"
+    assert "per_walker_flat_min" in out
 
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
