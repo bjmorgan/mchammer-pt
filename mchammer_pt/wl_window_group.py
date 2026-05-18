@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from mchammer.observers.base_observer import BaseObserver
@@ -12,12 +12,10 @@ from mchammer.observers.base_observer import BaseObserver
 from .wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     CoordinatorPlan,
-    FlatnessMode,
-    MergeCadence,
+    Phase,
+    Schedule,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
-    _validate_flatness_mode,
-    _validate_merge_cadence,
     merge_entropies,
 )
 from .wl_replica import WangLandauReplica
@@ -31,26 +29,25 @@ if TYPE_CHECKING:
 class WangLandauWindowGroup:
     """A group of independent Wang-Landau walkers sharing one energy window.
 
-    Owns the collective halving decision: the halve gate fires when
-    either every walker is independently flat (``flatness_mode="per_walker"``,
-    published Vogel et al. 2013) or the summed histogram across walkers
-    is flat (``flatness_mode="pooled"``, default). At a collective halve
-    all walkers' fill factors halve in lockstep and histograms reset.
+    Runs W walkers in a single energy window, snapshots their state
+    after each block, and applies coordinator plans (halve, merge
+    entropy, phase switch) to all walkers in lockstep. Policy decisions
+    (flatness mode, merge cadence) live at the pool level; the pool
+    consults the group's per-walker snapshots, decides what to do, and
+    hands the group a ``CoordinatorPlan`` containing the resulting
+    actions (not the policy inputs). The group executes the plan
+    mechanically.
 
-    Entropy merge cadence is controlled by ``merge_cadence``:
-
-    - ``"at_halve"`` (default): merge entropies at each collective halve
-      (Vogel et al. 2013 cadence).
-    - ``"never"``: no mid-run merge; walkers run fully independently.
-
-    In the 1/t phase no mid-run merge fires regardless of cadence.
+    All replicas must share the same energy window, energy spacing,
+    schedule, and flatness limit. The constructor enforces these
+    invariants because coordinator decisions are taken against
+    walker 0's cached values and applied uniformly across the group.
 
     Args:
         replicas: pre-constructed WangLandauReplica instances, all with
-            the same energy window and energy spacing.
+            the same energy window, energy spacing, schedule, and
+            flatness limit.
         random_seed: seed for the exchange-walker selection RNG.
-        flatness_mode: ``"per_walker"`` or ``"pooled"`` (default).
-        merge_cadence: ``"at_halve"`` (default) or ``"never"``.
     """
 
     def __init__(
@@ -58,31 +55,39 @@ class WangLandauWindowGroup:
         replicas: list[WangLandauReplica],
         *,
         random_seed: int,
-        flatness_mode: FlatnessMode = "pooled",
-        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
-        if len(replicas) < 1:
+        if len(replicas) < 2:
             raise ValueError(
-                "WangLandauWindowGroup requires at least one replica"
+                "WangLandauWindowGroup requires at least two replicas; "
+                "use a bare WangLandauReplica for single-walker windows"
             )
-        if len(replicas) > 1:
-            w0 = replicas[0].energy_window
-            s0 = replicas[0].energy_spacing
-            for r in replicas[1:]:
-                if r.energy_window != w0 or r.energy_spacing != s0:
-                    raise ValueError(
-                        "all replicas in a WangLandauWindowGroup must share "
-                        "the same energy window and spacing"
-                    )
-        _validate_flatness_mode(flatness_mode)
-        _validate_merge_cadence(merge_cadence)
+        w0 = replicas[0].energy_window
+        s0 = replicas[0].energy_spacing
+        sched0 = replicas[0].ensemble._schedule
+        fl0 = replicas[0].ensemble._flatness_limit
+        for r in replicas[1:]:
+            if r.energy_window != w0 or r.energy_spacing != s0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    "the same energy window and spacing"
+                )
+            if r.ensemble._schedule != sched0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    f"the same schedule; got {sched0!r} on replica 0 and "
+                    f"{r.ensemble._schedule!r} on a subsequent replica"
+                )
+            if r.ensemble._flatness_limit != fl0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    f"the same flatness_limit; got {fl0!r} on replica 0 "
+                    f"and {r.ensemble._flatness_limit!r} on a subsequent "
+                    "replica"
+                )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
-        self._flatness_mode: FlatnessMode = flatness_mode
-        self._merge_cadence: MergeCadence = merge_cadence
-        # All walkers in a group share _schedule (set via ensemble_kwargs).
-        self._schedule: str = self._replicas[0].ensemble._schedule
+        self._schedule: Schedule = cast(Schedule, sched0)
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
                 is_flat=False,
@@ -110,19 +115,7 @@ class WangLandauWindowGroup:
 
     def _snapshot_replica(self, replica: WangLandauReplica) -> WalkerPostBlockState:
         """Read live ensemble state into a WalkerPostBlockState."""
-        e = replica.ensemble
-        return WalkerPostBlockState(
-            is_flat=replica.is_flat(),
-            fill_factor=float(e._fill_factor),
-            entropy=dict(e._entropy),
-            step=int(e.step),
-            window_entry_step=(
-                None if e._window_entry_step is None
-                else int(e._window_entry_step)
-            ),
-            histogram=dict(e._histogram),
-            reached_energy_window=bool(e._reached_energy_window),
-        )
+        return replica._snapshot()
 
     def apply_plan(self, plan: CoordinatorPlan) -> None:
         """Apply the coordinator's plan to every walker.
@@ -152,18 +145,13 @@ class WangLandauWindowGroup:
         self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
 
     def finalise_for_reporting(self) -> None:
-        """Merge per-walker entropies into a single window estimate.
+        """Merge per-walker entropies; write the result into every walker.
 
-        Called once at the end of a WL run, regardless of
-        ``merge_cadence``. Writes the merged dict into every walker's
-        ``_entropy`` and refreshes ``_last_state``, so any downstream
-        reader (``WindowResult``, data containers) sees a consistent
-        estimate regardless of which walker it samples from.
-
-        No-op for single-walker groups.
+        Called once at the end of a WL run. Writes the merged dict into
+        every walker's ``_entropy`` and refreshes ``_last_state``, so any
+        downstream reader (``WindowResult``, data containers) sees a
+        consistent estimate regardless of which walker it samples from.
         """
-        if len(self._replicas) <= 1:
-            return
         merged = merge_entropies(
             [dict(r.ensemble._entropy) for r in self._replicas]
         )
@@ -194,6 +182,18 @@ class WangLandauWindowGroup:
     @property
     def cluster_expansion_path(self) -> str | None:
         return self._replicas[0].cluster_expansion_path
+
+    @property
+    def phase(self) -> Phase:
+        return cast(Phase, self._replicas[0].ensemble._phase)
+
+    @property
+    def schedule(self) -> Schedule:
+        return self._schedule
+
+    @property
+    def flatness_limit(self) -> float:
+        return float(self._replicas[0].ensemble._flatness_limit)
 
     def current_energy(self) -> float:
         return self._replicas[self._exchange_idx].current_energy()
@@ -228,14 +228,12 @@ class WangLandauWindowGroup:
 
         Returns:
             ``fill_factor`` and ``halvings`` from replica 0 (all in sync
-            after advance); ``histogram`` is the sum across all walkers
-            (the gate-relevant quantity under ``flatness_mode="pooled"``);
-            ``converged`` requires every walker to be converged.
-            ``flatness_mode`` is this group's mode (used by the progress
-            reporter to display the gate-relevant flat_min);
+            after advance); ``histogram`` is the sum across all walkers;
+            ``converged`` requires every walker to be converged;
             ``per_walker_flat_min`` is min over walkers of
             ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
-            yet built a histogram.
+            yet built a histogram. ``flatness_mode`` is not included
+            here; the pool injects it (pool-level policy).
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}
@@ -250,7 +248,6 @@ class WangLandauWindowGroup:
             "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
             "converged": self.converged,
-            "flatness_mode": self._flatness_mode,
             "per_walker_flat_min": per_walker_flat_min,
         }
 
@@ -260,9 +257,7 @@ class WangLandauWindowGroup:
             r.refresh_last_state()
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        if len(self._replicas) > 1:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-        return self._replicas[0].snapshot_for_checkpoint()
+        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""

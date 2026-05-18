@@ -50,6 +50,24 @@ MergeCadence = Literal["at_halve", "never"]
 """
 
 
+Schedule = Literal["halving", "1_over_t"]
+"""Fill-factor schedule for the underlying WL ensemble.
+
+- ``"halving"``: classic Wang-Landau; halve ``_fill_factor`` at each
+  collective halve event.
+- ``"1_over_t"``: Belardinelli-Pereyra 1/t schedule; switch to
+  ``_fill_factor = 1/t`` once every walker satisfies ``1/t > f``.
+"""
+
+
+Phase = Literal["halving", "1_over_t"]
+"""Current phase of the WL run.
+
+- ``"halving"``: the collective halve gate is active.
+- ``"1_over_t"``: the BP switch has fired; no more halving.
+"""
+
+
 _VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
 _VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
 
@@ -75,10 +93,10 @@ class SlotView:
     """Read-only snapshot of one slot at one decision point."""
 
     walker_states: tuple[WalkerPostBlockState, ...]
-    phase: str
+    phase: Phase
     flatness_mode: FlatnessMode
     merge_cadence: MergeCadence
-    schedule: str
+    schedule: Schedule
     flatness_limit: float
 
     @property

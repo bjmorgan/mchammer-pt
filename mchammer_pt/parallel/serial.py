@@ -16,11 +16,14 @@ from mchammer.observers.base_observer import (
 
 from ..replica import Replica
 from ..wl_coordinator import (
+    FlatnessMode,
+    MergeCadence,
     SlotView,
+    _validate_flatness_mode,
+    _validate_merge_cadence,
     decide_block_actions,
 )
 from ..wl_replica import WangLandauReplica, WangLandauSlot
-from ..wl_window_group import WangLandauWindowGroup
 from ._imports import _resolve_replicas
 
 if TYPE_CHECKING:
@@ -225,21 +228,6 @@ class SerialPool:
         return None
 
 
-def _view_of_serial_slot(slot: WangLandauSlot) -> SlotView:
-    """Build a SlotView from a serial slot's walker_states."""
-    assert isinstance(slot, WangLandauWindowGroup), (
-        "serial slot must be a WangLandauWindowGroup"
-    )
-    return SlotView(
-        walker_states=tuple(slot.walker_states),
-        phase=slot._replicas[0].ensemble._phase,
-        flatness_mode=slot._flatness_mode,
-        merge_cadence=slot._merge_cadence,
-        schedule=slot._schedule,
-        flatness_limit=slot._replicas[0].ensemble._flatness_limit,
-    )
-
-
 class SerialWangLandauPool:
     """In-process pool of `WangLandauReplica` instances.
 
@@ -255,9 +243,15 @@ class SerialWangLandauPool:
         replicas: Sequence[WangLandauSlot],
         *,
         energy_spacing: float,
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
                 raise ValueError(
@@ -291,6 +285,17 @@ class SerialWangLandauPool:
     def energy_spacing(self) -> float:
         return self._energy_spacing
 
+    def _view_of(self, slot: WangLandauSlot) -> SlotView:
+        """Build a SlotView from a slot's walker_states plus pool config."""
+        return SlotView(
+            walker_states=tuple(slot.walker_states),
+            phase=slot.phase,
+            flatness_mode=self._flatness_mode,
+            merge_cadence=self._merge_cadence,
+            schedule=slot.schedule,
+            flatness_limit=slot.flatness_limit,
+        )
+
     def advance_all(self, n_steps: int) -> None:
         # ADVANCE + COLLECT: each slot advances its walkers and populates
         # its walker_states from live ensemble state.
@@ -298,20 +303,16 @@ class SerialWangLandauPool:
             slot.advance(n_steps)
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
-        # Only WangLandauWindowGroup slots participate; single-walker
-        # WangLandauReplica slots carry their own coordinator internally.
-        group_slots = [
-            s for s in self._replicas if isinstance(s, WangLandauWindowGroup)
+        plans = [
+            decide_block_actions(self._view_of(s)) for s in self._replicas
         ]
-        plans = [decide_block_actions(_view_of_serial_slot(s))
-                 for s in group_slots]
 
         # APPLY: per-slot mutation. No batching benefit in-process.
-        for slot, plan in zip(group_slots, plans, strict=True):
+        for slot, plan in zip(self._replicas, plans, strict=True):
             slot.apply_plan(plan)
 
         # Re-roll exchange-walker selection per slot.
-        for slot in group_slots:
+        for slot in self._replicas:
             slot.reroll_exchange_idx()
 
     def current_energies(self) -> np.ndarray:
@@ -353,7 +354,10 @@ class SerialWangLandauPool:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
     def per_window_stats(self) -> list[dict[str, Any]]:
-        return [r.window_stats() for r in self._replicas]
+        stats = [r.window_stats() for r in self._replicas]
+        for d in stats:
+            d["flatness_mode"] = self._flatness_mode
+        return stats
 
     def attach_observer(
         self,
