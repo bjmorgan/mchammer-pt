@@ -803,3 +803,23 @@ def test_finalise_for_reporting_single_walker_noop():
 
     # Untouched.
     assert replicas[0].ensemble._entropy == {0: 1.0, 1: 2.0}
+
+
+def test_finalise_for_reporting_idempotent():
+    """Calling finalise twice produces the same state as calling it once."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+    replicas[0].ensemble._entropy = {0: 0.0, 1: 5.0}
+    replicas[1].ensemble._entropy = {0: 10.0, 1: 15.0}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.finalise_for_reporting()
+    state_after_first = {b: replicas[0].ensemble._entropy[b] for b in (0, 1)}
+
+    group.finalise_for_reporting()
+    state_after_second = {b: replicas[0].ensemble._entropy[b] for b in (0, 1)}
+
+    assert state_after_second == state_after_first

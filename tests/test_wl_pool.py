@@ -845,6 +845,8 @@ def test_wl_worker_advance_ack_carries_state(tmp_path):
         assert payload.window_entry_step is None or isinstance(
             payload.window_entry_step, int
         )
+        assert isinstance(payload.histogram, dict)
+        assert isinstance(payload.reached_energy_window, bool)
     finally:
         request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
