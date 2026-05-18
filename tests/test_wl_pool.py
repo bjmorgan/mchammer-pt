@@ -12,7 +12,42 @@ from mchammer_pt.parallel.processes import (
     _compute_plan,
     _merge_per_window_stats,
 )
+from tests._in_process_worker import InProcessWorkerConn
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+
+def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
+    """Build an :class:`InProcessWorkerConn` around a real WL replica.
+
+    Mirrors the seeds, energy limits and ensemble class used by
+    :func:`_spawn_wl_worker` so opcode tests can swap one for the other
+    without changing the rest of the test body. Used by the tier-1
+    in-process opcode round-trip tests; the surviving subprocess pin
+    (``test_wl_worker_advance_ack_carries_state``) still uses
+    :func:`_spawn_wl_worker` to exercise the real pickle boundary.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    replica = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs=dict(ensemble_kwargs or {}),
+    )
+    return InProcessWorkerConn(replica)
 
 
 def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
@@ -814,88 +849,64 @@ def test_wl_worker_advance_ack_carries_state(tmp_path):
         process.join(timeout=5.0)
 
 
-def test_wl_worker_get_entropy_round_trip(tmp_path):
+def test_wl_worker_get_entropy_round_trip():
     """GET_ENTROPY returns the worker's current entropy dict."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        # Run some MC so entropy is non-empty.
-        request(conn, ("ADVANCE", 50), 0)
-        payload = request(conn, ("GET_ENTROPY",), 0)
-        assert isinstance(payload, dict)
-        assert all(isinstance(k, int) for k in payload)
-        assert all(isinstance(v, float) for v in payload.values())
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
+    conn = _make_wl_in_process_conn()
+    # Run some MC so entropy is non-empty.
+    request(conn, ("ADVANCE", 50), 0)
+    payload = request(conn, ("GET_ENTROPY",), 0)
+    assert isinstance(payload, dict)
+    assert all(isinstance(k, int) for k in payload)
+    assert all(isinstance(v, float) for v in payload.values())
 
 
-def test_wl_worker_set_entropy_overwrites_in_place(tmp_path):
+def test_wl_worker_set_entropy_overwrites_in_place():
     """SET_ENTROPY replaces ensemble._entropy."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        merged = {0: 1.5, 1: 2.5}
-        request(conn, ("SET_ENTROPY", merged), 0)
-        got = request(conn, ("GET_ENTROPY",), 0)
-        assert got == merged
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
+    conn = _make_wl_in_process_conn()
+    merged = {0: 1.5, 1: 2.5}
+    request(conn, ("SET_ENTROPY", merged), 0)
+    got = request(conn, ("GET_ENTROPY",), 0)
+    assert got == merged
 
 
-def test_wl_worker_force_halve_round_trip(tmp_path):
+def test_wl_worker_force_halve_round_trip():
     """FORCE_HALVE halves fill_factor and grows history."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        before = request(conn, ("ADVANCE", 50), 0)
-        request(conn, ("FORCE_HALVE",), 0)
-        after = request(conn, ("ADVANCE", 0), 0)
-        assert after.fill_factor == pytest.approx(before.fill_factor / 2.0)
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
+    conn = _make_wl_in_process_conn()
+    before = request(conn, ("ADVANCE", 50), 0)
+    request(conn, ("FORCE_HALVE",), 0)
+    after = request(conn, ("ADVANCE", 0), 0)
+    assert after.fill_factor == pytest.approx(before.fill_factor / 2.0)
 
 
-def test_wl_worker_finalise_merge_writes_entropy_and_refreshes_last_state(
-    tmp_path,
-):
+def test_wl_worker_finalise_merge_writes_entropy_and_refreshes_last_state():
     """FINALISE_MERGE writes the supplied dict to _entropy and refreshes _last_state."""
-    process, conn = _spawn_wl_worker(tmp_path)
-    try:
-        # Run some MC so the data container exists and _last_state is initialised.
-        request(conn, ("ADVANCE", 50), 0)
-        merged = {0: 0.0, 1: 5.0}
-        request(conn, ("FINALISE_MERGE", merged), 0)
-        # Entropy on the ensemble matches the supplied dict.
-        got = request(conn, ("GET_ENTROPY",), 0)
-        assert got == merged
-        # The data container's _last_state was refreshed with the merged values.
-        dc = request(conn, ("GET_DC",), 0)
-        assert dict(dc._last_state["entropy"]) == merged
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
+    conn = _make_wl_in_process_conn()
+    # Run some MC so the data container exists and _last_state is initialised.
+    request(conn, ("ADVANCE", 50), 0)
+    merged = {0: 0.0, 1: 5.0}
+    request(conn, ("FINALISE_MERGE", merged), 0)
+    # Entropy on the ensemble matches the supplied dict.
+    got = request(conn, ("GET_ENTROPY",), 0)
+    assert got == merged
+    # The data container's _last_state was refreshed with the merged values.
+    dc = request(conn, ("GET_DC",), 0)
+    assert dict(dc._last_state["entropy"]) == merged
 
 
-def test_wl_worker_set_phase_round_trip(tmp_path):
+def test_wl_worker_set_phase_round_trip():
     """SET_PHASE switches ensemble._phase under the 1/t schedule."""
     # SET_PHASE -> "1_over_t" is only meaningful for schedule="1_over_t"
     # because that schedule records ``_window_entry_step``, which the
     # autonomous 1/t-phase ``_fill_factor = 1/t`` update requires. In
     # production the coordinator only fires SET_PHASE under the same
     # schedule gate.
-    process, conn = _spawn_wl_worker(
-        tmp_path, ensemble_kwargs={"schedule": "1_over_t"}
-    )
-    try:
-        # Advance to record _window_entry_step on the first in-window step.
-        request(conn, ("ADVANCE", 50), 0)
-        request(conn, ("SET_PHASE", "1_over_t"), 0)
-        # Subsequent ADVANCE in 1_over_t phase tracks 1/t.
-        after = request(conn, ("ADVANCE", 5), 0)
-        assert isinstance(after.fill_factor, float)
-    finally:
-        request(conn, ("SHUTDOWN",), 0)
-        process.join(timeout=5.0)
+    conn = _make_wl_in_process_conn(ensemble_kwargs={"schedule": "1_over_t"})
+    # Advance to record _window_entry_step on the first in-window step.
+    request(conn, ("ADVANCE", 50), 0)
+    request(conn, ("SET_PHASE", "1_over_t"), 0)
+    # Subsequent ADVANCE in 1_over_t phase tracks 1/t.
+    after = request(conn, ("ADVANCE", 5), 0)
+    assert isinstance(after.fill_factor, float)
 
 
 def test_serial_pool_finalise_for_reporting_merges_walker_entropies():
