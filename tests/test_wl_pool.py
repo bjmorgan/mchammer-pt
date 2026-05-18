@@ -551,56 +551,9 @@ def test_process_wl_pool_at_halve_cadence_skips_non_halve_merge(tmp_path):
         assert e0_dict != e1_dict
 
 
-def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
-    """Coordinator plan omits BP switch when any walker has not entered."""
-    from mchammer_pt.wl_window_group import WalkerPostBlockState
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        ensemble_kwargs={"schedule": "1_over_t"},
-        flatness_mode="per_walker",
-    ) as pool:
-        slot: ProcessWangLandauWindow = pool._slots[0]
-        slot._schedule = "1_over_t"
-        # Synthesise a state where walker 0 has entered and walker 1
-        # has not, with f small enough that 1/t > f for any t after
-        # a collective halve.
-        slot._last = [
-            WalkerPostBlockState(
-                is_flat=True,
-                fill_factor=1e-6,
-                entropy={},
-                step=100,
-                window_entry_step=0,
-                histogram={},
-                reached_energy_window=True,
-            ),
-            WalkerPostBlockState(
-                is_flat=True,
-                fill_factor=1e-6,
-                entropy={},
-                step=100,
-                window_entry_step=None,
-                histogram={},
-                reached_energy_window=False,
-            ),
-        ]
-        plan = _compute_plan(slot)
-        # All flat ⇒ plan to halve, but BP switch refused because one
-        # walker has no defined ``t``.
-        assert plan.halve is True
-        assert plan.switch_to_phase is None
-
-
-def _make_compute_plan_slot(
-    pool: ProcessWangLandauPool,
+def _make_slot(
     *,
+    n_walkers: int = 2,
     is_flat: bool,
     schedule: str,
     flatness_mode: str,
@@ -608,15 +561,41 @@ def _make_compute_plan_slot(
     window_entry_step: int | None,
     fill_factor: float,
     entropy: dict[int, float],
+    histogram: dict[int, int] | None = None,
+    phase: str = "halving",
+    reached_energy_window: bool | None = None,
 ) -> ProcessWangLandauWindow:
-    """Set up a slot's cached state for a _compute_plan test."""
+    """Build a ``ProcessWangLandauWindow`` with mock workers for unit-testing
+    ``_compute_plan``.
+
+    The mock worker tuples carry ``MagicMock`` placeholders for the
+    process and connection; ``_compute_plan`` only reads
+    ``slot.workers`` via ``len(...)`` and the ``(_, conn)`` unpacking
+    pattern -- it never sends or receives on the connection. When
+    ``reached_energy_window`` is ``None`` it defaults to
+    ``window_entry_step is not None`` (the relationship icet maintains
+    under the 1/t schedule); pass an explicit bool to decouple the two
+    (as the halving schedule does -- walkers can have entered without
+    ``window_entry_step`` being set).
+    """
+    from unittest.mock import MagicMock
+
     from mchammer_pt.wl_window_group import WalkerPostBlockState
 
-    slot = pool._slots[0]
-    slot._schedule = schedule
-    slot._flatness_mode = flatness_mode  # type: ignore[assignment]
-    slot._merge_cadence = merge_cadence  # type: ignore[assignment]
-    n = len(slot.workers)
+    workers = [(MagicMock(), MagicMock()) for _ in range(n_walkers)]
+    slot = ProcessWangLandauWindow(
+        workers=workers,
+        rng=np.random.default_rng(0),
+        flatness_mode=flatness_mode,  # type: ignore[arg-type]
+        merge_cadence=merge_cadence,  # type: ignore[arg-type]
+        schedule=schedule,
+    )
+    slot.phase = phase
+    rew = (
+        reached_energy_window
+        if reached_energy_window is not None
+        else window_entry_step is not None
+    )
     slot._last = [
         WalkerPostBlockState(
             is_flat=is_flat,
@@ -624,188 +603,151 @@ def _make_compute_plan_slot(
             entropy=dict(entropy),
             step=100,
             window_entry_step=window_entry_step,
-            histogram={},
-            reached_energy_window=window_entry_step is not None,
+            histogram=dict(histogram) if histogram is not None else {},
+            reached_energy_window=rew,
         )
-        for _ in range(n)
+        for _ in range(n_walkers)
     ]
     return slot
 
 
-def test_compute_plan_halving_all_flat_w2_at_halve_cadence(tmp_path):
-    """W=2 + all flat + halving phase ⇒ halve + merged entropy plan."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+def test_process_wl_window_bp_switch_refuses_unentered_walker():
+    """Coordinator plan omits BP switch when any walker has not entered."""
+    from unittest.mock import MagicMock
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-    ) as pool:
-        slot = _make_compute_plan_slot(
-            pool,
-            is_flat=True,
-            schedule="halving",
-            flatness_mode="per_walker",
-            merge_cadence="at_halve",
-            window_entry_step=0,
-            fill_factor=1.0,
-            entropy={0: 1.0, 1: 2.0},
-        )
-        plan = _compute_plan(slot)
-        assert plan.halve is True
-        # Both walkers have identical entropy {0: 1.0, 1: 2.0}; after
-        # intersection-mean rebasing each becomes {0: -0.5, 1: 0.5},
-        # the bin-wise average is the same, and the post-shift to
-        # min=0 yields {0: 0.0, 1: 1.0}.
-        assert plan.merged_entropy == {0: 0.0, 1: 1.0}
-        assert plan.switch_to_phase is None
-
-
-def test_compute_plan_pooled_flatness_default_schedule_halves(tmp_path):
-    """Default config (halving schedule, pooled flatness, W=2) actually halves.
-
-    Regression test: under the halving schedule, ``_window_entry_step``
-    stays ``None`` (icet only sets it under the 1/t schedule). A prior
-    gate on ``window_entry_step is None`` caused the pooled-flatness
-    halve to never fire under the documented default config. The gate
-    now uses ``reached_energy_window``, which is set under both
-    schedules.
-    """
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
     from mchammer_pt.wl_window_group import WalkerPostBlockState
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        # Default flatness_mode="pooled", merge_cadence="at_halve",
-        # schedule="halving" (icet default).
-    ) as pool:
-        slot = pool._slots[0]
-        # Synthesise the post-block state under the halving schedule:
-        # both walkers have entered (reached_energy_window=True) and have
-        # accumulated a pooled-flat histogram, but window_entry_step
-        # remains None because icet only sets it under 1/t.
-        slot._last = [
-            WalkerPostBlockState(
-                is_flat=True,
-                fill_factor=1.0,
-                entropy={0: 1.0, 1: 2.0},
-                step=100,
-                window_entry_step=None,
-                histogram={0: 1000, 1: 1000},
-                reached_energy_window=True,
-            ),
-            WalkerPostBlockState(
-                is_flat=True,
-                fill_factor=1.0,
-                entropy={0: 1.0, 1: 2.0},
-                step=100,
-                window_entry_step=None,
-                histogram={0: 1000, 1: 1000},
-                reached_energy_window=True,
-            ),
-        ]
-        plan = _compute_plan(slot)
-        assert plan.halve is True
-
-
-def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge(tmp_path):
-    """halving phase + not flat + merge_cadence='at_halve' => no halve and no merge."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-    ) as pool:
-        slot = _make_compute_plan_slot(
-            pool,
-            is_flat=False,
-            schedule="halving",
-            flatness_mode="per_walker",
-            merge_cadence="at_halve",
-            window_entry_step=0,
-            fill_factor=1.0,
-            entropy={0: 1.0, 1: 2.0},
-        )
-        plan = _compute_plan(slot)
-        assert plan.halve is False
-        assert plan.merged_entropy is None
-        assert plan.switch_to_phase is None
-
-
-def test_compute_plan_one_over_t_w2_no_midrun_merge(tmp_path):
-    """In 1/t phase, _compute_plan does not produce merged_entropy."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        ensemble_kwargs={"schedule": "1_over_t"},
-    ) as pool:
-        slot = _make_compute_plan_slot(
-            pool,
-            is_flat=False,
-            schedule="1_over_t",
-            flatness_mode="per_walker",
-            merge_cadence="at_halve",
-            window_entry_step=0,
-            fill_factor=0.001,
-            entropy={0: 1.0, 1: 2.0},
-        )
-        slot.phase = "1_over_t"
-        plan = _compute_plan(slot)
-        assert plan.halve is False
-        assert plan.merged_entropy is None
-        assert plan.switch_to_phase is None
-
-
-def test_compute_plan_halving_collective_halve_triggers_bp_switch(tmp_path):
-    """All flat + 1/t schedule + 1/t > post-halve f ⇒ halve + switch_to_phase."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0],
-        n_walkers_per_window=2,
-        ensemble_kwargs={"schedule": "1_over_t"},
-    ) as pool:
-        # f tiny ⇒ 1/t > f/2 trivially for any reasonable t.
-        slot = _make_compute_plan_slot(
-            pool,
+    # Walker 0 has entered, walker 1 has not. f is tiny so 1/t > f for
+    # any plausible t after a collective halve -- the BP switch would
+    # fire if t were defined for both walkers.
+    workers = [(MagicMock(), MagicMock()) for _ in range(2)]
+    slot = ProcessWangLandauWindow(
+        workers=workers,
+        rng=np.random.default_rng(0),
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+        schedule="1_over_t",
+    )
+    slot._last = [
+        WalkerPostBlockState(
             is_flat=True,
-            schedule="1_over_t",
-            flatness_mode="per_walker",
-            merge_cadence="at_halve",
-            window_entry_step=0,
             fill_factor=1e-6,
-            entropy={0: 1.0, 1: 2.0},
-        )
-        plan = _compute_plan(slot)
-        assert plan.halve is True
-        assert plan.switch_to_phase == "1_over_t"
+            entropy={},
+            step=100,
+            window_entry_step=0,
+            histogram={},
+            reached_energy_window=True,
+        ),
+        WalkerPostBlockState(
+            is_flat=True,
+            fill_factor=1e-6,
+            entropy={},
+            step=100,
+            window_entry_step=None,
+            histogram={},
+            reached_energy_window=False,
+        ),
+    ]
+    plan = _compute_plan(slot)
+    # All flat ⇒ plan to halve, but BP switch refused because one
+    # walker has no defined ``t``.
+    assert plan.halve is True
+    assert plan.switch_to_phase is None
+
+
+def test_compute_plan_halving_all_flat_w2_at_halve_cadence():
+    """W=2 + all flat + halving phase ⇒ halve + merged entropy plan."""
+    slot = _make_slot(
+        is_flat=True,
+        schedule="halving",
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+        window_entry_step=0,
+        fill_factor=1.0,
+        entropy={0: 1.0, 1: 2.0},
+    )
+    plan = _compute_plan(slot)
+    assert plan.halve is True
+    # Both walkers have identical entropy {0: 1.0, 1: 2.0}; after
+    # intersection-mean rebasing each becomes {0: -0.5, 1: 0.5},
+    # the bin-wise average is the same, and the post-shift to
+    # min=0 yields {0: 0.0, 1: 1.0}.
+    assert plan.merged_entropy == {0: 0.0, 1: 1.0}
+    assert plan.switch_to_phase is None
+
+
+def test_compute_plan_pooled_flatness_default_schedule_halves():
+    """Default config (halving schedule, pooled flatness, W=2) halves.
+
+    Regression: under the halving schedule icet leaves
+    ``window_entry_step`` unset, so the pooled gate must rely on
+    ``reached_energy_window`` (which is set under both schedules).
+    """
+    slot = _make_slot(
+        is_flat=True,
+        schedule="halving",
+        flatness_mode="pooled",
+        merge_cadence="at_halve",
+        window_entry_step=None,
+        reached_energy_window=True,
+        fill_factor=1.0,
+        entropy={0: 1.0, 1: 2.0},
+        histogram={0: 1000, 1: 1000},
+    )
+    plan = _compute_plan(slot)
+    assert plan.halve is True
+
+
+def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge():
+    """halving phase + not flat + merge_cadence='at_halve' => no halve and no merge."""
+    slot = _make_slot(
+        is_flat=False,
+        schedule="halving",
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+        window_entry_step=0,
+        fill_factor=1.0,
+        entropy={0: 1.0, 1: 2.0},
+    )
+    plan = _compute_plan(slot)
+    assert plan.halve is False
+    assert plan.merged_entropy is None
+    assert plan.switch_to_phase is None
+
+
+def test_compute_plan_one_over_t_w2_no_midrun_merge():
+    """In 1/t phase, _compute_plan does not produce merged_entropy."""
+    slot = _make_slot(
+        is_flat=False,
+        schedule="1_over_t",
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+        window_entry_step=0,
+        fill_factor=0.001,
+        entropy={0: 1.0, 1: 2.0},
+        phase="1_over_t",
+    )
+    plan = _compute_plan(slot)
+    assert plan.halve is False
+    assert plan.merged_entropy is None
+    assert plan.switch_to_phase is None
+
+
+def test_compute_plan_halving_collective_halve_triggers_bp_switch():
+    """All flat + 1/t schedule + 1/t > post-halve f ⇒ halve + switch_to_phase."""
+    # f tiny ⇒ 1/t > f/2 trivially for any reasonable t.
+    slot = _make_slot(
+        is_flat=True,
+        schedule="1_over_t",
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+        window_entry_step=0,
+        fill_factor=1e-6,
+        entropy={0: 1.0, 1: 2.0},
+    )
+    plan = _compute_plan(slot)
+    assert plan.halve is True
+    assert plan.switch_to_phase == "1_over_t"
 
 
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
