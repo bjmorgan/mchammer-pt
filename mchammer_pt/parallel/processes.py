@@ -30,8 +30,6 @@ from mchammer.observers.base_observer import (
 
 from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
-from ..wl_ensemble import CoordinatedWangLandauEnsemble
-from ..wl_replica import WangLandauReplica
 from ..wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
@@ -44,6 +42,8 @@ from ..wl_coordinator import (
     decide_block_actions,
     merge_entropies,
 )
+from ..wl_ensemble import CoordinatedWangLandauEnsemble
+from ..wl_replica import WangLandauReplica
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker

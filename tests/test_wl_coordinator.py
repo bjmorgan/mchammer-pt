@@ -7,8 +7,6 @@ over a pure data structure.
 
 from __future__ import annotations
 
-import pytest
-
 from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     SlotView,

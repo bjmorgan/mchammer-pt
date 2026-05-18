@@ -8,7 +8,6 @@ import pytest
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from mchammer_pt.parallel.processes import (
     ProcessWangLandauPool,
-    ProcessWangLandauWindow,
     _merge_per_window_stats,
 )
 from tests._in_process_worker import InProcessWorkerConn

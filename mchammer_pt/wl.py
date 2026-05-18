@@ -29,9 +29,6 @@ from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
-from .wl_ensemble import CoordinatedWangLandauEnsemble
-from .wl_replica import WangLandauReplica, WangLandauSlot
-from .wl_result import WindowResult
 from .wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
@@ -39,6 +36,9 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
 )
+from .wl_ensemble import CoordinatedWangLandauEnsemble
+from .wl_replica import WangLandauReplica, WangLandauSlot
+from .wl_result import WindowResult
 
 
 def _validate_windows(

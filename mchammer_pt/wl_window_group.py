@@ -22,7 +22,6 @@ from .wl_coordinator import (
 )
 from .wl_replica import WangLandauReplica
 
-
 if TYPE_CHECKING:
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
