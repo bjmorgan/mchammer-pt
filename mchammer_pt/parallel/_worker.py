@@ -264,6 +264,10 @@ class WangLandauWorker(BaseWorker):
         self._seed = seed
         self._ensemble_cls = ensemble_cls
         self._ensemble_kwargs = ensemble_kwargs
+        self._register_rewl_handlers()
+
+    def _register_rewl_handlers(self) -> None:
+        """Add REWL-only opcode handlers to the dispatch table."""
         self._handlers.update({
             "LOG_G_AT": self._handle_log_g_at,
             "CONVERGED": self._handle_converged,
@@ -274,6 +278,26 @@ class WangLandauWorker(BaseWorker):
             "SET_PHASE": self._handle_set_phase,
             "FINALISE_MERGE": self._handle_finalise_merge,
         })
+
+    @classmethod
+    def for_replica(
+        cls,
+        replica: WangLandauReplica,
+        *,
+        reply_sink: Callable[[Reply], None],
+    ) -> WangLandauWorker:
+        """Build a worker around a pre-existing replica.
+
+        Skips the production ``ce_path`` / ``atoms_dict`` build path,
+        which is only meaningful inside a spawned subprocess. Used by
+        in-process tests that drive the worker's handler table against
+        a real replica without crossing the pickle boundary.
+        """
+        worker = cls.__new__(cls)
+        BaseWorker.__init__(worker, reply_sink=reply_sink)
+        worker._replica = replica
+        worker._register_rewl_handlers()
+        return worker
 
     def _build_replica(self) -> WangLandauReplica:
         atoms = Atoms(
