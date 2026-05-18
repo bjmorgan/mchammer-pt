@@ -24,7 +24,6 @@ from ..wl_coordinator import (
     decide_block_actions,
 )
 from ..wl_replica import WangLandauReplica, WangLandauSlot
-from ..wl_window_group import WangLandauWindowGroup
 from ._imports import _resolve_replicas
 
 if TYPE_CHECKING:
@@ -304,19 +303,16 @@ class SerialWangLandauPool:
             slot.advance(n_steps)
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
-        # Only WangLandauWindowGroup slots participate; single-walker
-        # WangLandauReplica slots carry their own coordinator internally.
-        group_slots = [
-            s for s in self._replicas if isinstance(s, WangLandauWindowGroup)
+        plans = [
+            decide_block_actions(self._view_of(s)) for s in self._replicas
         ]
-        plans = [decide_block_actions(self._view_of(s)) for s in group_slots]
 
         # APPLY: per-slot mutation. No batching benefit in-process.
-        for slot, plan in zip(group_slots, plans, strict=True):
+        for slot, plan in zip(self._replicas, plans, strict=True):
             slot.apply_plan(plan)
 
         # Re-roll exchange-walker selection per slot.
-        for slot in group_slots:
+        for slot in self._replicas:
             slot.reroll_exchange_idx()
 
     def current_energies(self) -> np.ndarray:
