@@ -496,13 +496,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         # directly). The count must not change to preserve
         # bit-identical RNG with previously-saved checkpoints.
         seed_sequence = np.random.SeedSequence(random_seed)
+        # Spawn 2 * n_windows + 1 children to preserve bit-identical
+        # RNG with previously-saved checkpoints (the n_windows
+        # "group-seed" slots are unused on the resume path now that
+        # bare replicas serve as W=1 slots).
         child_seeds = seed_sequence.spawn(2 * n_windows + 1)
         replica_seeds = [
             int(child_seeds[i].generate_state(1)[0])
-            for i in range(n_windows)
-        ]
-        group_seeds = [
-            int(child_seeds[n_windows + i].generate_state(1)[0])
             for i in range(n_windows)
         ]
 

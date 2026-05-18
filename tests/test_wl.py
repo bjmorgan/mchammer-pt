@@ -461,7 +461,7 @@ def test_wl_pt_rejects_pool_plus_ensemble_kwargs():
 
 
 def test_wl_pt_resume_slots_are_bare_replicas(tmp_path):
-    """Resumed serial pool slots are bare WangLandauReplica, not WangLandauWindowGroup."""
+    """Resumed serial pool slots are bare WangLandauReplica."""
     from mchammer_pt.wl import WangLandauParallelTempering
     from mchammer_pt.wl_replica import WangLandauReplica
 

@@ -7,7 +7,6 @@ import inspect
 
 import numpy as np
 import pytest
-
 from mchammer.calculators import ClusterExpansionCalculator
 from mchammer.ensembles import WangLandauEnsemble
 
