@@ -547,8 +547,8 @@ class ProcessWangLandauWindow:
     the same coordinator-facing interface as
     ``WangLandauWindowGroup`` but implemented via pipe commands to
     the workers. Owns the local communication pattern; the policy
-    decisions live in ``wl_window_group`` free functions and are
-    invoked by ``ProcessWangLandauPool.advance_all``.
+    decisions live in ``wl_coordinator`` and are invoked by
+    ``ProcessWangLandauPool.advance_all``.
 
     Attributes:
         workers: list of (Process, Connection) pairs, one per walker.
@@ -984,11 +984,10 @@ class ProcessWangLandauPool:
         """End-of-run merge: fan out FINALISE_MERGE per multi-walker window.
 
         For each window with more than one walker: compute the merged
-        entropy on the coordinator side from the snapshot already cached
-        in ``slot.walker_states``, then send ``FINALISE_MERGE`` to every walker
-        in the window in a single fan-out so each walker's ``_entropy``
-        and data-container ``_last_state`` are updated in one round
-        trip. Single-walker windows are skipped.
+        entropy from ``slot.walker_states``, then send ``FINALISE_MERGE``
+        to every walker in the window in a single fan-out so each
+        walker's ``_entropy`` and data-container ``_last_state`` are
+        updated in one round trip. Single-walker windows are skipped.
         """
         self._check_open()
         try:

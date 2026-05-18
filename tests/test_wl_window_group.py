@@ -245,16 +245,11 @@ def test_attach_observer_factory_type_check():
 
 
 def test_decide_bp_switch_all_eligible_returns_true():
-    """All walkers in halving phase with 1/t > f → switch."""
+    """All walkers with 1/t > f → switch."""
     from mchammer_pt.wl_coordinator import decide_bp_switch
 
-    # phases all "halving", t/f such that 1/t > f for both.
-    assert (
-        decide_bp_switch(
-            phases=["halving", "halving"], ts=[100, 100], fs=[0.005, 0.005]
-        )
-        is True
-    )
+    # t/f such that 1/t > f for both.
+    assert decide_bp_switch(ts=[100, 100], fs=[0.005, 0.005]) is True
 
 
 def test_decide_bp_switch_any_walker_below_threshold_returns_false():
@@ -262,26 +257,7 @@ def test_decide_bp_switch_any_walker_below_threshold_returns_false():
     from mchammer_pt.wl_coordinator import decide_bp_switch
 
     # walker 1: 1/100 = 0.01, f = 0.02 -> 1/t < f
-    assert (
-        decide_bp_switch(
-            phases=["halving", "halving"], ts=[100, 100], fs=[0.005, 0.02]
-        )
-        is False
-    )
-
-
-def test_decide_bp_switch_already_switched_returns_false():
-    """Any walker already in 1_over_t phase → no further switch."""
-    from mchammer_pt.wl_coordinator import decide_bp_switch
-
-    assert (
-        decide_bp_switch(
-            phases=["halving", "1_over_t"],
-            ts=[100, 100],
-            fs=[0.001, 0.001],
-        )
-        is False
-    )
+    assert decide_bp_switch(ts=[100, 100], fs=[0.005, 0.02]) is False
 
 
 def test_is_flat_all_walkers_flat_returns_true():

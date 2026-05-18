@@ -226,12 +226,7 @@ class SerialPool:
 
 
 def _view_of_serial_slot(slot: WangLandauSlot) -> SlotView:
-    """Build a SlotView from a serial slot's walker_states.
-
-    Only WangLandauWindowGroup slots carry walker_states and the
-    coordinator config; bare WangLandauReplica slots are filtered out
-    upstream by the pool before this is called.
-    """
+    """Build a SlotView from a serial slot's walker_states."""
     assert isinstance(slot, WangLandauWindowGroup), (
         "serial slot must be a WangLandauWindowGroup"
     )

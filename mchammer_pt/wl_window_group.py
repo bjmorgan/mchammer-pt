@@ -99,7 +99,8 @@ class WangLandauWindowGroup:
     def advance(self, n_steps: int) -> None:
         """Advance all W replicas; refresh walker_states.
 
-        The coordinator's decide/apply runs at the pool level after advance.
+        Coordinator decide/apply runs in
+        ``SerialWangLandauPool.advance_all`` after this returns.
         """
         for r in self._replicas:
             r.advance(int(n_steps))
@@ -127,8 +128,7 @@ class WangLandauWindowGroup:
         """Apply the coordinator's plan to every walker.
 
         Order: halve (zeroes histograms, halves fill factors) -> write
-        merged entropy -> set phase. Matches the process pool's three
-        batched IPC rounds.
+        merged entropy -> set phase.
         """
         if plan.halve:
             for r in self._replicas:

@@ -1,10 +1,8 @@
 """Wang-Landau collective coordinator: policy types and pure decision functions.
 
-Holds the policy that decides per-block coordinator actions (collective
-halving, entropy merging, BP-switch). Pure: no dependency on `wl_replica`,
-backends, or IPC. Consumed by both `SerialWangLandauPool` (via
-`WangLandauWindowGroup.apply_plan`) and `ProcessWangLandauPool` (via
-batched IPC apply rounds).
+The per-block coordinator decision (collective halving, entropy
+merging, BP-switch) is expressed as a pure function over a frozen
+data view. No dependency on backends, replicas, or IPC.
 """
 
 from __future__ import annotations
@@ -23,13 +21,7 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
 
 @dataclass(frozen=True, slots=True)
 class WalkerPostBlockState:
-    """State a worker reports after each ``ADVANCE``.
-
-    Captured from a single worker reply at one MC step so the
-    coordinator can use them as a consistent snapshot. Read by the
-    coordinator to decide whether to halve, merge entropies, or flip
-    the BP phase.
-    """
+    """Snapshot of one walker's state at a single MC step."""
 
     is_flat: bool
     fill_factor: float
@@ -56,8 +48,6 @@ MergeCadence = Literal["at_halve", "never"]
 - ``"at_halve"``: merge entropies at each collective halve event
   (Vogel et al. 2013). Default.
 - ``"never"``: no mid-run merge; walkers run fully independently.
-
-In the 1/t phase, no mid-run merge fires regardless of this setting.
 """
 
 
@@ -83,12 +73,7 @@ def _validate_merge_cadence(merge_cadence: Any) -> None:
 
 @dataclass(frozen=True, slots=True)
 class SlotView:
-    """Read-only view of one slot at one decision point.
-
-    Pure data. Built by each backend's collect step from per-walker
-    snapshots plus the slot's scalar configuration. Consumed by
-    ``decide_block_actions``.
-    """
+    """Read-only snapshot of one slot at one decision point."""
 
     walker_states: tuple[WalkerPostBlockState, ...]
     phase: str
@@ -110,21 +95,20 @@ class CoordinatorPlan:
     reset.
     ``merged_entropy``: if not None, written into every walker's
     ``_entropy``.
-    ``switch_to_phase``: if not None (currently always ``"1_over_t"``
-    when set), the slot's phase is flipped and per-walker
-    ``_fill_factor`` is set to ``1/t``.
+    ``switch_to_phase``: if not None, the slot's phase is flipped and
+    per-walker ``_fill_factor`` is set to ``1/t``.
     """
 
     halve: bool
     merged_entropy: dict[int, float] | None
-    switch_to_phase: str | None
+    switch_to_phase: Literal["1_over_t"] | None
 
 
 def _summed_histogram_flat_from_snapshots(
     snapshots: list[WalkerPostBlockState],
     flatness_limit: float,
 ) -> bool:
-    """Snapshot-based pooled flatness for use by the process pool.
+    """Pooled-histogram flatness from per-walker snapshots.
 
     Pools the per-walker histograms carried by each ``WalkerPostBlockState``
     and applies the flatness criterion: every bin count must be at least
@@ -152,8 +136,7 @@ def _compute_per_walker_flat_min(
     """Min over walkers of ``min(H_k) / mean(H_k)``.
 
     Returns ``None`` if any walker has an empty histogram or a
-    zero-mean histogram. Used by ``window_stats``/``per_window_stats``
-    to compute the gate-relevant flat_min for ``flatness_mode="per_walker"``.
+    zero-mean histogram.
     """
     per_walker: list[float] = []
     for h in histograms:
@@ -167,23 +150,17 @@ def _compute_per_walker_flat_min(
     return min(per_walker) if per_walker else None
 
 
-def decide_bp_switch(
-    phases: list[str], ts: list[int], fs: list[float]
-) -> bool:
-    """Return ``True`` iff every walker should flip to the 1/t phase.
+def decide_bp_switch(ts: list[int], fs: list[float]) -> bool:
+    """Return ``True`` iff every walker satisfies the BP-switch condition.
 
     The collective Belardinelli-Pereyra switch fires when every walker
-    is still in the halving phase and every walker satisfies
-    ``1/t > f``.
+    satisfies ``1/t > f``.
 
     Args:
-        phases: per-walker ``_phase`` strings.
         ts: per-walker ``step - _window_entry_step + 1``.
         fs: per-walker ``_fill_factor`` after the collective halve.
     """
-    if not phases:
-        return False
-    if any(p != "halving" for p in phases):
+    if not ts:
         return False
     return all((1.0 / t) > f for t, f in zip(ts, fs, strict=True))
 
@@ -216,7 +193,6 @@ def merge_entropies(
         RuntimeError: if no bin is visited by every (filtered) walker,
             so rebasing across walkers is ill-defined.
     """
-    # Filter out walkers with empty entropy dicts.
     visited = [e for e in entropies if e]
     if not visited:
         return {}
@@ -226,7 +202,6 @@ def merge_entropies(
         shift = min(only.values())
         return {b: v - shift for b, v in only.items()}
 
-    # Intersection of bins visited by every walker.
     common = set(visited[0].keys())
     for e in visited[1:]:
         common &= e.keys()
@@ -236,13 +211,11 @@ def merge_entropies(
             "cannot rebase across walkers."
         )
 
-    # Per-walker mean over the common bins; subtract from each walker.
     rebased: list[dict[int, float]] = []
     for e in visited:
         offset = sum(e[b] for b in common) / len(common)
         rebased.append({b: v - offset for b, v in e.items()})
 
-    # Bin-wise average over walkers that visited each bin.
     all_bins: set[int] = set()
     for r in rebased:
         all_bins.update(r.keys())
@@ -259,13 +232,9 @@ def merge_entropies(
 def decide_block_actions(view: SlotView) -> CoordinatorPlan:
     """Decide the per-block coordinator actions for one slot.
 
-    Pure function. Reads only ``view``; returns a ``CoordinatorPlan``
-    describing whether to halve, what entropy to write back (if any),
-    and whether to flip to the 1/t phase.
-
-    In the 1/t phase no mid-run merge fires regardless of
-    ``view.merge_cadence`` — walker entropies are reconciled only at
-    end-of-run via ``finalise_for_reporting``.
+    Pure function. Returns a ``CoordinatorPlan`` describing whether
+    to halve, what entropy to write back (if any), and whether to
+    flip to the 1/t phase.
     """
     if view.phase != "halving":
         return CoordinatorPlan(
@@ -290,13 +259,12 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
             [dict(s.entropy) for s in view.walker_states]
         )
 
-    switch_to_phase: str | None = None
+    switch_to_phase: Literal["1_over_t"] | None = None
     if view.schedule == "1_over_t":
         unentered = any(
             s.window_entry_step is None for s in view.walker_states
         )
         if not unentered:
-            phases = ["halving"] * view.n_walkers
             ts = [
                 s.step - s.window_entry_step + 1  # type: ignore[operator]
                 for s in view.walker_states
@@ -304,7 +272,7 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
             post_halve_fs = [
                 s.fill_factor / 2.0 for s in view.walker_states
             ]
-            if decide_bp_switch(phases, ts, post_halve_fs):
+            if decide_bp_switch(ts, post_halve_fs):
                 switch_to_phase = "1_over_t"
 
     return CoordinatorPlan(
