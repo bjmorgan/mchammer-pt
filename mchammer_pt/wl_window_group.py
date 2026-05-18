@@ -41,8 +41,8 @@ FlatnessMode = Literal["per_walker", "pooled"]
 - ``"per_walker"``: halve when every walker is independently flat
   (published Vogel et al. 2013).
 - ``"pooled"``: halve when the summed histogram across walkers is flat
-  (faster — ~N x — than per-walker since pooling has N x the samples
-  per bin). Default.
+  (pooled: a single combined bin sees ``W x`` as many samples as any
+  individual walker's bin under the same wall-clock budget). Default.
 """
 
 

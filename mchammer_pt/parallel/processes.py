@@ -737,7 +737,8 @@ class ProcessWangLandauPool:
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per window.
         n_walkers_per_window: walkers per energy window; > 1 enables
-            multi-walker entropy sync after each block.
+            collective halving across walkers; entropy merging cadence
+            is controlled by ``merge_cadence``.
         ensemble_cls: WL ensemble class. Defaults to
             ``CoordinatedWangLandauEnsemble``; must be a subclass of
             it (the coordinator owns halving). To use the 1/t

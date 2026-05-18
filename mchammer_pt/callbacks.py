@@ -337,8 +337,8 @@ class WangLandauProgressPrinter:
             # checking. Under flatness_mode='per_walker' the gate uses
             # the minimum over walkers of each walker's flat_min, not
             # the pooled-summed flat_min. Stats from single-walker
-            # slots / pre-migration callers omit the mode; fall back
-            # to the pooled computation.
+            # slots omit the mode; fall back to the pooled computation,
+            # which is exact for n_walkers == 1.
             mode = s.get("flatness_mode")
             if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
                 flat_str = f"{s['per_walker_flat_min']:.3f}"

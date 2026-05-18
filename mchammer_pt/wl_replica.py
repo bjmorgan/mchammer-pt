@@ -382,7 +382,7 @@ class WangLandauReplica:
 
         Returns fill_factor, halvings, histogram, converged. For a
         single-walker replica ``flatness_mode`` and ``per_walker_flat_min``
-        are omitted (the progress reporter falls through to the legacy
+        are omitted (the progress reporter falls through to the
         pooled computation, which is exact for n_walkers == 1).
         """
         e = self._ensemble

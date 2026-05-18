@@ -116,8 +116,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
             is not supported for any window with count > 1.
         flatness_mode: ``"per_walker"`` (every walker independently
             flat; published Vogel et al. 2013) or ``"pooled"`` (default;
-            summed histogram flat -- faster by ~N x). Applies to the
-            collective halve gate in the halving phase.
+            summed histogram flat -- a single combined bin sees ``W x``
+            as many samples as any individual walker's bin under the
+            same wall-clock budget). Applies to the collective halve
+            gate in the halving phase.
         merge_cadence: ``"at_halve"`` (default; Vogel cadence: merge
             entropies at each collective halve) or ``"never"`` (no
             mid-run merge).
