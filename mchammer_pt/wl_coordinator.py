@@ -9,7 +9,8 @@ batched IPC apply rounds).
 
 from __future__ import annotations
 
-from typing import Any, Literal, NamedTuple
+from dataclasses import dataclass
+from typing import Any, Literal
 
 import numpy as np
 
@@ -22,7 +23,8 @@ _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
 )
 
 
-class WalkerPostBlockState(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class WalkerPostBlockState:
     """State a worker reports after each ``ADVANCE``.
 
     Captured from a single worker reply at one MC step so the

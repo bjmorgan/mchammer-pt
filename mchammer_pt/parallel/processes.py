@@ -11,7 +11,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Literal
@@ -981,7 +981,7 @@ class ProcessWangLandauPool:
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.halve:
                         slot._last = [
-                            s._replace(fill_factor=s.fill_factor / 2.0)
+                            replace(s, fill_factor=s.fill_factor / 2.0)
                             for s in slot._last
                         ]
 
@@ -1002,7 +1002,7 @@ class ProcessWangLandauPool:
                     if plan.merged_entropy is not None:
                         merged = dict(plan.merged_entropy)
                         slot._last = [
-                            s._replace(entropy=dict(merged))
+                            replace(s, entropy=dict(merged))
                             for s in slot._last
                         ]
 
@@ -1068,7 +1068,7 @@ class ProcessWangLandauPool:
                     if merged_opt is None:
                         continue
                     slot._last = [
-                        s._replace(entropy=dict(merged_opt))
+                        replace(s, entropy=dict(merged_opt))
                         for s in slot._last
                     ]
         except Exception:
