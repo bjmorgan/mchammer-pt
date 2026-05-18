@@ -584,6 +584,7 @@ class ProcessWangLandauWindow:
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
         schedule: str = "halving",
+        flatness_limit: float = 0.8,
     ) -> None:
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
@@ -593,10 +594,7 @@ class ProcessWangLandauWindow:
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._schedule: str = schedule
-        # icet default; pooled flatness uses the same constant. Tuning of
-        # _flatness_limit would require an additional handshake; not
-        # exposed by this version.
-        self._flatness_limit: float = 0.8
+        self._flatness_limit: float = float(flatness_limit)
         self.phase: str = "halving"
         self._last: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
@@ -778,6 +776,9 @@ class ProcessWangLandauPool:
         _validate_merge_cadence(merge_cadence)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._flatness_limit: float = float(
+            (ensemble_kwargs or {}).get("flatness_limit", 0.8)
+        )
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
         ]
@@ -864,6 +865,7 @@ class ProcessWangLandauPool:
                     flatness_mode=self._flatness_mode,
                     merge_cadence=self._merge_cadence,
                     schedule=str(extra_kwargs.get("schedule", "halving")),
+                    flatness_limit=self._flatness_limit,
                 ))
 
             for i, slot in enumerate(self._slots):

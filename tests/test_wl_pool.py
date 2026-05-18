@@ -212,6 +212,31 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert s["fill_factor"] > 0.0
 
 
+def test_process_wl_pool_propagates_flatness_limit_from_ensemble_kwargs(tmp_path):
+    """``ensemble_kwargs={'flatness_limit': X}`` reaches the pooled-flatness gate.
+
+    Before the fix, :class:`ProcessWangLandauWindow` hardcoded
+    ``flatness_limit = 0.8``; a user passing
+    ``ensemble_kwargs={'flatness_limit': 0.5}`` got the wrong
+    pooled-flatness threshold on the process pool while the serial path
+    used the configured 0.5.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        ensemble_kwargs={"flatness_limit": 0.5},
+    ) as pool:
+        assert pool._flatness_limit == 0.5
+        assert pool._slots[0]._flatness_limit == 0.5
+
+
 def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
     """Single-walker slot: the per-walker stats dict is returned as-is."""
     s = {

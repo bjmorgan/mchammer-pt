@@ -125,10 +125,12 @@ def make_in_process_wl_pool(
     else:
         walkers_per_window = list(n_walkers_per_window)
     extra_kwargs = dict(ensemble_kwargs) if ensemble_kwargs else {}
+    flatness_limit = float(extra_kwargs.get("flatness_limit", 0.8))
 
     pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
     pool._flatness_mode = flatness_mode  # type: ignore[assignment]
     pool._merge_cadence = merge_cadence  # type: ignore[assignment]
+    pool._flatness_limit = flatness_limit
     pool._windows = list(windows)
     pool._energy_spacing = 0.1
     pool._slots = []
@@ -167,6 +169,7 @@ def make_in_process_wl_pool(
             flatness_mode=flatness_mode,  # type: ignore[arg-type]
             merge_cadence=merge_cadence,  # type: ignore[arg-type]
             schedule=str(extra_kwargs.get("schedule", "halving")),
+            flatness_limit=flatness_limit,
         ))
     pool._ensemble_cls_fqn = (
         f"{CoordinatedWangLandauEnsemble.__module__}."
