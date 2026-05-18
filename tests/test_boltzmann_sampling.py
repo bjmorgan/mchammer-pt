@@ -40,6 +40,7 @@ def test_fixture_chain_indices_pin() -> None:
     assert seen == set(range(len(seen)))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("ensemble_cls", [CanonicalEnsemble])
 def test_ensemble_samples_correct_boltzmann_distribution(
     ensemble_cls: type[CanonicalEnsemble],
@@ -48,6 +49,7 @@ def test_ensemble_samples_correct_boltzmann_distribution(
     assert_boltzmann_sampling(ensemble_cls)
 
 
+@pytest.mark.slow
 def test_boltzmann_check_detects_broken_acceptance() -> None:
     """Sanity: the test fails when the ensemble accepts every move.
 

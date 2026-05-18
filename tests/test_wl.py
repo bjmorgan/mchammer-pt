@@ -155,6 +155,134 @@ def test_wl_pt_run_returns_history_with_expected_shape():
     assert history.swap_attempted.shape == (1,)
 
 
+def test_wl_pt_run_finalises_pool_for_reporting_at_exit(monkeypatch):
+    """``run`` calls ``pool.finalise_for_reporting`` exactly once at exit.
+
+    Downstream consumers of the per-window data containers expect a
+    consistent per-window entropy estimate regardless of the final
+    block's halve state, so the orchestrator must merge walker
+    entropies once before returning.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+    mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock)
+    pt.run(n_cycles=2)
+    assert mock.call_count == 1
+
+
+def test_wl_pt_run_finalises_pool_for_reporting_on_early_convergence(monkeypatch):
+    """``run`` calls ``pool.finalise_for_reporting`` on the early-exit path.
+
+    Convergence-triggered loop termination must still leave the
+    per-window data containers in the merged state expected by
+    ``results()`` and ``WindowResult`` consumers.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=1,
+        random_seed=0,
+    )
+    for r in pt.pool.replicas:
+        r.ensemble._converged = True
+    mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock)
+    pt.run(n_cycles=10)
+    assert mock.call_count == 1
+
+
+def test_wl_pt_run_finalises_pool_for_reporting_on_exception(monkeypatch):
+    """``run`` finalises the pool even when a cycle raises.
+
+    A mid-run failure (``KeyboardInterrupt`` from a notebook user, or
+    an icet exception from a sweep) must not leave per-walker entropies
+    unreconciled in the data containers — otherwise ``pt.results()``
+    silently returns divergent values.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+    mock_finalise = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock_finalise)
+
+    def boom(n_steps):
+        raise RuntimeError("synthetic test exception")
+
+    monkeypatch.setattr(pt.pool, "advance_all", boom)
+
+    with pytest.raises(RuntimeError, match="synthetic test exception"):
+        pt.run(n_cycles=2)
+    assert mock_finalise.call_count == 1
+
+
+def test_wl_pt_run_skips_finalise_when_pool_shuts_down_on_exception(monkeypatch):
+    """If the pool shuts down on exception, ``run`` does not call finalise.
+
+    ``ProcessWangLandauPool.advance_all`` shuts the pool down on worker
+    errors before propagating. The original exception is what the user
+    wants to see — not the secondary ``RuntimeError("pool is shut
+    down")`` that ``finalise_for_reporting`` would produce on a closed
+    pool. Gated on the new ``pool.is_open`` property.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+
+    def boom(n_steps):
+        # Simulate ProcessWangLandauPool.advance_all: shut the pool down
+        # before propagating the worker error. ``shutdown`` itself is a
+        # no-op on SerialWangLandauPool, so we also flip ``is_open`` via
+        # a monkeypatched property to mirror process-pool semantics.
+        pt.pool.shutdown()
+        raise RuntimeError("worker died")
+
+    monkeypatch.setattr(pt.pool, "advance_all", boom)
+    monkeypatch.setattr(
+        type(pt.pool), "is_open", property(lambda self: False)
+    )
+    finalise_mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", finalise_mock)
+
+    with pytest.raises(RuntimeError, match="worker died"):
+        pt.run(n_cycles=2)
+    finalise_mock.assert_not_called()
+
+
 def test_wl_pt_run_stops_on_all_converged():
     """If every replica reports converged, the loop terminates early."""
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -332,6 +460,38 @@ def test_wl_pt_rejects_pool_plus_ensemble_kwargs():
         )
 
 
+def test_wl_pt_resume_wraps_replicas_in_window_groups(tmp_path):
+    """Resumed serial pool slots are WangLandauWindowGroup, not bare WangLandauReplica.
+
+    Bare replica slots would never halve under the default
+    CoordinatedWangLandauEnsemble (the coordinator drives halving),
+    silently producing wrong WL output post-resume.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt_a = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        data_container_file=str(tmp_path / "wl_ckpt.hdf5"),
+    )
+    pt_a.run(n_cycles=2)
+    pt_a.save_checkpoint(tmp_path / "wl_ckpt.hdf5")
+
+    pt_b = WangLandauParallelTempering.resume(
+        tmp_path / "wl_ckpt.hdf5",
+        cluster_expansion=make_wl_ce(),
+    )
+    for slot in pt_b.pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+        assert len(slot._replicas) == 1
+
+
 def test_wl_pt_resume_process_pool_round_trips(tmp_path):
     """Checkpoint, resume into a process pool, continue running.
 
@@ -363,6 +523,67 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
         assert history.energies_per_cycle.shape == (3, 2)
     finally:
         pt_b._pool.shutdown()
+
+
+def test_wl_pt_checkpoint_preserves_flatness_mode_and_merge_cadence(tmp_path):
+    """Checkpoint round-trip preserves non-default flatness_mode and merge_cadence."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        flatness_mode="per_walker",
+        merge_cadence="never",
+    )
+    pt.run(n_cycles=1)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    pt2 = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    assert pt2._flatness_mode == "per_walker"
+    assert pt2._merge_cadence == "never"
+
+
+def test_wl_pt_resume_falls_back_to_defaults_when_meta_lacks_new_keys(tmp_path):
+    """Older checkpoints without the new keys resume with the default values."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        flatness_mode="per_walker",
+        merge_cadence="never",
+    )
+    pt.run(n_cycles=1)
+    # Simulate a pre-W1 checkpoint by omitting the two new keys from
+    # the meta dict at save time. The reader's `.get(..., default)`
+    # path must then resurface the defaults — not the saved values.
+    original_meta = pt._checkpoint_meta()
+    legacy_meta = {
+        k: v for k, v in original_meta.items()
+        if k not in ("flatness_mode", "merge_cadence")
+    }
+    pt._checkpoint_meta = lambda: legacy_meta  # type: ignore[method-assign]
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    pt2 = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    assert pt2._flatness_mode == "pooled"
+    assert pt2._merge_cadence == "at_halve"
 
 
 def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
@@ -495,11 +716,8 @@ def test_wl_pt_resume_rejects_mismatched_ensemble_kwargs_hash(tmp_path):
 
 def test_wl_pt_process_pool_records_actual_ensemble_identity():
     """process_pool's checkpoint metadata reflects the workers' actual ensemble."""
-    from mchammer.ensembles import (  # type: ignore[import-untyped]
-        WangLandauEnsemble,
-    )
-
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     e0 = _initial_energy()
     with WangLandauParallelTempering.process_pool(
@@ -509,12 +727,12 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         energy_spacing=0.1,
         block_size=5,
         random_seed=0,
-        ensemble_cls=WangLandauEnsemble,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={"fill_factor_limit": 1e-3},
     ) as pt:
         expected_fqn = (
-            f"{WangLandauEnsemble.__module__}."
-            f"{WangLandauEnsemble.__qualname__}"
+            f"{CoordinatedWangLandauEnsemble.__module__}."
+            f"{CoordinatedWangLandauEnsemble.__qualname__}"
         )
         assert pt._ensemble_cls_fqn == expected_fqn
 
@@ -523,10 +741,10 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         assert pt._ensemble_kwargs_hash != empty_hash
 
 
-def test_wl_pt_n_walkers_1_creates_plain_replicas():
-    """n_walkers_per_window=1 (default) creates WangLandauReplica slots."""
+def test_wl_pt_n_walkers_1_wraps_in_window_groups():
+    """n_walkers_per_window=1 wraps each replica in a single-walker window group."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     e0 = _initial_energy()
     pt = WangLandauParallelTempering(
@@ -539,8 +757,9 @@ def test_wl_pt_n_walkers_1_creates_plain_replicas():
         n_walkers_per_window=1,
     )
     assert len(pt.pool) == 2
-    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
-    assert isinstance(pt.pool.replicas[1], WangLandauReplica)
+    for slot in pt.pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+        assert len(slot._replicas) == 1
 
 
 def test_wl_pt_n_walkers_2_creates_window_groups():
@@ -583,10 +802,9 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
         )
 
 
-def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
-    """n_walkers_per_window=[1, 2]: window 0 is a plain replica, window 1 is a group."""
+def test_wl_pt_n_walkers_per_window_sequence_creates_window_groups():
+    """n_walkers_per_window=[1, 2]: both windows wrap in WangLandauWindowGroup."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_replica import WangLandauReplica
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     e0 = _initial_energy()
@@ -599,7 +817,8 @@ def test_wl_pt_n_walkers_per_window_sequence_creates_mixed_slots():
         random_seed=0,
         n_walkers_per_window=[1, 2],
     )
-    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
+    assert isinstance(pt.pool.replicas[0], WangLandauWindowGroup)
+    assert len(pt.pool.replicas[0]._replicas) == 1
     assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
     assert len(pt.pool.replicas[1]._replicas) == 2
 
@@ -799,3 +1018,218 @@ def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
             n_walkers_per_window=2,
             data_container_file="test.hdf5",
         )
+
+
+def test_wl_pt_serial_w1_slot_is_window_group():
+    """Serial path always wraps replicas in WangLandauWindowGroup, even W=1."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=1,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+    )
+    for slot in pt._pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+
+
+def test_wl_pt_flatness_mode_default_pooled():
+    """Default flatness_mode on the orchestrator is 'pooled'."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+    )
+    assert pt._pool.replicas[0]._flatness_mode == "pooled"
+    assert pt._pool.replicas[0]._merge_cadence == "at_halve"
+
+
+def test_wl_pt_flatness_mode_per_walker_propagates():
+    """flatness_mode='per_walker' reaches the window group."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        flatness_mode="per_walker",
+    )
+    assert pt._pool.replicas[0]._flatness_mode == "per_walker"
+
+
+@pytest.mark.parametrize(
+    "bad", ["per-walker", "Pooled", " pooled", "always", ""]
+)
+def test_wl_pt_flatness_mode_rejects_typos(bad):
+    """Invalid flatness_mode values raise ValueError at construction."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    with pytest.raises(ValueError, match="flatness_mode"):
+        WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            ensemble_cls=CoordinatedWangLandauEnsemble,
+            flatness_mode=bad,
+        )
+
+
+@pytest.mark.parametrize("flatness_mode", ["pooled", "per_walker"])
+def test_wl_pt_w2_short_run_converges(flatness_mode):
+    """W=2 short serial run produces valid WindowResult under both flatness modes."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=200,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        n_walkers_per_window=2,
+        flatness_mode=flatness_mode,
+    )
+    pt.run(n_cycles=20)
+    results = pt.results()
+    assert len(results) == 2
+    for r in results:
+        df = r.get_entropy()
+        assert df is not None
+        assert len(df) > 0
+        assert df["entropy"].notna().all()
+        hist = r.get_histogram()
+        assert hist is not None
+        assert (hist["histogram"] > 0).any()
+
+
+def test_wl_pt_w2_one_over_t_collective_phase():
+    """W=2 with schedule='1_over_t': all walkers agree on phase post-run."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=200,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={
+            "schedule": "1_over_t",
+            "flatness_check_interval": 100,
+        },
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=20)
+    for slot in pt._pool.replicas:
+        phases = {r.ensemble._phase for r in slot._replicas}
+        assert len(phases) == 1
+        assert phases.pop() in {"halving", "1_over_t"}
+
+
+def test_wl_pt_w1_unified_path_produces_finite_results():
+    """W=1 through the unified WindowGroup coordinator produces valid output."""
+    import numpy as np
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=100,
+        random_seed=0,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=10)
+    results = pt.results()
+    assert len(results) == 2
+    for r in results:
+        df = r.get_entropy()
+        assert df is not None
+        assert len(df) > 0
+        assert np.all(np.isfinite(df["entropy"].to_numpy()))

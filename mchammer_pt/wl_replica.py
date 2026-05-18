@@ -32,6 +32,8 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from .wl_ensemble import CoordinatedWangLandauEnsemble
+
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
     {
         "structure",
@@ -104,6 +106,7 @@ class WangLandauSlot(Protocol):
     def cluster_expansion_path(self) -> str | None: ...
     @property
     def converged(self) -> bool: ...
+    def is_flat(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
     def current_energy(self) -> float: ...
     def current_occupations(self) -> np.ndarray: ...
@@ -114,6 +117,7 @@ class WangLandauSlot(Protocol):
     def refresh_last_state(self) -> None: ...
     def window_stats(self) -> dict[str, Any]: ...
     def snapshot_for_checkpoint(self) -> dict[str, Any]: ...
+    def finalise_for_reporting(self) -> None: ...
     def attach_mchammer_observer(self, observer: BaseObserver) -> None: ...
     def attach_observer_class(
         self,
@@ -149,8 +153,12 @@ class WangLandauReplica:
         energy_limit_right: upper window edge, or None for unbounded.
         random_seed: seed for this replica's MC random generator.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble`. To use the 1/t schedule, pass
-            ``ensemble_kwargs={'schedule': '1_over_t'}``.
+            ``CoordinatedWangLandauEnsemble``, which delegates
+            halving to the enclosing ``WangLandauWindowGroup``
+            coordinator. Must be a subclass of
+            ``CoordinatedWangLandauEnsemble``. To use the 1/t
+            schedule, pass ``ensemble_kwargs={'schedule':
+            '1_over_t'}``.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Reserved names (see `_RESERVED_ENSEMBLE_KWARGS`) cannot
             appear here — they are set by the wrapper.
@@ -172,7 +180,9 @@ class WangLandauReplica:
         energy_limit_right: float | None,
         random_seed: int,
         *,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
@@ -188,6 +198,15 @@ class WangLandauReplica:
             if cluster_expansion_path is None
             else os.fspath(cluster_expansion_path)
         )
+        if not issubclass(ensemble_cls, CoordinatedWangLandauEnsemble):
+            raise TypeError(
+                f"ensemble_cls must be a subclass of "
+                f"CoordinatedWangLandauEnsemble; got "
+                f"{ensemble_cls.__name__}. Halving is now coordinated "
+                f"by WangLandauWindowGroup, so the plain "
+                f"WangLandauEnsemble would autonomously halve and "
+                f"conflict with the coordinator."
+            )
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -308,27 +327,50 @@ class WangLandauReplica:
         finally:
             random.setstate(previous_state)
 
+    def is_flat(self) -> bool:
+        """Return ``True`` if this walker's own histogram is flat.
+
+        Uses mchammer's flatness criterion: every bin's count is
+        ``>= flatness_limit * mean(counts)``. Walkers that have not
+        yet entered the window return ``False``.
+        """
+        e = self._ensemble
+        if not e._reached_energy_window:
+            return False
+        if not e._histogram:
+            return False
+        histogram = np.array(list(e._histogram.values()))
+        if histogram.size == 0:
+            return False
+        limit = e._flatness_limit * np.average(histogram)
+        return bool(np.all(histogram >= limit))
+
     def force_halve(self) -> None:
-        """Force one fill-factor halving, bypassing mchammer's flatness check.
+        """Halve ``_fill_factor`` and record the event in history.
 
         Halves ``_fill_factor``, records the new value in both
-        ``_fill_factor_history`` and ``_entropy_history`` under a
-        fresh key, and resets the histogram to zero (preserving keys
-        so the flatness check stays valid). The entropy snapshot
-        mirrors mchammer's natural halving, which always records both
-        histories at the same step. Used by multi-walker entropy sync
-        to bring lagging walkers up to the most-halved fill factor.
+        ``_fill_factor_history`` and ``_entropy_history`` keyed by
+        the current MC step (matching upstream mchammer's halving
+        convention), and resets the histogram counts to zero while
+        preserving keys. Called by ``WangLandauWindowGroup`` when
+        the collective flatness gate fires. Sets ``_converged``
+        when ``_fill_factor <= _fill_factor_limit``, since
+        ``CoordinatedWangLandauEnsemble`` suppresses the
+        ``_converged`` write that upstream's ``_update_entropy``
+        would have performed.
         """
         from collections import OrderedDict
 
         e = self._ensemble
         e._fill_factor /= 2.0
-        next_key = max(e._fill_factor_history, default=-1) + 1
-        e._fill_factor_history[next_key] = e._fill_factor
-        e._entropy_history[next_key] = OrderedDict(
+        step_key = int(e.step)
+        e._fill_factor_history[step_key] = e._fill_factor
+        e._entropy_history[step_key] = OrderedDict(
             sorted(e._entropy.items())
         )
         e._histogram = dict.fromkeys(e._histogram, 0)
+        if e._fill_factor <= e._fill_factor_limit:
+            e._converged = True
 
     @property
     def converged(self) -> bool:
@@ -338,7 +380,10 @@ class WangLandauReplica:
     def window_stats(self) -> dict[str, Any]:
         """Per-window convergence metrics.
 
-        Returns fill_factor, halvings, histogram, and converged.
+        Returns fill_factor, halvings, histogram, converged. For a
+        single-walker replica ``flatness_mode`` and ``per_walker_flat_min``
+        are omitted (the progress reporter falls through to the
+        pooled computation, which is exact for n_walkers == 1).
         """
         e = self._ensemble
         return {
@@ -421,6 +466,10 @@ class WangLandauReplica:
             e._data_container._last_state[
                 "window_entry_step"
             ] = e._window_entry_step
+
+    def finalise_for_reporting(self) -> None:
+        """No-op for single-walker slots; the multi-walker counterpart on
+        WangLandauWindowGroup merges per-walker entropies."""
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
         """Refresh ``_last_state`` and return checkpoint extras.
@@ -525,7 +574,9 @@ class WangLandauReplica:
         energy_limit_left: float | None,
         energy_limit_right: float | None,
         random_seed: int,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,

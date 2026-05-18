@@ -494,7 +494,9 @@ def test_process_pool_public_methods_raise_after_shutdown(
     self._workers indexing. The guard converts every entry-point into
     a single clear failure.
     """
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     pool.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
         len(pool)
@@ -527,9 +529,10 @@ def test_process_pool_public_methods_raise_after_shutdown(
 
 def test_process_pool_attach_observer_fires(toy_ce, toy_atoms, tmp_path: Path):
     """Observer fires inside each ProcessPool worker and lands in its DC."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import StatefulCounter
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
         pool.advance_all(50)
@@ -571,9 +574,10 @@ def test_process_pool_attach_observer_class_constructs_per_worker(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """attach_observer_class constructs the observer inside each worker."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import TaggedObserver
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer_class(
             TaggedObserver,
@@ -629,9 +633,10 @@ def test_process_pool_attach_observer_class_rejects_non_observer(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """A class whose instances are not BaseObservers raises TypeError."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import NotAnObserver
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         with pytest.raises(TypeError, match="not a BaseObserver"):
             pool.attach_observer_class(NotAnObserver, 10)
@@ -784,9 +789,10 @@ def test_process_pool_attach_observer_factory_constructs_per_worker(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """Factory runs inside each worker and produces a per-replica observer."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import stateful_counter_factory
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer_factory(stateful_counter_factory, replicas=[0, 1])
         pool.advance_all(50)
@@ -807,9 +813,10 @@ def test_process_pool_attach_observer_factory_with_icet_objects(
     attach_observer_class can ship a ClusterCountObserver. The factory
     path constructs it inside the worker from worker-local state.
     """
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import cluster_count_factory
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer_factory(cluster_count_factory)
         pool.advance_all(50)
@@ -868,9 +875,10 @@ def test_process_pool_mid_run_attach(toy_ce, toy_atoms, tmp_path: Path):
     ``interval=10``, every recorded observation must have
     ``mctrial >= 100``.
     """
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import StatefulCounter
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.advance_all(100)  # No observer attached during this run.
         pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
@@ -1081,15 +1089,29 @@ def test_process_pool_attach_observer_class_empty_replicas_no_worker_contact(
 
     The class-level counter fires only in the parent's dry-run. If the
     empty short-circuit guard works, the parent never reaches dry-run,
-    so n_constructions stays 0. Workers are untouched; basic ops still work.
+    so n_constructions stays 0. The in-process worker conns also see
+    no ``send`` for the attach round, confirming the short-circuit
+    happens before any IPC.
     """
+    from unittest.mock import patch
+
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import ConstructionCounter
 
     ConstructionCounter.n_constructions = 0
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
-        pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
-        assert ConstructionCounter.n_constructions == 0
+        send_spies = [
+            patch.object(conn, "send", wraps=conn.send).start()
+            for _, conn in pool._workers
+        ]
+        try:
+            pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
+            assert ConstructionCounter.n_constructions == 0
+            for spy in send_spies:
+                spy.assert_not_called()
+        finally:
+            patch.stopall()
         # Workers untouched; basic ops still work.
         pool.advance_all(5)
     finally:
@@ -1200,7 +1222,9 @@ def test_process_pool_get_observers_empty_returns_empty_dict(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """A worker with no attached observers returns {} via the round trip."""
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         observers = pool.get_observers(replica_index=0)
         assert observers == {}
@@ -1229,7 +1253,9 @@ def test_process_pool_get_observers_out_of_range_raises(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """Out-of-range replica index raises IndexError eagerly."""
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         with pytest.raises(IndexError, match="out of range"):
             pool.get_observers(replica_index=99)
@@ -1241,7 +1267,9 @@ def test_process_pool_get_observers_after_shutdown_raises(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """get_observers after shutdown raises RuntimeError via _check_open."""
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     pool.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
         pool.get_observers(replica_index=0)
@@ -1251,9 +1279,10 @@ def test_process_pool_get_observers_round_trip(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """attach -> advance -> get_observers returns the worker's observer state."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import StatefulCounter
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer(StatefulCounter(interval=10), replicas=[0])
         pool.advance_all(50)
@@ -1301,9 +1330,10 @@ def test_process_pool_worker_replica_exposes_cluster_expansion_path(
     into the observer's instance state, which is then recovered via
     get_observers.
     """
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import path_recording_factory
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         pool.attach_observer_factory(path_recording_factory, replicas=[0])
         pool.advance_all(20)

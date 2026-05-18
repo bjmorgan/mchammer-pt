@@ -16,7 +16,12 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "ase",
-    "icet",
+    # The patched icet fork adds the WL `schedule` parameter, `_phase`,
+    # and `_window_entry_step` that mchammer-pt's coordinator reads
+    # unconditionally. Mainline icet does not (yet) ship these, so a
+    # plain `icet` from PyPI breaks at the first MC step. Track the
+    # upstream MR; relax the pin once it lands.
+    "icet @ git+https://gitlab.com/bjmorgan/icet.git@master",
     "h5py",
 ]
 classifiers = [
@@ -30,7 +35,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "mypy", "ruff", "pandas-stubs"]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+    "pandas-stubs",
+    "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
+]
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]

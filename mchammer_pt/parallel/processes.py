@@ -8,10 +8,10 @@ plumbing.
 
 from __future__ import annotations
 
-import dataclasses
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Literal
@@ -23,7 +23,6 @@ from mchammer.data_containers.base_data_container import (
 )
 from mchammer.ensembles import (
     CanonicalEnsemble,
-    WangLandauEnsemble,
 )
 from mchammer.observers.base_observer import (
     BaseObserver,
@@ -31,12 +30,21 @@ from mchammer.observers.base_observer import (
 
 from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
+from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 from ..wl_window_group import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
+    FlatnessMode,
+    MergeCadence,
+    WalkerPostBlockState,
+    _compute_per_walker_flat_min,
+    _summed_histogram_flat_from_snapshots,
+    _validate_flatness_mode,
+    _validate_merge_cadence,
+    decide_bp_switch,
     merge_entropies,
 )
-from ._comms import broadcast_gather, recv_reply, request
+from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
 
@@ -532,17 +540,184 @@ class ProcessPool:
         self.shutdown()
 
 
-@dataclasses.dataclass
-class _WindowSlot:
-    """Per-window state for ``ProcessWangLandauPool``."""
+@dataclass
+class _CoordinatorPlan:
+    """Decisions produced by the decide phase, consumed by the execute phase.
 
-    workers: list[tuple[mp.process.BaseProcess, Connection]]
-    exchange_idx: int
-    rng: np.random.Generator
+    The execute phase applies actions in three independent batched
+    IPC rounds: FORCE_HALVE first, SET_ENTROPY second, SET_PHASE
+    last. The ordering is structural: FORCE_HALVE zeroes histograms
+    and halves the live ``_fill_factor``; SET_ENTROPY overwrites the
+    entropy dict on each walker; SET_PHASE flips ``_phase`` and
+    (for ``"1_over_t"``) updates ``_fill_factor`` to ``1/t``.
+    """
+
+    halve: bool
+    merged_entropy: dict[int, float] | None
+    switch_to_phase: str | None
+
+
+class ProcessWangLandauWindow:
+    """Per-window remote walkers + coordinator-facing methods.
+
+    Holds W worker subprocesses for a single energy window. Exposes
+    the same coordinator-facing interface as
+    ``WangLandauWindowGroup`` but implemented via pipe commands to
+    the workers. Owns the local communication pattern; the policy
+    decisions live in ``wl_window_group`` free functions and are
+    invoked by ``ProcessWangLandauPool.advance_all``.
+
+    Attributes:
+        workers: list of (Process, Connection) pairs, one per walker.
+        exchange_idx: index of the worker currently chosen for
+            replica exchange (re-rolled by the coordinator each block).
+        rng: per-window RNG for exchange-walker selection.
+        phase: collective WL phase, either ``"halving"`` or
+            ``"1_over_t"``. Flipped by the coordinator after a
+            collective BP switch.
+    """
+
+    def __init__(
+        self,
+        workers: list[tuple[mp.process.BaseProcess, Connection]],
+        rng: np.random.Generator,
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
+        schedule: str = "halving",
+        flatness_limit: float = 0.8,
+    ) -> None:
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
+        self.workers = workers
+        self.rng = rng
+        self.exchange_idx: int = 0
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
+        self._schedule: str = schedule
+        self._flatness_limit: float = float(flatness_limit)
+        self.phase: str = "halving"
+        self._last: list[WalkerPostBlockState] = [
+            WalkerPostBlockState(
+                is_flat=False,
+                fill_factor=1.0,
+                entropy={},
+                step=0,
+                window_entry_step=None,
+                histogram={},
+                reached_energy_window=False,
+            )
+            for _ in workers
+        ]
 
     def exchange_conn(self) -> Connection:
         """Connection to the current exchange-representative walker."""
         return self.workers[self.exchange_idx][1]
+
+    def collect_flatness_flags(self) -> list[bool]:
+        return [s.is_flat for s in self._last]
+
+    def collect_entropy_snapshots(self) -> list[dict[int, float]]:
+        return [dict(s.entropy) for s in self._last]
+
+    def collect_fill_factors(self) -> list[float]:
+        return [s.fill_factor for s in self._last]
+
+    def collect_ts(self) -> list[int]:
+        """Per-walker ``t = step - window_entry_step + 1``.
+
+        Requires every walker to have entered its window. Callers
+        should gate on :meth:`has_unentered_walker` before calling.
+        Raises ``RuntimeError`` if any walker has not yet entered.
+        """
+        ts: list[int] = []
+        for s in self._last:
+            if s.window_entry_step is None:
+                raise RuntimeError(
+                    "collect_ts called on slot with unentered walker; "
+                    "gate on has_unentered_walker() first"
+                )
+            ts.append(s.step - s.window_entry_step + 1)
+        return ts
+
+    def has_unentered_walker(self) -> bool:
+        """True iff any walker has not yet reached its window."""
+        return any(s.window_entry_step is None for s in self._last)
+
+
+def _merge_per_window_stats(
+    slot_stats: list[dict[str, Any]],
+    flatness_mode: FlatnessMode,
+) -> dict[str, Any]:
+    """Merge per-walker WL stats dicts for one window into a single dict.
+
+    Single-walker slots are returned as-is. Multi-walker slots get a
+    summed histogram, the per-walker flat-min, and the slot's
+    flatness mode attached. Pure function on the IPC payload.
+    """
+    if len(slot_stats) == 1:
+        return slot_stats[0]
+    combined_hist: dict[int, int] = {}
+    for s in slot_stats:
+        for k, v in s["histogram"].items():
+            combined_hist[k] = combined_hist.get(k, 0) + v
+    per_walker_flat_min = _compute_per_walker_flat_min(
+        [s["histogram"] for s in slot_stats]
+    )
+    return {
+        "fill_factor": slot_stats[0]["fill_factor"],
+        "halvings": slot_stats[0]["halvings"],
+        "histogram": combined_hist,
+        "converged": all(s["converged"] for s in slot_stats),
+        "flatness_mode": flatness_mode,
+        "per_walker_flat_min": per_walker_flat_min,
+    }
+
+
+def _compute_plan(slot: ProcessWangLandauWindow) -> _CoordinatorPlan:
+    """Decide per-slot coordinator actions from the slot's cached state.
+
+    Pure function on ``slot._last``; no IPC. Returns a
+    ``_CoordinatorPlan`` describing which collective actions (halve,
+    merge entropies, switch BP phase) the coordinator should apply for
+    this slot in the current block.
+
+    In the 1/t phase no mid-run merge fires, regardless of
+    ``merge_cadence`` — walker entropies are reconciled only at
+    end-of-run via ``finalise_for_reporting``.
+    """
+    plan = _CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase=None
+    )
+    if slot.phase != "halving":
+        return plan
+
+    if slot._flatness_mode == "per_walker":
+        should_halve = all(slot.collect_flatness_flags())
+    else:  # pooled
+        should_halve = _summed_histogram_flat_from_snapshots(
+            slot._last, slot._flatness_limit
+        )
+    if should_halve:
+        plan.halve = True
+        if (
+            slot._merge_cadence == "at_halve"
+            and len(slot.workers) > 1
+        ):
+            plan.merged_entropy = merge_entropies(
+                slot.collect_entropy_snapshots()
+            )
+        if (
+            slot._schedule == "1_over_t"
+            and not slot.has_unentered_walker()
+        ):
+            phases = ["halving"] * len(slot.workers)
+            ts = slot.collect_ts()
+            post_halve_fs = [
+                f / 2.0 for f in slot.collect_fill_factors()
+            ]
+            if decide_bp_switch(phases, ts, post_halve_fs):
+                plan.switch_to_phase = "1_over_t"
+    return plan
 
 
 class ProcessWangLandauPool:
@@ -564,14 +739,20 @@ class ProcessWangLandauPool:
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per window.
         n_walkers_per_window: walkers per energy window; > 1 enables
-            multi-walker entropy sync after each block.
+            collective halving across walkers; entropy merging cadence
+            is controlled by ``merge_cadence``.
         ensemble_cls: WL ensemble class. Defaults to
-            `WangLandauEnsemble`. To use the 1/t schedule, pass
-            ``ensemble_kwargs={'schedule': '1_over_t'}``. Spawned
-            workers re-import by FQN; interactive-``__main__``
-            classes are not supported.
+            ``CoordinatedWangLandauEnsemble``; must be a subclass of
+            it (the coordinator owns halving). To use the 1/t
+            schedule, pass ``ensemble_kwargs={'schedule':
+            '1_over_t'}``. Spawned workers re-import by FQN;
+            interactive-``__main__`` classes are not supported.
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Must be picklable for the spawn boundary.
+        flatness_mode: ``"per_walker"`` (published Vogel) or ``"pooled"``
+            (default; halve when summed histogram is flat).
+        merge_cadence: ``"at_halve"`` (default; Vogel cadence) or
+            ``"never"`` (no mid-run merge, end-of-run finalisation only).
     """
 
     def __init__(
@@ -583,10 +764,21 @@ class ProcessWangLandauPool:
         seeds: Sequence[int],
         *,
         n_walkers_per_window: int | Sequence[int] = 1,
-        ensemble_cls: type[WangLandauEnsemble] = WangLandauEnsemble,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        flatness_mode: FlatnessMode = "pooled",
+        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
+        _validate_flatness_mode(flatness_mode)
+        _validate_merge_cadence(merge_cadence)
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
+        self._flatness_limit: float = float(
+            (ensemble_kwargs or {}).get("flatness_limit", 0.8)
+        )
         windows_list: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows
         ]
@@ -619,7 +811,7 @@ class ProcessWangLandauPool:
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
-        self._slots: list[_WindowSlot] = []
+        self._slots: list[ProcessWangLandauWindow] = []
 
         # Cover both spawn-time and handshake-time failures with one
         # cleanup path. A failure on window N leaves N-1 fully started
@@ -667,10 +859,13 @@ class ProcessWangLandauPool:
                         conn.close()
                         proc.terminate()
                     raise
-                self._slots.append(_WindowSlot(
+                self._slots.append(ProcessWangLandauWindow(
                     workers=workers,
-                    exchange_idx=0,
                     rng=np.random.default_rng(rng_seed),
+                    flatness_mode=self._flatness_mode,
+                    merge_cadence=self._merge_cadence,
+                    schedule=str(extra_kwargs.get("schedule", "halving")),
+                    flatness_limit=self._flatness_limit,
                 ))
 
             for i, slot in enumerate(self._slots):
@@ -689,6 +884,11 @@ class ProcessWangLandauPool:
     def _check_open(self) -> None:
         if not self._slots:
             raise RuntimeError("pool is shut down")
+
+    @property
+    def is_open(self) -> bool:
+        """``True`` until :meth:`shutdown` clears the worker slots."""
+        return bool(self._slots)
 
     @property
     def ensemble_cls_fqn(self) -> str:
@@ -740,42 +940,137 @@ class ProcessWangLandauPool:
         return self._energy_spacing
 
     def advance_all(self, n_steps: int) -> None:
+        # Three stages: ADVANCE (one fan-out across every worker in
+        # every window), DECIDE (pure-Python coordinator decisions
+        # per slot), EXECUTE (batched FORCE_HALVE / SET_ENTROPY /
+        # SET_PHASE, each parallelised across slots).
         self._check_open()
-        all_targets = [
-            (conn, f"window {i} walker {w}")
-            for i, slot in enumerate(self._slots)
-            for w, (_, conn) in enumerate(slot.workers)
-        ]
-        broadcast_gather(all_targets, ("ADVANCE", int(n_steps)))
-
         try:
-            for i, slot in enumerate(self._slots):
-                if len(slot.workers) == 1:
-                    continue
-                slot_targets = [
-                    (conn, f"window {i} walker {w}")
-                    for w, (_, conn) in enumerate(slot.workers)
-                ]
-                states = broadcast_gather(
-                    slot_targets, ("GET_ENTROPY_SYNC_STATE",)
+            # ADVANCE: broadcast to every worker in every window in a
+            # single fan-out; gather post-block state into each slot.
+            all_targets: list[tuple[Connection, str]] = [
+                (conn, f"window {i} walker {w}")
+                for i, slot in enumerate(self._slots)
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            payloads = broadcast_gather(
+                all_targets, ("ADVANCE", int(n_steps))
+            )
+            walker_addrs = [
+                (slot, w)
+                for slot in self._slots
+                for w in range(len(slot.workers))
+            ]
+            for (slot, w), payload in zip(
+                walker_addrs, payloads, strict=True
+            ):
+                slot._last[w] = payload
+
+            # DECIDE: per-slot coordinator decisions; no IPC.
+            plans = [_compute_plan(slot) for slot in self._slots]
+
+            # EXECUTE step 1: batched FORCE_HALVE across halving slots.
+            halve_targets = [
+                (conn, f"window {i} walker {w}")
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.halve
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if halve_targets:
+                broadcast_gather(halve_targets, ("FORCE_HALVE",))
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.halve:
+                        slot._last = [
+                            s._replace(fill_factor=s.fill_factor / 2.0)
+                            for s in slot._last
+                        ]
+
+            # EXECUTE step 2: batched SET_ENTROPY with per-slot dicts.
+            merge_targets = [
+                (
+                    conn,
+                    f"window {i} walker {w}",
+                    ("SET_ENTROPY", dict(plan.merged_entropy)),
                 )
-                target_len = max(
-                    s["fill_factor_history_len"] for s in states
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.merged_entropy is not None
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if merge_targets:
+                fanout_gather(merge_targets)
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.merged_entropy is not None:
+                        merged = dict(plan.merged_entropy)
+                        slot._last = [
+                            s._replace(entropy=dict(merged))
+                            for s in slot._last
+                        ]
+
+            # EXECUTE step 3: batched SET_PHASE with per-slot phase.
+            switch_targets = [
+                (
+                    conn,
+                    f"window {i} walker {w}",
+                    ("SET_PHASE", plan.switch_to_phase),
                 )
-                merged = merge_entropies(
-                    [s["entropy"] for s in states]
-                )
-                for w, (_, conn) in enumerate(slot.workers):
-                    extra = target_len - states[w]["fill_factor_history_len"]
-                    conn.send(("APPLY_ENTROPY_SYNC", merged, extra))
-                for w, (_, conn) in enumerate(slot.workers):
-                    recv_reply(
-                        conn, "APPLY_ENTROPY_SYNC",
-                        f"window {i} walker {w}",
-                    )
+                for i, (slot, plan) in enumerate(zip(self._slots, plans, strict=True))
+                if plan.switch_to_phase is not None
+                for w, (_, conn) in enumerate(slot.workers)
+            ]
+            if switch_targets:
+                fanout_gather(switch_targets)
+                for slot, plan in zip(self._slots, plans, strict=True):
+                    if plan.switch_to_phase is not None:
+                        slot.phase = plan.switch_to_phase
+
+            # Exchange-walker selection (local-only, no IPC).
+            for slot in self._slots:
                 slot.exchange_idx = int(
                     slot.rng.integers(0, len(slot.workers))
                 )
+        except Exception:
+            self.shutdown()
+            raise
+
+    def finalise_for_reporting(self) -> None:
+        """End-of-run merge: fan out FINALISE_MERGE per multi-walker window.
+
+        For each window with more than one walker: compute the merged
+        entropy on the coordinator side from the snapshot already cached
+        in ``slot._last``, then send ``FINALISE_MERGE`` to every walker
+        in the window in a single fan-out so each walker's ``_entropy``
+        and data-container ``_last_state`` are updated in one round
+        trip. Single-walker windows are skipped.
+        """
+        self._check_open()
+        try:
+            targets: list[tuple[Connection, str, tuple[Any, ...]]] = []
+            per_slot_merged: list[dict[int, float] | None] = []
+            for i, slot in enumerate(self._slots):
+                if len(slot.workers) <= 1:
+                    per_slot_merged.append(None)
+                    continue
+                merged = merge_entropies(slot.collect_entropy_snapshots())
+                per_slot_merged.append(merged)
+                for w, (_, conn) in enumerate(slot.workers):
+                    targets.append((
+                        conn,
+                        f"window {i} walker {w}",
+                        ("FINALISE_MERGE", dict(merged)),
+                    ))
+            if targets:
+                fanout_gather(targets)
+                # Refresh local snapshots so subsequent stats reads
+                # also reflect the merged values.
+                for slot, merged_opt in zip(
+                    self._slots, per_slot_merged, strict=True,
+                ):
+                    if merged_opt is None:
+                        continue
+                    slot._last = [
+                        s._replace(entropy=dict(merged_opt))
+                        for s in slot._last
+                    ]
         except Exception:
             self.shutdown()
             raise
@@ -869,19 +1164,7 @@ class ProcessWangLandauPool:
             n_workers = len(slot.workers)
             slot_stats = all_stats[offset:offset + n_workers]
             offset += n_workers
-            if n_workers == 1:
-                result.append(slot_stats[0])
-            else:
-                combined_hist: dict[int, int] = {}
-                for s in slot_stats:
-                    for k, v in s["histogram"].items():
-                        combined_hist[k] = combined_hist.get(k, 0) + v
-                result.append({
-                    "fill_factor": slot_stats[0]["fill_factor"],
-                    "halvings": slot_stats[0]["halvings"],
-                    "histogram": combined_hist,
-                    "converged": all(s["converged"] for s in slot_stats),
-                })
+            result.append(_merge_per_window_stats(slot_stats, slot._flatness_mode))
         return result
 
     def per_window_data_containers(self) -> list[list[BaseDataContainer]]:

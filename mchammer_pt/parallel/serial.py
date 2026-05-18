@@ -454,8 +454,24 @@ class SerialWangLandauPool:
             r.refresh_last_state()
         return [r.all_data_containers() for r in self._replicas]
 
+    def finalise_for_reporting(self) -> None:
+        """Delegate to each slot.
+
+        Multi-walker slots (``WangLandauWindowGroup``) merge their
+        walkers' entropies in-place. Single-walker slots
+        (``WangLandauReplica``) are no-ops — there is nothing to
+        merge.
+        """
+        for r in self._replicas:
+            r.finalise_for_reporting()
+
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         return [r.snapshot_for_checkpoint() for r in self._replicas]
 
     def shutdown(self) -> None:
         return None
+
+    @property
+    def is_open(self) -> bool:
+        """Serial pool has no shutdown state; always open."""
+        return True

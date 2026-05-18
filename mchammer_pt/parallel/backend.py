@@ -209,6 +209,30 @@ class WangLandauPool(ReplicaPool, Protocol):
         """
         ...
 
+    def finalise_for_reporting(self) -> None:
+        """End-of-run merge of per-walker entropies into a per-window estimate.
+
+        Called at ``WL.run()`` exit. Writes the merged dict into every
+        walker's ``_entropy`` so downstream readers see a consistent
+        estimate regardless of which walker they sample. No-op for
+        single-walker windows.
+        """
+        ...
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the pool can still accept commands.
+
+        Returns ``False`` once :meth:`shutdown` has been called (process
+        pool) or ``True`` always for in-process pools that do not model
+        shutdown. ``WangLandauParallelTempering.run`` gates its
+        end-of-run :meth:`finalise_for_reporting` call on this property
+        so that an already-shutdown pool (e.g. after a worker error
+        propagated through :meth:`advance_all`) does not raise a
+        secondary ``RuntimeError`` masking the original failure.
+        """
+        ...
+
 
 @runtime_checkable
 class _ObserverAttach(Protocol):

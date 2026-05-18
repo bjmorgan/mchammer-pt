@@ -121,11 +121,8 @@ def _find_in_window_config(
 @pytest.mark.slow
 def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
     """Stitched REWL ln g(E) matches the exact 4x4 Ising DOS."""
-    from mchammer.ensembles import (  # type: ignore[import-untyped]
-        WangLandauEnsemble,
-    )
-
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce, prototype = _build_4x4_ising()
     energy_spacing = 4.0
@@ -170,7 +167,7 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
         energy_spacing=energy_spacing,
         block_size=len(prototype) * 200,
         random_seed=42,
-        ensemble_cls=WangLandauEnsemble,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={
             "fill_factor_limit": 1e-5,
             "flatness_limit": 0.7,
