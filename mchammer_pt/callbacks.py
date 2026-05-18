@@ -331,13 +331,22 @@ class WangLandauProgressPrinter:
             halvings_str = str(s["halvings"])
 
             hist = s["histogram"]
-            if hist:
-                bins_visited_str = str(len(hist))
+            bins_visited_str = str(len(hist)) if hist else "0"
+
+            # flat_min reports the quantity the halve gate is actually
+            # checking. Under flatness_mode='per_walker' the gate uses
+            # the minimum over walkers of each walker's flat_min, not
+            # the pooled-summed flat_min. Stats from single-walker
+            # slots / pre-migration callers omit the mode; fall back
+            # to the pooled computation.
+            mode = s.get("flatness_mode")
+            if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
+                flat_str = f"{s['per_walker_flat_min']:.3f}"
+            elif hist:
                 counts = np.array(list(hist.values()), dtype=float)
                 mean_c = float(counts.mean())
                 flat_str = f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
             else:
-                bins_visited_str = "0"
                 flat_str = "--"
 
             conv_str = "yes" if s["converged"] else "no"

@@ -37,6 +37,7 @@ from ..wl_window_group import (
     FlatnessMode,
     MergeCadence,
     WalkerPostBlockState,
+    _compute_per_walker_flat_min,
     _summed_histogram_flat_from_snapshots,
     _validate_flatness_mode,
     _validate_merge_cadence,
@@ -1132,11 +1133,16 @@ class ProcessWangLandauPool:
                 for s in slot_stats:
                     for k, v in s["histogram"].items():
                         combined_hist[k] = combined_hist.get(k, 0) + v
+                per_walker_flat_min = _compute_per_walker_flat_min(
+                    [s["histogram"] for s in slot_stats]
+                )
                 result.append({
                     "fill_factor": slot_stats[0]["fill_factor"],
                     "halvings": slot_stats[0]["halvings"],
                     "histogram": combined_hist,
                     "converged": all(s["converged"] for s in slot_stats),
+                    "flatness_mode": slot._flatness_mode,
+                    "per_walker_flat_min": per_walker_flat_min,
                 })
         return result
 

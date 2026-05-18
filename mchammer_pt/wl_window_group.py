@@ -133,6 +133,27 @@ def _summed_histogram_flat_from_snapshots(
     return bool(np.all(counts >= limit))
 
 
+def _compute_per_walker_flat_min(
+    histograms: list[dict[int, int]],
+) -> float | None:
+    """Min over walkers of ``min(H_k) / mean(H_k)``.
+
+    Returns ``None`` if any walker has an empty histogram or a
+    zero-mean histogram. Used by ``window_stats``/``per_window_stats``
+    to compute the gate-relevant flat_min for ``flatness_mode="per_walker"``.
+    """
+    per_walker: list[float] = []
+    for h in histograms:
+        if not h:
+            return None
+        counts = np.array(list(h.values()), dtype=float)
+        mean_c = float(counts.mean())
+        if mean_c <= 0:
+            return None
+        per_walker.append(float(counts.min()) / mean_c)
+    return min(per_walker) if per_walker else None
+
+
 def decide_bp_switch(
     phases: list[str], ts: list[int], fs: list[float]
 ) -> bool:
@@ -423,21 +444,34 @@ class WangLandauWindowGroup:
         return [r.data_container() for r in self._replicas]
 
     def window_stats(self) -> dict[str, Any]:
-        """Per-window convergence metrics: fill_factor, halvings, histogram, converged.
+        """Per-window convergence metrics.
 
-        fill_factor and halvings are taken from replica 0 (all in sync after
-        advance); histogram is the sum across all walkers.
+        Returns:
+            ``fill_factor`` and ``halvings`` from replica 0 (all in sync
+            after advance); ``histogram`` is the sum across all walkers
+            (the gate-relevant quantity under ``flatness_mode="pooled"``);
+            ``converged`` requires every walker to be converged.
+            ``flatness_mode`` is this group's mode (used by the progress
+            reporter to display the gate-relevant flat_min);
+            ``per_walker_flat_min`` is min over walkers of
+            ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
+            yet built a histogram.
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}
         for r in self._replicas:
             for k, v in r.ensemble._histogram.items():
                 combined_hist[k] = combined_hist.get(k, 0) + v
+        per_walker_flat_min = _compute_per_walker_flat_min(
+            [r.ensemble._histogram for r in self._replicas]
+        )
         return {
             "fill_factor": float(e0._fill_factor),
             "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
             "converged": self.converged,
+            "flatness_mode": self._flatness_mode,
+            "per_walker_flat_min": per_walker_flat_min,
         }
 
     def refresh_last_state(self) -> None:

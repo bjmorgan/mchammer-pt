@@ -379,7 +379,10 @@ class WangLandauReplica:
     def window_stats(self) -> dict[str, Any]:
         """Per-window convergence metrics.
 
-        Returns fill_factor, halvings, histogram, and converged.
+        Returns fill_factor, halvings, histogram, converged. For a
+        single-walker replica ``flatness_mode`` and ``per_walker_flat_min``
+        are omitted (the progress reporter falls through to the legacy
+        pooled computation, which is exact for n_walkers == 1).
         """
         e = self._ensemble
         return {

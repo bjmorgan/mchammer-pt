@@ -734,6 +734,52 @@ def test_finalise_for_reporting_merges_into_all_walkers():
         assert r.ensemble._entropy[1] == pytest.approx(5.0)
 
 
+def test_window_stats_includes_flatness_mode_and_per_walker_flat_min():
+    """Multi-walker window_stats carries flatness_mode and per_walker_flat_min."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 500, 1: 1000}  # flat_min = 500/750 ~ 0.667
+    replicas[1].ensemble._histogram = {0: 900, 1: 1000}  # flat_min = 900/950 ~ 0.947
+
+    group = WangLandauWindowGroup(
+        replicas,
+        random_seed=0,
+        flatness_mode="per_walker",
+        merge_cadence="at_halve",
+    )
+    stats = group.window_stats()
+
+    assert stats["flatness_mode"] == "per_walker"
+    # min of the two flat_mins:
+    # walker 0: 500 / 750 = 0.667 (smaller)
+    # walker 1: 900 / 950 = 0.947
+    assert stats["per_walker_flat_min"] == pytest.approx(500 / 750)
+
+
+def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
+    """per_walker_flat_min is None if any walker's histogram is empty."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._histogram = {0: 1000, 1: 1000}
+    replicas[1].ensemble._reached_energy_window = False
+    replicas[1].ensemble._histogram = {}
+
+    group = WangLandauWindowGroup(
+        replicas,
+        random_seed=0,
+        flatness_mode="pooled",
+        merge_cadence="at_halve",
+    )
+    stats = group.window_stats()
+
+    assert stats["per_walker_flat_min"] is None
+
+
 def test_finalise_for_reporting_single_walker_noop():
     """finalise_for_reporting is a no-op for single-walker groups."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup

@@ -374,9 +374,140 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
         assert "--" in row, row
 
 
+def test_wl_progress_printer_pooled_mode_reports_summed_flat_min():
+    """flatness_mode='pooled': flat_min is min(H_summed) / mean(H_summed)."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    class _StubPool:
+        def __len__(self):
+            return 1
+
+        def per_window_stats(self):
+            # Pooled: combined histogram is {0: 800, 1: 1000}; mean=900,
+            # min/mean = 800/900 ~= 0.889.
+            return [{
+                "fill_factor": 1.0,
+                "halvings": 0,
+                "histogram": {0: 800, 1: 1000},
+                "converged": False,
+                "flatness_mode": "pooled",
+                "per_walker_flat_min": 0.5,  # pooled wins; this is ignored.
+            }]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    blocks = _block_lines(buf.getvalue())
+    assert blocks
+    # 800/900 ~= 0.889 -> "0.889" in the row.
+    last_row = blocks[-1][-1]
+    assert "0.889" in last_row, last_row
+
+
+def test_wl_progress_printer_per_walker_mode_reports_walker_min():
+    """flatness_mode='per_walker': flat_min is min over walkers of walker_flat_min."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    class _StubPool:
+        def __len__(self):
+            return 1
+
+        def per_window_stats(self):
+            # Summed histogram looks flat at min/mean = 800/900 ~= 0.889;
+            # but per-walker minimum is 0.500 (one walker is far from flat).
+            return [{
+                "fill_factor": 1.0,
+                "halvings": 0,
+                "histogram": {0: 800, 1: 1000},
+                "converged": False,
+                "flatness_mode": "per_walker",
+                "per_walker_flat_min": 0.500,
+            }]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    blocks = _block_lines(buf.getvalue())
+    assert blocks
+    last_row = blocks[-1][-1]
+    assert "0.500" in last_row, last_row
+
+
+def test_wl_progress_printer_back_compat_no_mode_field():
+    """Stats without flatness_mode (legacy/single-replica) keep pooled behaviour."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    class _StubPool:
+        def __len__(self):
+            return 1
+
+        def per_window_stats(self):
+            # No flatness_mode field — single-walker WangLandauReplica
+            # case, or pre-migration data.
+            return [{
+                "fill_factor": 1.0,
+                "halvings": 0,
+                "histogram": {0: 800, 1: 1000},
+                "converged": False,
+            }]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    # Should fall through to the existing pooled computation, 800/900 ~= 0.889.
+    blocks = _block_lines(buf.getvalue())
+    last_row = blocks[-1][-1]
+    assert "0.889" in last_row, last_row
+
+
 def test_wl_progress_printer_rejects_non_positive_interval():
     pt = _wl_pt()
     with pytest.raises(ValueError):
         WangLandauProgressPrinter(pt.pool, interval=0)
     with pytest.raises(ValueError):
         WangLandauProgressPrinter(pt.pool, interval=-1)
+
+
+def test_wl_progress_printer_per_walker_zero_flat_min_displays_as_zero():
+    """per_walker_flat_min == 0.0 is a valid value, not a fall-through trigger."""
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    class _StubPool:
+        def __len__(self):
+            return 1
+
+        def per_window_stats(self):
+            # per_walker_flat_min is 0.0 (one walker has a fully empty bin).
+            # Pooled would be 800/900 ~= 0.889; the reporter must show 0.000
+            # under per_walker mode, not fall through.
+            return [{
+                "fill_factor": 1.0,
+                "halvings": 0,
+                "histogram": {0: 800, 1: 1000},
+                "converged": False,
+                "flatness_mode": "per_walker",
+                "per_walker_flat_min": 0.0,
+            }]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    blocks = _block_lines(buf.getvalue())
+    last_row = blocks[-1][-1]
+    assert "0.000" in last_row, last_row
