@@ -886,6 +886,11 @@ class ProcessWangLandauPool:
             raise RuntimeError("pool is shut down")
 
     @property
+    def is_open(self) -> bool:
+        """``True`` until :meth:`shutdown` clears the worker slots."""
+        return bool(self._slots)
+
+    @property
     def ensemble_cls_fqn(self) -> str:
         """Fully-qualified name of the ensemble class used by workers."""
         return self._ensemble_cls_fqn

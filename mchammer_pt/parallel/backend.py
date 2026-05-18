@@ -219,6 +219,20 @@ class WangLandauPool(ReplicaPool, Protocol):
         """
         ...
 
+    @property
+    def is_open(self) -> bool:
+        """Whether the pool can still accept commands.
+
+        Returns ``False`` once :meth:`shutdown` has been called (process
+        pool) or ``True`` always for in-process pools that do not model
+        shutdown. ``WangLandauParallelTempering.run`` gates its
+        end-of-run :meth:`finalise_for_reporting` call on this property
+        so that an already-shutdown pool (e.g. after a worker error
+        propagated through :meth:`advance_all`) does not raise a
+        secondary ``RuntimeError`` masking the original failure.
+        """
+        ...
+
 
 @runtime_checkable
 class _ObserverAttach(Protocol):

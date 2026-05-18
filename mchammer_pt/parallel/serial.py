@@ -470,3 +470,8 @@ class SerialWangLandauPool:
 
     def shutdown(self) -> None:
         return None
+
+    @property
+    def is_open(self) -> bool:
+        """Serial pool has no shutdown state; always open."""
+        return True

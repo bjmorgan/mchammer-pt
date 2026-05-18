@@ -241,6 +241,48 @@ def test_wl_pt_run_finalises_pool_for_reporting_on_exception(monkeypatch):
     assert mock_finalise.call_count == 1
 
 
+def test_wl_pt_run_skips_finalise_when_pool_shuts_down_on_exception(monkeypatch):
+    """If the pool shuts down on exception, ``run`` does not call finalise.
+
+    ``ProcessWangLandauPool.advance_all`` shuts the pool down on worker
+    errors before propagating. The original exception is what the user
+    wants to see — not the secondary ``RuntimeError("pool is shut
+    down")`` that ``finalise_for_reporting`` would produce on a closed
+    pool. Gated on the new ``pool.is_open`` property.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+
+    def boom(n_steps):
+        # Simulate ProcessWangLandauPool.advance_all: shut the pool down
+        # before propagating the worker error. ``shutdown`` itself is a
+        # no-op on SerialWangLandauPool, so we also flip ``is_open`` via
+        # a monkeypatched property to mirror process-pool semantics.
+        pt.pool.shutdown()
+        raise RuntimeError("worker died")
+
+    monkeypatch.setattr(pt.pool, "advance_all", boom)
+    monkeypatch.setattr(
+        type(pt.pool), "is_open", property(lambda self: False)
+    )
+    finalise_mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", finalise_mock)
+
+    with pytest.raises(RuntimeError, match="worker died"):
+        pt.run(n_cycles=2)
+    finalise_mock.assert_not_called()
+
+
 def test_wl_pt_run_stops_on_all_converged():
     """If every replica reports converged, the loop terminates early."""
     from mchammer_pt.wl import WangLandauParallelTempering

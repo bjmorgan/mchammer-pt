@@ -376,15 +376,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 if converged:
                     break
         finally:
-            # End-of-run merge MUST fire on every exit path, including
-            # KeyboardInterrupt and exceptions from inside the loop —
-            # otherwise per-walker entropies remain unreconciled in the
-            # data containers and pt.results() returns divergent values.
-            #
-            # If finalise_for_reporting itself raises here, Python
-            # chains the in-flight cycle-loop exception via
-            # ``__context__`` and both are visible in the traceback.
-            self._pool.finalise_for_reporting()
+            # End-of-run merge MUST fire on every successful exit path.
+            # On an exception path the pool may already have been shut
+            # down (e.g. ProcessWangLandauPool.advance_all shuts down on
+            # worker errors before re-raising); calling finalise on a
+            # closed pool would raise ``RuntimeError("pool is shut
+            # down")`` and mask the original failure. Skip the merge
+            # when the pool is closed — pt.results() will then surface
+            # whatever per-walker state was last collected.
+            if self._pool.is_open:
+                self._pool.finalise_for_reporting()
         if self._data_container_file is not None:
             # Checkpoint write is deliberately outside the try/finally:
             # on a mid-run exception the on-disk file reflects the last
