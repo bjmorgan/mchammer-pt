@@ -110,19 +110,7 @@ class WangLandauWindowGroup:
 
     def _snapshot_replica(self, replica: WangLandauReplica) -> WalkerPostBlockState:
         """Read live ensemble state into a WalkerPostBlockState."""
-        e = replica.ensemble
-        return WalkerPostBlockState(
-            is_flat=replica.is_flat(),
-            fill_factor=float(e._fill_factor),
-            entropy=dict(e._entropy),
-            step=int(e.step),
-            window_entry_step=(
-                None if e._window_entry_step is None
-                else int(e._window_entry_step)
-            ),
-            histogram=dict(e._histogram),
-            reached_energy_window=bool(e._reached_energy_window),
-        )
+        return replica._snapshot()
 
     def apply_plan(self, plan: CoordinatorPlan) -> None:
         """Apply the coordinator's plan to every walker.

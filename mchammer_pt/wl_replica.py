@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import os
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -32,6 +32,7 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from .wl_coordinator import CoordinatorPlan, WalkerPostBlockState
 from .wl_ensemble import CoordinatedWangLandauEnsemble
 
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
@@ -112,6 +113,10 @@ class WangLandauSlot(Protocol):
     def schedule(self) -> str: ...
     @property
     def flatness_limit(self) -> float: ...
+    @property
+    def walker_states(self) -> Sequence[WalkerPostBlockState]: ...
+    def apply_plan(self, plan: CoordinatorPlan) -> None: ...
+    def reroll_exchange_idx(self) -> None: ...
     def is_flat(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
     def current_energy(self) -> float: ...
@@ -256,6 +261,18 @@ class WangLandauReplica:
                 f"energy lies in its window."
             )
 
+        self.walker_states: tuple[WalkerPostBlockState, ...] = (
+            WalkerPostBlockState(
+                is_flat=False,
+                fill_factor=1.0,
+                entropy={},
+                step=0,
+                window_entry_step=None,
+                histogram={},
+                reached_energy_window=False,
+            ),
+        )
+
     @property
     def energy_window(self) -> tuple[float | None, float | None]:
         return (self._energy_limit_left, self._energy_limit_right)
@@ -336,6 +353,9 @@ class WangLandauReplica:
         converged (`_terminate_sampling`); the orchestrator handles
         this case by stopping the global loop when all replicas
         report `converged`. See `converged`.
+
+        After the run, refreshes ``self.walker_states`` from live ensemble
+        state so the coordinator can build a SlotView from it.
         """
         previous_state = random.getstate()
         random.setstate(self._rng_state)
@@ -344,6 +364,7 @@ class WangLandauReplica:
             self._rng_state = random.getstate()
         finally:
             random.setstate(previous_state)
+        self.walker_states = (self._snapshot(),)
 
     def is_flat(self) -> bool:
         """Return ``True`` if this walker's own histogram is flat.
@@ -362,6 +383,44 @@ class WangLandauReplica:
             return False
         limit = e._flatness_limit * np.average(histogram)
         return bool(np.all(histogram >= limit))
+
+    def _snapshot(self) -> WalkerPostBlockState:
+        """Read live ensemble state into a WalkerPostBlockState."""
+        e = self._ensemble
+        return WalkerPostBlockState(
+            is_flat=self.is_flat(),
+            fill_factor=float(e._fill_factor),
+            entropy=dict(e._entropy),
+            step=int(e.step),
+            window_entry_step=(
+                None if e._window_entry_step is None
+                else int(e._window_entry_step)
+            ),
+            histogram=dict(e._histogram),
+            reached_energy_window=bool(e._reached_energy_window),
+        )
+
+    def apply_plan(self, plan: CoordinatorPlan) -> None:
+        """Apply the coordinator's plan to this single walker.
+
+        Order matches ``WangLandauWindowGroup.apply_plan``:
+        halve -> write merged entropy -> set phase.
+        """
+        if plan.halve:
+            self.force_halve()
+        if plan.merged_entropy is not None:
+            self._ensemble._entropy = dict(plan.merged_entropy)
+        if plan.switch_to_phase is not None:
+            phase = plan.switch_to_phase
+            self._ensemble._phase = phase
+            if phase == "1_over_t":
+                entry = self._ensemble._window_entry_step
+                if entry is not None:
+                    t = self._ensemble.step - entry + 1
+                    self._ensemble._fill_factor = 1.0 / t
+
+    def reroll_exchange_idx(self) -> None:
+        """No-op for a single-walker slot."""
 
     def force_halve(self) -> None:
         """Halve ``_fill_factor`` and record the event in history.

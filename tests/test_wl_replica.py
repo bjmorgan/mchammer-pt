@@ -3,11 +3,62 @@
 from __future__ import annotations
 
 import copy
+import inspect
 
 import numpy as np
 import pytest
 
+from mchammer.calculators import ClusterExpansionCalculator
+from mchammer.ensembles import WangLandauEnsemble
+
+from mchammer_pt.wl_replica import WangLandauReplica
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+
+def _e0() -> float:
+    """Initial energy for the standard test atoms."""
+    atoms = make_wl_atoms()
+    ce = make_wl_ce()
+    return float(ClusterExpansionCalculator(atoms, ce).calculate_total(
+        occupations=atoms.numbers
+    ))
+
+
+def _make_wl_replica(schedule: str | None = None) -> WangLandauReplica:
+    """Construct a WangLandauReplica over a wide window.
+
+    Args:
+        schedule: optional schedule override (e.g. ``"1_over_t"``).
+            Silently skipped when the installed icet does not support
+            the ``schedule`` parameter.
+    """
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = _e0()
+    ensemble_kwargs: dict | None = None
+    if schedule is not None:
+        if "schedule" not in inspect.signature(WangLandauEnsemble.__init__).parameters:
+            pytest.skip("requires icet with WangLandauEnsemble schedule parameter")
+        ensemble_kwargs = {"schedule": schedule}
+    return WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=0,
+        ensemble_kwargs=ensemble_kwargs,
+    )
+
+
+@pytest.fixture
+def wl_replica_factory():
+    """Return a factory callable that produces a fresh WangLandauReplica.
+
+    Call with no arguments for a default halving-schedule replica, or
+    ``wl_replica_factory(schedule="1_over_t")`` for the BP schedule.
+    """
+    return _make_wl_replica
 
 
 def test_wl_replica_constructs_with_in_window_initial_energy():
@@ -414,3 +465,97 @@ def test_non_coordinated_ensemble_cls_rejected():
             random_seed=0,
             ensemble_cls=WangLandauEnsemble,
         )
+
+
+# ---------------------------------------------------------------------------
+# Slot surface tests (Task 2)
+# ---------------------------------------------------------------------------
+
+
+def test_walker_states_initialised_as_one_default_snapshot(wl_replica_factory):
+    """walker_states starts as a 1-tuple with default WalkerPostBlockState."""
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
+
+    replica = wl_replica_factory()
+    assert isinstance(replica.walker_states, tuple)
+    assert len(replica.walker_states) == 1
+    state = replica.walker_states[0]
+    assert isinstance(state, WalkerPostBlockState)
+    assert state.step == 0
+    assert state.reached_energy_window is False
+
+
+def test_advance_refreshes_walker_states(wl_replica_factory):
+    """advance(n) populates walker_states from live ensemble state."""
+    replica = wl_replica_factory()
+    replica.advance(50)
+    state = replica.walker_states[0]
+    assert state.step == int(replica.ensemble.step)
+    assert state.fill_factor == float(replica.ensemble._fill_factor)
+
+
+def test_apply_plan_halve_only_halves_fill_factor(wl_replica_factory):
+    """plan.halve=True halves _fill_factor and resets histogram."""
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory()
+    replica.advance(500)
+    f_before = float(replica.ensemble._fill_factor)
+    replica.apply_plan(CoordinatorPlan(
+        halve=True, merged_entropy=None, switch_to_phase=None
+    ))
+    assert replica.ensemble._fill_factor == f_before / 2.0
+
+
+def test_apply_plan_merged_entropy_writes_to_ensemble(wl_replica_factory):
+    """plan.merged_entropy writes to self._ensemble._entropy."""
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory()
+    replica.advance(50)
+    plan = CoordinatorPlan(
+        halve=False,
+        merged_entropy={0: 1.5, 1: 2.5},
+        switch_to_phase=None,
+    )
+    replica.apply_plan(plan)
+    assert replica.ensemble._entropy == {0: 1.5, 1: 2.5}
+
+
+def test_apply_plan_switch_to_phase_flips_and_recomputes_fill_factor(
+    wl_replica_factory,
+):
+    """plan.switch_to_phase='1_over_t' flips _phase and sets _fill_factor=1/t."""
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory(schedule="1_over_t")
+    replica.advance(200)
+    # Force a window_entry_step so the 1/t branch can compute t.
+    e = replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    step = int(e.step)
+    entry = int(e._window_entry_step)
+    expected_t = step - entry + 1
+    replica.apply_plan(CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+    assert replica.ensemble._phase == "1_over_t"
+    assert replica.ensemble._fill_factor == 1.0 / expected_t
+
+
+def test_reroll_exchange_idx_is_noop(wl_replica_factory):
+    """Single-walker reroll has no observable effect."""
+    replica = wl_replica_factory()
+    replica.advance(50)
+    f_before = float(replica.ensemble._fill_factor)
+    replica.reroll_exchange_idx()
+    assert replica.ensemble._fill_factor == f_before
+
+
+def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
+    """WangLandauReplica satisfies the runtime-checkable Protocol."""
+    from mchammer_pt.wl_replica import WangLandauSlot
+
+    replica = wl_replica_factory()
+    assert isinstance(replica, WangLandauSlot)
