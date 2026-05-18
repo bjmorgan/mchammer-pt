@@ -277,10 +277,8 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     container = WangLandauDataContainer.read(str(dc_path))
 
     assert container._last_state["schedule"] == "1_over_t"
-    e = replica.ensemble
-    if hasattr(e, "_phase"):
-        assert "phase" in container._last_state
-        assert "window_entry_step" in container._last_state
+    assert "phase" in container._last_state
+    assert "window_entry_step" in container._last_state
 
     restored = WangLandauReplica.restart_from(
         container,

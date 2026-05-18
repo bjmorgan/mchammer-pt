@@ -120,18 +120,13 @@ class WangLandauWindowGroup:
         self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
 
     def finalise_for_reporting(self) -> None:
-        """Merge per-walker entropies into a single window estimate.
+        """Merge per-walker entropies; write the result into every walker.
 
-        Called once at the end of a WL run, regardless of
-        ``merge_cadence``. Writes the merged dict into every walker's
-        ``_entropy`` and refreshes ``_last_state``, so any downstream
-        reader (``WindowResult``, data containers) sees a consistent
-        estimate regardless of which walker it samples from.
-
-        No-op for single-walker groups.
+        Called once at the end of a WL run. Writes the merged dict into
+        every walker's ``_entropy`` and refreshes ``_last_state``, so any
+        downstream reader (``WindowResult``, data containers) sees a
+        consistent estimate regardless of which walker it samples from.
         """
-        if len(self._replicas) <= 1:
-            return
         merged = merge_entropies(
             [dict(r.ensemble._entropy) for r in self._replicas]
         )
@@ -238,9 +233,7 @@ class WangLandauWindowGroup:
             r.refresh_last_state()
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        if len(self._replicas) > 1:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-        return self._replicas[0].snapshot_for_checkpoint()
+        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""

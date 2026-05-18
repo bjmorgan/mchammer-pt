@@ -520,7 +520,8 @@ class WangLandauReplica:
 
         Writes the fields that ``WindowResult`` reads (entropy,
         histogram, fill_factor, fill_factor_history, entropy_history)
-        and the 1/t-schedule fields when present. Idempotent.
+        and the 1/t-schedule fields (schedule, phase,
+        window_entry_step). Idempotent.
         """
         from collections import OrderedDict
 
@@ -536,13 +537,9 @@ class WangLandauReplica:
             histogram=OrderedDict(sorted(e._histogram.items())),
             entropy=OrderedDict(sorted(e._entropy.items())),
         )
-        if hasattr(e, "_schedule"):
-            e._data_container._last_state["schedule"] = e._schedule
-        if hasattr(e, "_phase"):
-            e._data_container._last_state["phase"] = e._phase
-            e._data_container._last_state[
-                "window_entry_step"
-            ] = e._window_entry_step
+        e._data_container._last_state["schedule"] = e._schedule
+        e._data_container._last_state["phase"] = e._phase
+        e._data_container._last_state["window_entry_step"] = e._window_entry_step
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on

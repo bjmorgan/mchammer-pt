@@ -599,21 +599,6 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
     assert stats["per_walker_flat_min"] is None
 
 
-def test_finalise_for_reporting_single_walker_noop():
-    """finalise_for_reporting is a no-op for single-walker groups."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
-
-    replicas = _make_replicas(1)
-    replicas[0].ensemble._reached_energy_window = True
-    replicas[0].ensemble._entropy = {0: 1.0, 1: 2.0}
-
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group.finalise_for_reporting()
-
-    # Untouched.
-    assert replicas[0].ensemble._entropy == {0: 1.0, 1: 2.0}
-
-
 def test_finalise_for_reporting_idempotent():
     """Calling finalise twice produces the same state as calling it once."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
