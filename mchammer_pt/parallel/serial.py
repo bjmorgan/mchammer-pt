@@ -454,6 +454,20 @@ class SerialWangLandauPool:
             r.refresh_last_state()
         return [r.all_data_containers() for r in self._replicas]
 
+    def finalise_for_reporting(self) -> None:
+        """Merge per-walker entropies in each window via the slot's finaliser.
+
+        Multi-walker slots (``WangLandauWindowGroup``) expose
+        ``finalise_for_reporting`` and merge their walkers' entropies
+        in-place. Single-walker slots (bare ``WangLandauReplica``) do
+        not expose the method and are skipped — there is nothing to
+        merge.
+        """
+        for r in self._replicas:
+            finaliser = getattr(r, "finalise_for_reporting", None)
+            if finaliser is not None:
+                finaliser()
+
     def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
         return [r.snapshot_for_checkpoint() for r in self._replicas]
 

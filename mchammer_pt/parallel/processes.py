@@ -947,6 +947,49 @@ class ProcessWangLandauPool:
             self.shutdown()
             raise
 
+    def finalise_for_reporting(self) -> None:
+        """End-of-run merge: fan out FINALISE_MERGE per multi-walker window.
+
+        For each window with more than one walker: compute the merged
+        entropy on the coordinator side from the snapshot already cached
+        in ``slot._last``, then send ``FINALISE_MERGE`` to every walker
+        in the window in a single fan-out so each walker's ``_entropy``
+        and data-container ``_last_state`` are updated in one round
+        trip. Single-walker windows are skipped.
+        """
+        self._check_open()
+        try:
+            targets: list[tuple[Connection, str, tuple[Any, ...]]] = []
+            per_slot_merged: list[dict[int, float] | None] = []
+            for i, slot in enumerate(self._slots):
+                if len(slot.workers) <= 1:
+                    per_slot_merged.append(None)
+                    continue
+                merged = merge_entropies(slot.collect_entropy_snapshots())
+                per_slot_merged.append(merged)
+                for w, (_, conn) in enumerate(slot.workers):
+                    targets.append((
+                        conn,
+                        f"window {i} walker {w}",
+                        ("FINALISE_MERGE", dict(merged)),
+                    ))
+            if targets:
+                fanout_gather(targets)
+                # Refresh local snapshots so subsequent stats reads
+                # also reflect the merged values.
+                for slot, merged_opt in zip(
+                    self._slots, per_slot_merged, strict=True,
+                ):
+                    if merged_opt is None:
+                        continue
+                    slot._last = [
+                        s._replace(entropy=dict(merged_opt))
+                        for s in slot._last
+                    ]
+        except Exception:
+            self.shutdown()
+            raise
+
     def _compute_plan(
         self, slot: ProcessWangLandauWindow
     ) -> _CoordinatorPlan:

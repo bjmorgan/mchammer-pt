@@ -209,6 +209,16 @@ class WangLandauPool(ReplicaPool, Protocol):
         """
         ...
 
+    def finalise_for_reporting(self) -> None:
+        """End-of-run merge of per-walker entropies into a per-window estimate.
+
+        Called at ``WL.run()`` exit. Writes the merged dict into every
+        walker's ``_entropy`` so downstream readers see a consistent
+        estimate regardless of which walker they sample. No-op for
+        single-walker windows.
+        """
+        ...
+
 
 @runtime_checkable
 class _ObserverAttach(Protocol):

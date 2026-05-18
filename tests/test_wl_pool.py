@@ -870,3 +870,95 @@ def test_wl_worker_set_phase_round_trip(tmp_path):
     finally:
         request(conn, ("SHUTDOWN",), 0)
         process.join(timeout=5.0)
+
+
+def test_serial_pool_finalise_for_reporting_merges_walker_entropies():
+    """SerialWangLandauPool.finalise_for_reporting merges per-window."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+
+    # Assign distinct per-walker entropies. The two walkers in each
+    # window share key set {0, 1} so intersection-mean rebasing is
+    # well-defined; the second walker is offset by 10 so the merge
+    # is observably non-trivial.
+    for group in pool._replicas:
+        group._replicas[0].ensemble._entropy = {0: 0.0, 1: 5.0}
+        group._replicas[1].ensemble._entropy = {0: 10.0, 1: 15.0}
+
+    pool.finalise_for_reporting()
+
+    # After merging, both walkers in each window share the same dict.
+    # Intersection-mean rebasing on {0: 0.0, 1: 5.0} subtracts the
+    # mean (2.5) giving {0: -2.5, 1: 2.5}; the same shape comes out of
+    # the offset walker. Bin-wise average yields {0: -2.5, 1: 2.5},
+    # then post-shift to min == 0 gives {0: 0.0, 1: 5.0}.
+    expected = {0: 0.0, 1: 5.0}
+    for group in pool._replicas:
+        for r in group._replicas:
+            assert r.ensemble._entropy == expected
+
+
+def test_serial_pool_finalise_for_reporting_skips_single_walker_slots():
+    """Bare WangLandauReplica slots have no finaliser; pool tolerates that."""
+    pool = _make_serial_wl_pool(n_replicas=2)
+    # Set an entropy on each replica that would not survive any
+    # implicit merge; absent a finaliser the value must be untouched.
+    pool._replicas[0].ensemble._entropy = {0: 1.0, 1: 2.0}
+    pool._replicas[1].ensemble._entropy = {0: 3.0, 1: 4.0}
+
+    pool.finalise_for_reporting()
+
+    assert pool._replicas[0].ensemble._entropy == {0: 1.0, 1: 2.0}
+    assert pool._replicas[1].ensemble._entropy == {0: 3.0, 1: 4.0}
+
+
+def test_process_pool_finalise_for_reporting_merges_walker_entropies(tmp_path):
+    """ProcessWangLandauPool.finalise_for_reporting merges via IPC."""
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=2,
+    ) as pool:
+        # Push distinct per-walker entropies via raw SET_ENTROPY, then
+        # refresh the coordinator-side snapshot via ADVANCE(0) so
+        # slot._last carries the new values for the merge to read.
+        for slot in pool._slots:
+            _, c0 = slot.workers[0]
+            _, c1 = slot.workers[1]
+            request(c0, ("SET_ENTROPY", {0: 0.0, 1: 5.0}), 0)
+            request(c1, ("SET_ENTROPY", {0: 10.0, 1: 15.0}), 1)
+        pool.advance_all(0)
+
+        pool.finalise_for_reporting()
+
+        expected = {0: 0.0, 1: 5.0}
+        for i, slot in enumerate(pool._slots):
+            for w, (_, conn) in enumerate(slot.workers):
+                got = request(conn, ("GET_ENTROPY",), f"window {i} walker {w}")
+                assert got == expected
+
+
+def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path):
+    """Single-walker slots are no-ops; their entropy is untouched."""
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=1,
+    ) as pool:
+        for i, slot in enumerate(pool._slots):
+            _, conn = slot.workers[0]
+            request(conn, ("SET_ENTROPY", {0: float(i), 1: float(i) + 1.0}), i)
+
+        pool.finalise_for_reporting()
+
+        for i, slot in enumerate(pool._slots):
+            _, conn = slot.workers[0]
+            got = request(conn, ("GET_ENTROPY",), i)
+            assert got == {0: float(i), 1: float(i) + 1.0}
