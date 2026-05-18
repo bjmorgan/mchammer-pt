@@ -12,12 +12,8 @@ from mchammer.observers.base_observer import BaseObserver
 from .wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     CoordinatorPlan,
-    FlatnessMode,
-    MergeCadence,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
-    _validate_flatness_mode,
-    _validate_merge_cadence,
     merge_entropies,
 )
 from .wl_replica import WangLandauReplica
@@ -31,26 +27,16 @@ if TYPE_CHECKING:
 class WangLandauWindowGroup:
     """A group of independent Wang-Landau walkers sharing one energy window.
 
-    Owns the collective halving decision: the halve gate fires when
-    either every walker is independently flat (``flatness_mode="per_walker"``,
-    published Vogel et al. 2013) or the summed histogram across walkers
-    is flat (``flatness_mode="pooled"``, default). At a collective halve
-    all walkers' fill factors halve in lockstep and histograms reset.
-
-    Entropy merge cadence is controlled by ``merge_cadence``:
-
-    - ``"at_halve"`` (default): merge entropies at each collective halve
-      (Vogel et al. 2013 cadence).
-    - ``"never"``: no mid-run merge; walkers run fully independently.
-
-    In the 1/t phase no mid-run merge fires regardless of cadence.
+    Runs W walkers in a single energy window, snapshots their state
+    after each block, and applies coordinator plans (halve, merge
+    entropy, phase switch) to all walkers in lockstep. Policy decisions
+    (flatness mode, merge cadence) live at the pool level and are passed
+    in via ``CoordinatorPlan``; the group executes plans mechanically.
 
     Args:
         replicas: pre-constructed WangLandauReplica instances, all with
             the same energy window and energy spacing.
         random_seed: seed for the exchange-walker selection RNG.
-        flatness_mode: ``"per_walker"`` or ``"pooled"`` (default).
-        merge_cadence: ``"at_halve"`` (default) or ``"never"``.
     """
 
     def __init__(
@@ -58,8 +44,6 @@ class WangLandauWindowGroup:
         replicas: list[WangLandauReplica],
         *,
         random_seed: int,
-        flatness_mode: FlatnessMode = "pooled",
-        merge_cadence: MergeCadence = "at_halve",
     ) -> None:
         if len(replicas) < 1:
             raise ValueError(
@@ -74,13 +58,9 @@ class WangLandauWindowGroup:
                         "all replicas in a WangLandauWindowGroup must share "
                         "the same energy window and spacing"
                     )
-        _validate_flatness_mode(flatness_mode)
-        _validate_merge_cadence(merge_cadence)
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
-        self._flatness_mode: FlatnessMode = flatness_mode
-        self._merge_cadence: MergeCadence = merge_cadence
         # All walkers in a group share _schedule (set via ensemble_kwargs).
         self._schedule: str = self._replicas[0].ensemble._schedule
         self.walker_states: list[WalkerPostBlockState] = [
@@ -228,14 +208,13 @@ class WangLandauWindowGroup:
 
         Returns:
             ``fill_factor`` and ``halvings`` from replica 0 (all in sync
-            after advance); ``histogram`` is the sum across all walkers
-            (the gate-relevant quantity under ``flatness_mode="pooled"``);
-            ``converged`` requires every walker to be converged.
-            ``flatness_mode`` is this group's mode (used by the progress
-            reporter to display the gate-relevant flat_min);
+            after advance); ``histogram`` is the sum across all walkers;
+            ``converged`` requires every walker to be converged;
             ``per_walker_flat_min`` is min over walkers of
             ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
-            yet built a histogram.
+            yet built a histogram. ``flatness_mode`` is not included here;
+            it is injected at the pool level by
+            ``SerialWangLandauPool.per_window_stats``.
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}
@@ -250,7 +229,6 @@ class WangLandauWindowGroup:
             "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
             "converged": self.converged,
-            "flatness_mode": self._flatness_mode,
             "per_walker_flat_min": per_walker_flat_min,
         }
 

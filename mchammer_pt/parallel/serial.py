@@ -354,7 +354,10 @@ class SerialWangLandauPool:
         return np.array([r.converged for r in self._replicas], dtype=bool)
 
     def per_window_stats(self) -> list[dict[str, Any]]:
-        return [r.window_stats() for r in self._replicas]
+        stats = [r.window_stats() for r in self._replicas]
+        for d in stats:
+            d["flatness_mode"] = self._flatness_mode
+        return stats
 
     def attach_observer(
         self,

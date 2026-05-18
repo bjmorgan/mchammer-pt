@@ -552,8 +552,9 @@ def test_finalise_for_reporting_merges_into_all_walkers():
         assert r.ensemble._entropy[1] == pytest.approx(5.0)
 
 
-def test_window_stats_includes_flatness_mode_and_per_walker_flat_min():
-    """Multi-walker window_stats carries flatness_mode and per_walker_flat_min."""
+def test_per_window_stats_injects_flatness_mode_from_pool():
+    """Pool.per_window_stats injects flatness_mode; group.window_stats omits it."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     replicas = _make_replicas(2)
@@ -562,19 +563,24 @@ def test_window_stats_includes_flatness_mode_and_per_walker_flat_min():
     replicas[0].ensemble._histogram = {0: 500, 1: 1000}  # flat_min = 500/750 ~ 0.667
     replicas[1].ensemble._histogram = {0: 900, 1: 1000}  # flat_min = 900/950 ~ 0.947
 
-    group = WangLandauWindowGroup(
-        replicas,
-        random_seed=0,
-        flatness_mode="per_walker",
-        merge_cadence="at_halve",
-    )
-    stats = group.window_stats()
+    group = WangLandauWindowGroup(replicas, random_seed=0)
 
-    assert stats["flatness_mode"] == "per_walker"
-    # min of the two flat_mins:
+    # Group-level stats do not include flatness_mode.
+    group_stats = group.window_stats()
+    assert "flatness_mode" not in group_stats
+
+    # Pool injects it from its own config.
+    pool = SerialWangLandauPool(
+        [group],
+        energy_spacing=0.1,
+        flatness_mode="per_walker",
+    )
+    pool_stats = pool.per_window_stats()
+    assert pool_stats[0]["flatness_mode"] == "per_walker"
+    # per_walker_flat_min is still computed by the group and surfaced via the pool.
     # walker 0: 500 / 750 = 0.667 (smaller)
     # walker 1: 900 / 950 = 0.947
-    assert stats["per_walker_flat_min"] == pytest.approx(500 / 750)
+    assert pool_stats[0]["per_walker_flat_min"] == pytest.approx(500 / 750)
 
 
 def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
@@ -587,12 +593,7 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
     replicas[1].ensemble._reached_energy_window = False
     replicas[1].ensemble._histogram = {}
 
-    group = WangLandauWindowGroup(
-        replicas,
-        random_seed=0,
-        flatness_mode="pooled",
-        merge_cadence="at_halve",
-    )
+    group = WangLandauWindowGroup(replicas, random_seed=0)
     stats = group.window_stats()
 
     assert stats["per_walker_flat_min"] is None

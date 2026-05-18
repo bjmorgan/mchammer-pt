@@ -248,8 +248,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     WangLandauWindowGroup(
                         walker_replicas,
                         random_seed=group_seeds[w],
-                        flatness_mode=flatness_mode,
-                        merge_cadence=merge_cadence,
                     )
                 )
             pool = SerialWangLandauPool(
@@ -535,8 +533,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
             WangLandauWindowGroup(
                 [replica],
                 random_seed=group_seeds[i],
-                flatness_mode=flatness_mode,
-                merge_cadence=merge_cadence,
             )
             for i, replica in enumerate(replicas)
         ]

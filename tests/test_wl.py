@@ -1070,12 +1070,12 @@ def test_wl_pt_flatness_mode_default_pooled():
         random_seed=0,
         ensemble_cls=CoordinatedWangLandauEnsemble,
     )
-    assert pt._pool.replicas[0]._flatness_mode == "pooled"
-    assert pt._pool.replicas[0]._merge_cadence == "at_halve"
+    assert pt._pool._flatness_mode == "pooled"
+    assert pt._pool._merge_cadence == "at_halve"
 
 
 def test_wl_pt_flatness_mode_per_walker_propagates():
-    """flatness_mode='per_walker' reaches the window group."""
+    """flatness_mode='per_walker' is stored on the pool."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -1097,7 +1097,7 @@ def test_wl_pt_flatness_mode_per_walker_propagates():
         ensemble_cls=CoordinatedWangLandauEnsemble,
         flatness_mode="per_walker",
     )
-    assert pt._pool.replicas[0]._flatness_mode == "per_walker"
+    assert pt._pool._flatness_mode == "per_walker"
 
 
 @pytest.mark.parametrize(
