@@ -9,29 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ``sync_policy`` parameter on ``WangLandauParallelTempering``,
-  ``from_bin_count``, and ``process_pool`` factories. Selects
-  between ``"block"`` (default; merge entropy every block) and
-  ``"halving"`` (Vogel et al. 2013: merge only at collective
-  halving events). Both policies share the same collective halving
-  gate: ``f`` halves only when every walker independently reports a
-  flat histogram against its own histogram. Has no observable
-  effect when every window has a single walker.
+- ``flatness_mode`` and ``merge_cadence`` parameters on
+  ``WangLandauParallelTempering``, ``from_bin_count``, and
+  ``process_pool`` factories. ``flatness_mode="per_walker"`` halves
+  when every walker is independently flat (published Vogel et al.
+  2013); ``flatness_mode="pooled"`` (default) halves when the
+  summed histogram across walkers is flat (pooled bins see ``W×``
+  the samples per bin under the same wall-clock budget).
+  ``merge_cadence="at_halve"`` (default) merges entropies at each
+  collective halve; ``merge_cadence="never"`` skips mid-run merges
+  entirely (walker entropies diverge during the run; end-of-run
+  finalisation reconciles them). Both apply only in the halving
+  phase. The 1/t phase never merges mid-run regardless of cadence.
 - ``CoordinatedWangLandauEnsemble``, a subclass of mchammer's
   ``WangLandauEnsemble`` with internal halving suppressed. Halving
   is now driven by ``WangLandauWindowGroup`` after each block.
   ``WangLandauReplica`` defaults ``ensemble_cls`` to this subclass
   and rejects any ``ensemble_cls`` that is not a subclass of it.
+- ``WangLandauPool.finalise_for_reporting()`` protocol method,
+  with matching implementations on ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool``. Called from
+  ``WangLandauParallelTempering.run()`` on every exit path
+  (full completion, early convergence, and exceptions including
+  ``KeyboardInterrupt``). Merges per-walker entropies into a
+  single window estimate via ``merge_entropies``, writes the
+  merged dict to every walker's ``_entropy``, and refreshes
+  ``_last_state`` so downstream readers (``WindowResult``, data
+  containers) see a consistent estimate regardless of which
+  walker they sample from. No-op for single-walker windows.
+- ``FINALISE_MERGE`` worker opcode for the process pool. Receives
+  a merged entropy dict, writes it to ``_entropy``, and refreshes
+  ``_last_state`` in one round-trip.
 
 ### Changed
 
-- Multi-walker windows now use a collective halving gate (every
-  walker must independently report flat) plus collective halving
-  via ``force_halve``. This replaces the previous per-walker
-  autonomous halving with force-halving of laggards. Halvings now
-  fire when every walker is flat rather than when the fastest one
-  is; the new default policy ``"block"`` still merges entropy
-  every block.
+- Multi-walker windows now use a collective halving gate with two
+  selectable modes (per-walker vs pooled — see above) plus
+  collective halving via ``force_halve``. This replaces the
+  previous per-walker autonomous halving with force-halving of
+  laggards. Halvings fire on the collective gate's verdict
+  rather than when the fastest walker individually flattens.
+- ``merge_entropies`` rewritten to rebase each walker's entropy by
+  the mean over the intersection of bins all walkers visited,
+  then average bin-wise over the walkers that visited each bin,
+  then shift so ``min(merged) == 0``. Each walker's ``_entropy``
+  carries a private additive constant (icet's ``_update_entropy``
+  periodically subtracts each walker's own ``np.min``); the
+  previous naive arithmetic mean averaged values with different
+  constants and treated bins visited by only some walkers as
+  zero-valued in the others, producing a curve with
+  coverage-boundary artefacts. Intersection-mean rebasing
+  preserves the shape across partial coverage.
 - Single-walker runs are routed through ``WangLandauWindowGroup``
   for path uniformity. The convergence criterion is unchanged; the
   flatness check now fires at block boundaries rather than at
@@ -40,14 +68,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``ProcessWangLandauWindow`` class with coordinator-facing
   methods (replacing the previous private ``_WindowSlot``
   dataclass). Worker opcodes ``GET_ENTROPY``, ``SET_ENTROPY``,
-  ``FORCE_HALVE``, and ``SET_PHASE`` carry the collective
-  coordination state. The ``ADVANCE`` ack now piggybacks
-  ``(is_flat, fill_factor, entropy_snapshot, step,
-  window_entry_step)`` so the coordinator can run with minimal
-  round-trips.
+  ``FORCE_HALVE``, ``SET_PHASE``, and the new ``FINALISE_MERGE``
+  carry the collective coordination state. The ``ADVANCE`` ack now
+  piggybacks ``is_flat``, ``fill_factor``, ``entropy``, ``step``,
+  ``window_entry_step``, ``histogram``, and
+  ``reached_energy_window`` so the coordinator can decide pooled
+  flatness without further round-trips.
+- The WL progress reporter's ``flat_min`` column reports the
+  quantity the active halve gate is checking: pooled
+  ``min(H_summed)/mean(H_summed)`` under ``flatness_mode="pooled"``,
+  the minimum over walkers of ``min(H_k)/mean(H_k)`` under
+  ``"per_walker"``. Single-walker windows fall through to the
+  pooled computation, which is exact for ``n_walkers == 1``.
 
 ### Fixed
 
+- The 1/t phase no longer merges per-walker entropies on every
+  block. The 1/t schedule has no flatness gate, so there is no
+  natural sync point during the run; mid-block merging mixed
+  walker noise unnecessarily. End-of-run merging via
+  ``finalise_for_reporting`` reconciles divergent walker
+  entropies on every exit path.
 - ``WangLandauParallelTempering.resume`` now wraps each restored
   replica in a single-walker ``WangLandauWindowGroup`` so the
   coordinator drives halving. Before the fix, resumed runs used
@@ -55,8 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``CoordinatedWangLandauEnsemble`` (halving-suppressed) silently
   produced no halving and never converged.
 - ``_fill_factor_history`` no longer records the Belardinelli-
-  Pereyra phase transition at the same step as the halve. The dict
-  now records halve events only, restoring symmetry with
+  Pereyra phase transition at the same step as the halve. The
+  dict now records halve events only, restoring symmetry with
   ``_entropy_history`` so downstream analysis that pairs the two
   dicts sees coherent post-halve state at each key.
 
