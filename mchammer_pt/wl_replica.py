@@ -13,7 +13,7 @@ import copy
 import os
 import random
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import numpy as np
 from ase import Atoms
@@ -32,7 +32,7 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
-from .wl_coordinator import CoordinatorPlan, WalkerPostBlockState
+from .wl_coordinator import CoordinatorPlan, Phase, Schedule, WalkerPostBlockState
 from .wl_ensemble import CoordinatedWangLandauEnsemble
 
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
@@ -108,9 +108,9 @@ class WangLandauSlot(Protocol):
     @property
     def converged(self) -> bool: ...
     @property
-    def phase(self) -> str: ...
+    def phase(self) -> Phase: ...
     @property
-    def schedule(self) -> str: ...
+    def schedule(self) -> Schedule: ...
     @property
     def flatness_limit(self) -> float: ...
     @property
@@ -286,12 +286,12 @@ class WangLandauReplica:
         return self._ensemble
 
     @property
-    def phase(self) -> str:
-        return str(self._ensemble._phase)
+    def phase(self) -> Phase:
+        return cast(Phase, self._ensemble._phase)
 
     @property
-    def schedule(self) -> str:
-        return str(self._ensemble._schedule)
+    def schedule(self) -> Schedule:
+        return cast(Schedule, self._ensemble._schedule)
 
     @property
     def flatness_limit(self) -> float:
@@ -420,7 +420,11 @@ class WangLandauReplica:
                     self._ensemble._fill_factor = 1.0 / t
 
     def reroll_exchange_idx(self) -> None:
-        """No-op for a single-walker slot."""
+        """No-op: a single-walker slot has no exchange index to re-roll.
+
+        Present to satisfy ``WangLandauSlot``: the pool calls this on
+        every slot after applying a coordinator plan.
+        """
 
     def force_halve(self) -> None:
         """Halve ``_fill_factor`` and record the event in history.

@@ -485,27 +485,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )  # type: ignore[assignment]
 
         atoms_list = [container.structure.copy() for container in containers]
-        n_windows = len(windows)
-        # Match ``__init__``'s seed allocation: ``n_windows`` walker
-        # seeds + ``n_windows`` group seeds + 1 master. Walker seeds
-        # do not affect resumed RNG state because
-        # ``WangLandauReplica.restart_from`` overwrites
-        # ``ensemble._random_state`` from the data container before
-        # any MC step runs. Group seeds are spawned but unused on the
-        # resume path (resume is W=1-only; bare replicas are slots
-        # directly). The count must not change to preserve
-        # bit-identical RNG with previously-saved checkpoints.
-        seed_sequence = np.random.SeedSequence(random_seed)
-        # Spawn 2 * n_windows + 1 children to preserve bit-identical
-        # RNG with previously-saved checkpoints (the n_windows
-        # "group-seed" slots are unused on the resume path now that
-        # bare replicas serve as W=1 slots).
-        child_seeds = seed_sequence.spawn(2 * n_windows + 1)
-        replica_seeds = [
-            int(child_seeds[i].generate_state(1)[0])
-            for i in range(n_windows)
-        ]
-
+        # Per-replica random_seed is overwritten by restart_from via
+        # restore_state before any MC step runs; the orchestrator's
+        # RNG is loaded from saved JSON below. Pass random_seed
+        # directly to every replica.
         replicas = [
             WangLandauReplica.restart_from(
                 container,
@@ -514,16 +497,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 energy_spacing=energy_spacing,
                 energy_limit_left=lo,
                 energy_limit_right=hi,
-                random_seed=seed,
+                random_seed=random_seed,
                 ensemble_cls=ensemble_cls,
                 ensemble_kwargs=ensemble_kwargs,
                 sites_by_species=extra["sites_by_species"],
             )
-            for container, atoms, (lo, hi), seed, extra in zip(
+            for container, atoms, (lo, hi), extra in zip(
                 containers,
                 atoms_list,
                 windows,
-                replica_seeds,
                 replica_extras,
                 strict=True,
             )

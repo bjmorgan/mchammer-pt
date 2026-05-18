@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from mchammer.observers.base_observer import BaseObserver
@@ -12,6 +12,8 @@ from mchammer.observers.base_observer import BaseObserver
 from .wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     CoordinatorPlan,
+    Phase,
+    Schedule,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
     merge_entropies,
@@ -45,24 +47,26 @@ class WangLandauWindowGroup:
         *,
         random_seed: int,
     ) -> None:
-        if len(replicas) < 1:
+        if len(replicas) < 2:
             raise ValueError(
-                "WangLandauWindowGroup requires at least one replica"
+                "WangLandauWindowGroup requires at least two replicas; "
+                "use a bare WangLandauReplica for single-walker windows"
             )
-        if len(replicas) > 1:
-            w0 = replicas[0].energy_window
-            s0 = replicas[0].energy_spacing
-            for r in replicas[1:]:
-                if r.energy_window != w0 or r.energy_spacing != s0:
-                    raise ValueError(
-                        "all replicas in a WangLandauWindowGroup must share "
-                        "the same energy window and spacing"
-                    )
+        w0 = replicas[0].energy_window
+        s0 = replicas[0].energy_spacing
+        for r in replicas[1:]:
+            if r.energy_window != w0 or r.energy_spacing != s0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    "the same energy window and spacing"
+                )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
         self._exchange_idx: int = 0
         # All walkers in a group share _schedule (set via ensemble_kwargs).
-        self._schedule: str = self._replicas[0].ensemble._schedule
+        self._schedule: Schedule = cast(
+            Schedule, self._replicas[0].ensemble._schedule
+        )
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
                 is_flat=False,
@@ -159,12 +163,12 @@ class WangLandauWindowGroup:
         return self._replicas[0].cluster_expansion_path
 
     @property
-    def phase(self) -> str:
-        return str(self._replicas[0].ensemble._phase)
+    def phase(self) -> Phase:
+        return cast(Phase, self._replicas[0].ensemble._phase)
 
     @property
-    def schedule(self) -> str:
-        return str(self._schedule)
+    def schedule(self) -> Schedule:
+        return self._schedule
 
     @property
     def flatness_limit(self) -> float:
@@ -207,9 +211,8 @@ class WangLandauWindowGroup:
             ``converged`` requires every walker to be converged;
             ``per_walker_flat_min`` is min over walkers of
             ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
-            yet built a histogram. ``flatness_mode`` is not included here;
-            it is injected at the pool level by
-            ``SerialWangLandauPool.per_window_stats``.
+            yet built a histogram. ``flatness_mode`` is not included
+            here; the pool injects it (pool-level policy).
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}

@@ -3,11 +3,13 @@
 This document is for developers working on mchammer-pt. For library
 usage see the README.
 
+This document describes the Wang-Landau (REWL) runtime. Canonical
+parallel tempering uses a simpler structure (one ensemble per
+temperature, no per-block coordinator) and is not covered here.
+
 ## Mental model
 
-mchammer-pt orchestrates parallel-tempering runs over an `mchammer`
-canonical Monte Carlo or Wang-Landau ensemble. The runtime hierarchy
-for Wang-Landau (REWL) is:
+The REWL runtime hierarchy is:
 
 ```
 Pool   (SerialWangLandauPool / ProcessWangLandauPool)
@@ -38,8 +40,7 @@ IS the walker (a bare `WangLandauReplica`). For `n_walkers_per_window
 slot (`slot.energy_window`).
 
 The Pool drives every slot uniformly through the `WangLandauSlot`
-Protocol. There is no `isinstance` dispatch at the pool level -- both
-slot kinds satisfy the same contract.
+Protocol.
 
 ## The four-phase pipeline
 
@@ -110,11 +111,6 @@ mechanical:
   applies plans by three batched IPC rounds (FORCE_HALVE,
   SET_ENTROPY, SET_PHASE), each parallelised across all walkers of
   all slots that need the corresponding action.
-
-The shared shape makes the unification visible at the call site:
-`SerialWangLandauPool.advance_all` and `ProcessWangLandauPool.advance_all`
-read structurally as the same algorithm, with backend-specific
-implementations of the advance and apply primitives.
 
 ## Where to look
 

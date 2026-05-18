@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from multiprocessing.connection import Connection
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from ase import Atoms
@@ -34,6 +34,8 @@ from ..wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
+    Phase,
+    Schedule,
     SlotView,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
@@ -566,7 +568,7 @@ class ProcessWangLandauWindow:
         rng: np.random.Generator,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
-        schedule: str = "halving",
+        schedule: Schedule = "halving",
         flatness_limit: float = 0.8,
     ) -> None:
         _validate_flatness_mode(flatness_mode)
@@ -576,9 +578,9 @@ class ProcessWangLandauWindow:
         self.exchange_idx: int = 0
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
-        self._schedule: str = schedule
+        self._schedule: Schedule = schedule
         self._flatness_limit: float = float(flatness_limit)
-        self.phase: str = "halving"
+        self.phase: Phase = "halving"
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
                 is_flat=False,
@@ -812,7 +814,9 @@ class ProcessWangLandauPool:
                     rng=np.random.default_rng(rng_seed),
                     flatness_mode=self._flatness_mode,
                     merge_cadence=self._merge_cadence,
-                    schedule=str(extra_kwargs.get("schedule", "halving")),
+                    schedule=cast(
+                        Schedule, extra_kwargs.get("schedule", "halving")
+                    ),
                     flatness_limit=self._flatness_limit,
                 ))
 
