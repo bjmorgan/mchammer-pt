@@ -1,10 +1,12 @@
 """Worker-side implementation of the persistent multiprocessing pools.
 
-``BaseWorker`` implements the command loop and shared opcodes.
-``CanonicalWorker`` and ``WangLandauWorker`` extend it with
-replica-specific construction and extra opcodes. The two thin
-entry points ``_worker`` and ``_wl_worker`` satisfy
-``Process(target=...)``.
+``BaseWorker`` holds the handler table and dispatch logic, but does
+not own a ``Connection``. Replies are written through a caller-supplied
+``reply_sink`` callable. The production read loop lives in the module
+level ``_run_worker_loop`` free function. ``CanonicalWorker`` and
+``WangLandauWorker`` extend ``BaseWorker`` with replica-specific
+construction and extra opcodes. The two thin entry points ``_worker``
+and ``_wl_worker`` satisfy ``Process(target=...)``.
 
 Shared opcodes (``BaseWorker``):
 
@@ -76,11 +78,13 @@ class BaseWorker:
     """Command-loop base class for persistent pool workers.
 
     Subclasses implement ``_build_replica`` and optionally extend
-    ``self._handlers`` with extra opcode handlers.
+    ``self._handlers`` with extra opcode handlers. Replies flow
+    through ``reply_sink``; the worker does not own a ``Connection``.
+    The production read loop lives in ``_run_worker_loop``.
     """
 
-    def __init__(self, conn: Connection) -> None:
-        self._conn = conn
+    def __init__(self, *, reply_sink: Callable[[Reply], None]) -> None:
+        self._reply_sink = reply_sink
         self._op: str = ""
         self._replica: Any = None
         self._handlers: dict[str, Callable[[tuple[Any, ...]], None]] = {
@@ -101,44 +105,36 @@ class BaseWorker:
     def _build_replica(self) -> Any:
         raise NotImplementedError
 
-    def run(self) -> None:
-        """Build the replica, handshake, and enter the command loop."""
-        try:
-            self._replica = self._build_replica()
-        except BaseException:
-            self._conn.send(Reply("ERR", "STARTUP", traceback.format_exc()))
-            self._conn.close()
+    def _handle(self, cmd: tuple[Any, ...]) -> None:
+        """Dispatch one command through the handler table.
+
+        Reads the opcode from ``cmd[0]``, looks up the handler, and
+        calls it. Unknown opcodes produce an ``ERR`` reply. Handler
+        exceptions are translated to ``ERR`` replies; ``_Shutdown``
+        propagates so the caller can break the command loop.
+        """
+        self._op = cmd[0]
+        handler = self._handlers.get(self._op)
+        if handler is None:
+            self._reply_sink(
+                Reply("ERR", self._op, f"unknown command: {self._op!r}")
+            )
             return
-
-        self._conn.send(Reply("OK", "STARTUP", None))
-
-        while True:
-            try:
-                cmd = self._conn.recv()
-            except EOFError:
-                return
-            self._op = cmd[0]
-            handler = self._handlers.get(self._op)
-            if handler is None:
-                self._conn.send(
-                    Reply("ERR", self._op, f"unknown command: {self._op!r}")
-                )
-                continue
-            try:
-                handler(cmd)
-            except _Shutdown:
-                return
-            except Exception:
-                self._reply_error(traceback.format_exc())
+        try:
+            handler(cmd)
+        except _Shutdown:
+            raise
+        except Exception:
+            self._reply_error(traceback.format_exc())
 
     def _reply(self, payload: Any) -> None:
-        self._conn.send(Reply("OK", self._op, payload))
+        self._reply_sink(Reply("OK", self._op, payload))
 
     def _reply_error(self, tb: str) -> None:
-        self._conn.send(Reply("ERR", self._op, tb))
+        self._reply_sink(Reply("ERR", self._op, tb))
 
     def _reply_pickle_error(self, tb: str) -> None:
-        self._conn.send(Reply("ERR_PICKLE", self._op, tb))
+        self._reply_sink(Reply("ERR_PICKLE", self._op, tb))
 
     def _handle_advance(self, cmd: tuple[Any, ...]) -> None:
         self._replica.advance(cmd[1])
@@ -199,7 +195,6 @@ class BaseWorker:
 
     def _handle_shutdown(self, cmd: tuple[Any, ...]) -> None:
         self._reply(None)
-        self._conn.close()
         raise _Shutdown
 
 
@@ -208,15 +203,16 @@ class CanonicalWorker(BaseWorker):
 
     def __init__(
         self,
-        conn: Connection,
         ce_path: str,
         atoms_dict: dict[str, Any],
         temperature: float,
         seed: int,
         ensemble_cls: type[CanonicalEnsemble],
         ensemble_kwargs: dict[str, Any],
+        *,
+        reply_sink: Callable[[Reply], None],
     ) -> None:
-        super().__init__(conn)
+        super().__init__(reply_sink=reply_sink)
         self._ce_path = ce_path
         self._atoms_dict = atoms_dict
         self._temperature = temperature
@@ -243,28 +239,11 @@ class CanonicalWorker(BaseWorker):
         )
 
 
-def _worker(
-    conn: Connection,
-    ce_path: str,
-    atoms_dict: dict[str, Any],
-    temperature: float,
-    seed: int,
-    ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: dict[str, Any],
-) -> None:
-    """Canonical worker entry point for Process(target=...)."""
-    CanonicalWorker(
-        conn, ce_path, atoms_dict, temperature, seed,
-        ensemble_cls, ensemble_kwargs,
-    ).run()
-
-
 class WangLandauWorker(BaseWorker):
     """Worker for Wang-Landau (REWL) replicas."""
 
     def __init__(
         self,
-        conn: Connection,
         ce_path: str,
         atoms_dict: dict[str, Any],
         energy_spacing: float,
@@ -273,8 +252,10 @@ class WangLandauWorker(BaseWorker):
         seed: int,
         ensemble_cls: type[WangLandauEnsemble],
         ensemble_kwargs: dict[str, Any],
+        *,
+        reply_sink: Callable[[Reply], None],
     ) -> None:
-        super().__init__(conn)
+        super().__init__(reply_sink=reply_sink)
         self._ce_path = ce_path
         self._atoms_dict = atoms_dict
         self._energy_spacing = energy_spacing
@@ -389,6 +370,60 @@ class WangLandauWorker(BaseWorker):
         self._reply(None)
 
 
+def _run_worker_loop(worker: BaseWorker, conn: Connection) -> None:
+    """Run a worker's command loop against a real connection.
+
+    Builds the replica via ``worker._build_replica``, sends the
+    STARTUP handshake, then loops on ``conn.recv()`` dispatching
+    through ``worker._handle``. ``EOFError`` (parent died) and
+    ``_Shutdown`` (clean exit) both close the connection and return.
+
+    Production entry point. Tests that drive the worker in-process
+    bypass this loop and invoke ``worker._handle`` directly.
+    """
+    try:
+        worker._replica = worker._build_replica()
+    except BaseException:
+        worker._reply_sink(Reply("ERR", "STARTUP", traceback.format_exc()))
+        conn.close()
+        return
+
+    worker._reply_sink(Reply("OK", "STARTUP", None))
+
+    while True:
+        try:
+            cmd = conn.recv()
+        except EOFError:
+            return
+        try:
+            worker._handle(cmd)
+        except _Shutdown:
+            conn.close()
+            return
+
+
+def _worker(
+    conn: Connection,
+    ce_path: str,
+    atoms_dict: dict[str, Any],
+    temperature: float,
+    seed: int,
+    ensemble_cls: type[CanonicalEnsemble],
+    ensemble_kwargs: dict[str, Any],
+) -> None:
+    """Canonical worker entry point for Process(target=...)."""
+    worker = CanonicalWorker(
+        ce_path=ce_path,
+        atoms_dict=atoms_dict,
+        temperature=temperature,
+        seed=seed,
+        ensemble_cls=ensemble_cls,
+        ensemble_kwargs=ensemble_kwargs,
+        reply_sink=conn.send,
+    )
+    _run_worker_loop(worker, conn)
+
+
 def _wl_worker(
     conn: Connection,
     ce_path: str,
@@ -401,8 +436,15 @@ def _wl_worker(
     ensemble_kwargs: dict[str, Any],
 ) -> None:
     """REWL worker entry point for Process(target=...)."""
-    WangLandauWorker(
-        conn, ce_path, atoms_dict, energy_spacing,
-        energy_limit_left, energy_limit_right, seed,
-        ensemble_cls, ensemble_kwargs,
-    ).run()
+    worker = WangLandauWorker(
+        ce_path=ce_path,
+        atoms_dict=atoms_dict,
+        energy_spacing=energy_spacing,
+        energy_limit_left=energy_limit_left,
+        energy_limit_right=energy_limit_right,
+        seed=seed,
+        ensemble_cls=ensemble_cls,
+        ensemble_kwargs=ensemble_kwargs,
+        reply_sink=conn.send,
+    )
+    _run_worker_loop(worker, conn)

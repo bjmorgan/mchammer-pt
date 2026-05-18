@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from mchammer_pt.parallel._comms import Reply
-from mchammer_pt.parallel._worker import BaseWorker
+from mchammer_pt.parallel._worker import BaseWorker, _run_worker_loop
 
 
 class StubReplica:
@@ -36,8 +36,8 @@ class StubReplica:
 class StubWorker(BaseWorker):
     """Concrete BaseWorker subclass for testing."""
 
-    def __init__(self, conn, *, fail_build: bool = False):
-        super().__init__(conn)
+    def __init__(self, *, reply_sink, fail_build: bool = False):
+        super().__init__(reply_sink=reply_sink)
         self._fail_build = fail_build
 
     def _build_replica(self):
@@ -48,8 +48,10 @@ class StubWorker(BaseWorker):
 
 def _run_worker(worker_conn, **kwargs) -> threading.Thread:
     """Start a StubWorker in a background thread and return the thread."""
-    worker = StubWorker(worker_conn, **kwargs)
-    t = threading.Thread(target=worker.run, daemon=True)
+    worker = StubWorker(reply_sink=worker_conn.send, **kwargs)
+    t = threading.Thread(
+        target=_run_worker_loop, args=(worker, worker_conn), daemon=True
+    )
     t.start()
     return t
 
