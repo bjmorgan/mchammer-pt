@@ -494,7 +494,9 @@ def test_process_pool_public_methods_raise_after_shutdown(
     self._workers indexing. The guard converts every entry-point into
     a single clear failure.
     """
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     pool.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
         len(pool)
@@ -631,9 +633,10 @@ def test_process_pool_attach_observer_class_rejects_non_observer(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """A class whose instances are not BaseObservers raises TypeError."""
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import NotAnObserver
 
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         with pytest.raises(TypeError, match="not a BaseObserver"):
             pool.attach_observer_class(NotAnObserver, 10)
@@ -1086,15 +1089,29 @@ def test_process_pool_attach_observer_class_empty_replicas_no_worker_contact(
 
     The class-level counter fires only in the parent's dry-run. If the
     empty short-circuit guard works, the parent never reaches dry-run,
-    so n_constructions stays 0. Workers are untouched; basic ops still work.
+    so n_constructions stays 0. The in-process worker conns also see
+    no ``send`` for the attach round, confirming the short-circuit
+    happens before any IPC.
     """
+    from unittest.mock import patch
+
+    from tests._in_process_pool import make_in_process_pool
     from tests._observer_fixtures import ConstructionCounter
 
     ConstructionCounter.n_constructions = 0
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
-        pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
-        assert ConstructionCounter.n_constructions == 0
+        send_spies = [
+            patch.object(conn, "send", wraps=conn.send).start()
+            for _, conn in pool._workers
+        ]
+        try:
+            pool.attach_observer_class(ConstructionCounter, 5, replicas=[])
+            assert ConstructionCounter.n_constructions == 0
+            for spy in send_spies:
+                spy.assert_not_called()
+        finally:
+            patch.stopall()
         # Workers untouched; basic ops still work.
         pool.advance_all(5)
     finally:
@@ -1236,7 +1253,9 @@ def test_process_pool_get_observers_out_of_range_raises(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """Out-of-range replica index raises IndexError eagerly."""
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     try:
         with pytest.raises(IndexError, match="out of range"):
             pool.get_observers(replica_index=99)
@@ -1248,7 +1267,9 @@ def test_process_pool_get_observers_after_shutdown_raises(
     toy_ce, toy_atoms, tmp_path: Path
 ):
     """get_observers after shutdown raises RuntimeError via _check_open."""
-    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    from tests._in_process_pool import make_in_process_pool
+
+    pool = make_in_process_pool(toy_ce, toy_atoms, tmp_path)
     pool.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
         pool.get_observers(replica_index=0)

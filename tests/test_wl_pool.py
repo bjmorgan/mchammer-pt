@@ -814,19 +814,20 @@ def test_compute_plan_halving_collective_halve_triggers_bp_switch():
 
 def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
     """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    pool = make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
-    ) as pool:
+    )
+    try:
         with pytest.raises(NotImplementedError, match="checkpointing"):
             pool.snapshot_for_checkpoint()
+    finally:
+        pool.shutdown()
 
 
 def test_wl_worker_advance_ack_carries_state(tmp_path):
