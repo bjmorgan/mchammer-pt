@@ -195,6 +195,18 @@ class WangLandauWindowGroup:
     def cluster_expansion_path(self) -> str | None:
         return self._replicas[0].cluster_expansion_path
 
+    @property
+    def phase(self) -> str:
+        return str(self._replicas[0].ensemble._phase)
+
+    @property
+    def schedule(self) -> str:
+        return str(self._schedule)
+
+    @property
+    def flatness_limit(self) -> float:
+        return float(self._replicas[0].ensemble._flatness_limit)
+
     def current_energy(self) -> float:
         return self._replicas[self._exchange_idx].current_energy()
 

@@ -106,6 +106,12 @@ class WangLandauSlot(Protocol):
     def cluster_expansion_path(self) -> str | None: ...
     @property
     def converged(self) -> bool: ...
+    @property
+    def phase(self) -> str: ...
+    @property
+    def schedule(self) -> str: ...
+    @property
+    def flatness_limit(self) -> float: ...
     def is_flat(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
     def current_energy(self) -> float: ...
@@ -261,6 +267,18 @@ class WangLandauReplica:
     @property
     def ensemble(self) -> WangLandauEnsemble:
         return self._ensemble
+
+    @property
+    def phase(self) -> str:
+        return str(self._ensemble._phase)
+
+    @property
+    def schedule(self) -> str:
+        return str(self._ensemble._schedule)
+
+    @property
+    def flatness_limit(self) -> float:
+        return float(self._ensemble._flatness_limit)
 
     def current_energy(self) -> float:
         """Cached running total of the WL ensemble (eV)."""
