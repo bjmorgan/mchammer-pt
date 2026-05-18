@@ -3,6 +3,8 @@
 Parallel-tempering orchestrator for [`mchammer`](https://icet.materialsmodeling.org/)
 canonical Monte Carlo simulations with `icet` cluster expansions.
 
+For an architecture overview, see [docs/architecture.md](docs/architecture.md).
+
 ## Why
 
 `mchammer`'s canonical ensemble samples at a single temperature. Large
