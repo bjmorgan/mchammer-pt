@@ -253,7 +253,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     )
                 )
             pool = SerialWangLandauPool(
-                slots, energy_spacing=energy_spacing
+                slots,
+                energy_spacing=energy_spacing,
+                flatness_mode=flatness_mode,
+                merge_cadence=merge_cadence,
             )
         else:
             if len(pool) != len(windows):
@@ -537,7 +540,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
             for i, replica in enumerate(replicas)
         ]
-        pool = SerialWangLandauPool(slots, energy_spacing=energy_spacing)
+        pool = SerialWangLandauPool(
+            slots,
+            energy_spacing=energy_spacing,
+            flatness_mode=flatness_mode,
+            merge_cadence=merge_cadence,
+        )
         pt = cls(
             cluster_expansion=cluster_expansion,
             atoms=atoms_list,
