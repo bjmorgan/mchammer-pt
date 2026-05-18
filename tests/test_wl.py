@@ -208,6 +208,39 @@ def test_wl_pt_run_finalises_pool_for_reporting_on_early_convergence(monkeypatch
     assert mock.call_count == 1
 
 
+def test_wl_pt_run_finalises_pool_for_reporting_on_exception(monkeypatch):
+    """``run`` finalises the pool even when a cycle raises.
+
+    A mid-run failure (``KeyboardInterrupt`` from a notebook user, or
+    an icet exception from a sweep) must not leave per-walker entropies
+    unreconciled in the data containers — otherwise ``pt.results()``
+    silently returns divergent values.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+    mock_finalise = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock_finalise)
+
+    def boom(n_steps):
+        raise RuntimeError("synthetic test exception")
+
+    monkeypatch.setattr(pt.pool, "advance_all", boom)
+
+    with pytest.raises(RuntimeError, match="synthetic test exception"):
+        pt.run(n_cycles=2)
+    assert mock_finalise.call_count == 1
+
+
 def test_wl_pt_run_stops_on_all_converged():
     """If every replica reports converged, the loop terminates early."""
     from mchammer_pt.wl import WangLandauParallelTempering

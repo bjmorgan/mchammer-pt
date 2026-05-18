@@ -350,20 +350,26 @@ class WangLandauParallelTempering(BaseParallelTempering):
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
         self.cycles_in_segment = 0
-        for c in range(n_cycles):
-            self._pool.advance_all(self._block_size)
-            for pair in pair_set_for_cycle(n_replicas, c):
-                self._try_exchange(int(pair), int(pair) + 1, c, history)
-            history.energies_per_cycle[c + 1] = self._pool.current_energies()
-            history.replica_labels_per_cycle[c + 1] = self._replica_labels
-            self.cycles_in_segment = c + 1
-            converged = self._pool.converged_flags().all()
-            effective_n = c + 1 if converged else n_cycles
-            for cb in self._cycle_callbacks:
-                cb.on_cycle_end(c, effective_n, history)
-            if converged:
-                break
-        self._pool.finalise_for_reporting()
+        try:
+            for c in range(n_cycles):
+                self._pool.advance_all(self._block_size)
+                for pair in pair_set_for_cycle(n_replicas, c):
+                    self._try_exchange(int(pair), int(pair) + 1, c, history)
+                history.energies_per_cycle[c + 1] = self._pool.current_energies()
+                history.replica_labels_per_cycle[c + 1] = self._replica_labels
+                self.cycles_in_segment = c + 1
+                converged = self._pool.converged_flags().all()
+                effective_n = c + 1 if converged else n_cycles
+                for cb in self._cycle_callbacks:
+                    cb.on_cycle_end(c, effective_n, history)
+                if converged:
+                    break
+        finally:
+            # End-of-run merge MUST fire on every exit path, including
+            # KeyboardInterrupt and exceptions from inside the loop —
+            # otherwise per-walker entropies remain unreconciled in the
+            # data containers and pt.results() returns divergent values.
+            self._pool.finalise_for_reporting()
         if self._data_container_file is not None:
             _write_checkpoint(self, Path(self._data_container_file))
         return history
