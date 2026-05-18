@@ -67,3 +67,18 @@ def test_in_process_conn_poll_reflects_queue_state():
     assert conn.poll() is True
     conn.recv()
     assert conn.poll() is False
+
+
+def test_in_process_conn_for_canonical_dispatches_energy(toy_ce, toy_atoms):
+    """``for_canonical`` drives a ``CanonicalWorker`` against a real ``Replica``."""
+    from mchammer_pt.replica import Replica
+
+    replica = Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=0)
+    conn = InProcessWorkerConn.for_canonical(replica)
+
+    conn.send(("ENERGY",))
+    reply = conn.recv()
+
+    assert reply.status == "OK"
+    assert reply.op == "ENERGY"
+    assert isinstance(reply.payload, float)

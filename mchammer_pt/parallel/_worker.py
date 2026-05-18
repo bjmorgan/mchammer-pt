@@ -220,6 +220,25 @@ class CanonicalWorker(BaseWorker):
         self._ensemble_cls = ensemble_cls
         self._ensemble_kwargs = ensemble_kwargs
 
+    @classmethod
+    def for_replica(
+        cls,
+        replica: Replica,
+        *,
+        reply_sink: Callable[[Reply], None],
+    ) -> CanonicalWorker:
+        """Build a worker around a pre-existing replica.
+
+        Skips the production ``ce_path`` / ``atoms_dict`` build path,
+        which is only meaningful inside a spawned subprocess. Used by
+        in-process tests that drive the worker's handler table against
+        a real replica without crossing the pickle boundary.
+        """
+        worker = cls.__new__(cls)
+        BaseWorker.__init__(worker, reply_sink=reply_sink)
+        worker._replica = replica
+        return worker
+
     def _build_replica(self) -> Replica:
         atoms = Atoms(
             numbers=self._atoms_dict["numbers"],
