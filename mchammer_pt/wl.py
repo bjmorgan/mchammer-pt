@@ -281,6 +281,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             (lo, hi) for lo, hi in windows
         ]
         self._energy_spacing = float(energy_spacing)
+        self._flatness_mode: FlatnessMode = flatness_mode
+        self._merge_cadence: MergeCadence = merge_cadence
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
         self._ce_identity = _compute_ce_identity(cluster_expansion)
@@ -332,9 +334,21 @@ class WangLandauParallelTempering(BaseParallelTempering):
         return float((g_i_Ei - g_i_Ej) + (g_j_Ej - g_j_Ei))
 
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
+        """Per-orchestrator meta written into the checkpoint.
+
+        ``flatness_mode`` and ``merge_cadence`` are persisted so that
+        resume reconstructs the original configuration. Multi-walker
+        checkpointing is currently rejected at save time, which makes
+        these values inert today; persisting them now is forward
+        compatibility for a planned multi-walker checkpoint path,
+        where silently substituting defaults on resume would be a
+        latent bug.
+        """
         return {
             "windows": _windows_to_array(self._windows),
             "energy_spacing": float(self._energy_spacing),
+            "flatness_mode": self._flatness_mode,
+            "merge_cadence": self._merge_cadence,
         }
 
     def run(self, n_cycles: int) -> ExchangeHistory:
@@ -449,6 +463,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
+        # Pre-W1 checkpoints predate these keys; fall back to the
+        # original defaults so older files resume without complaint.
+        flatness_mode: FlatnessMode = str(
+            meta.get("flatness_mode", "pooled")
+        )  # type: ignore[assignment]
+        merge_cadence: MergeCadence = str(
+            meta.get("merge_cadence", "at_halve")
+        )  # type: ignore[assignment]
 
         atoms_list = [container.structure.copy() for container in containers]
         n_windows = len(windows)
@@ -498,15 +520,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
         # Wrap each restored replica in a single-walker
         # ``WangLandauWindowGroup`` so the coordinator drives halving.
-        # Multi-walker resume is rejected at save time; flatness_mode
-        # and merge_cadence are inert for single-walker groups but the
-        # constructor requires them.
+        # Multi-walker resume is rejected at save time; the values are
+        # inert for single-walker groups but persisted via meta so that
+        # they round-trip once multi-walker checkpointing lands.
         slots: list[WangLandauSlot] = [
             WangLandauWindowGroup(
                 [replica],
                 random_seed=group_seeds[i],
-                flatness_mode="pooled",
-                merge_cadence="at_halve",
+                flatness_mode=flatness_mode,
+                merge_cadence=merge_cadence,
             )
             for i, replica in enumerate(replicas)
         ]
@@ -519,6 +541,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             block_size=block_size,
             random_seed=random_seed,
             pool=pool,
+            flatness_mode=flatness_mode,
+            merge_cadence=merge_cadence,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
         pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
@@ -586,6 +610,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
+        # Pre-W1 checkpoints predate these keys; fall back to the
+        # original defaults so older files resume without complaint.
+        flatness_mode: FlatnessMode = str(
+            meta.get("flatness_mode", "pooled")
+        )  # type: ignore[assignment]
+        merge_cadence: MergeCadence = str(
+            meta.get("merge_cadence", "at_halve")
+        )  # type: ignore[assignment]
 
         atoms_list = [container.structure.copy() for container in containers]
 
@@ -598,6 +630,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            flatness_mode=flatness_mode,
+            merge_cadence=merge_cadence,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
