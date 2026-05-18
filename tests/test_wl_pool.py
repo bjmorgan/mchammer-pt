@@ -252,15 +252,13 @@ def test_serial_wl_pool_get_observers_round_trips():
 
 def test_process_wl_pool_attach_observer_fires(tmp_path):
     """attach_observer on the process pool reaches each worker."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
     from tests._observer_fixtures import StatefulCounter
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms, atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0, 1],
     ) as pool:
         pool.attach_observer(StatefulCounter(interval=10), replicas=[0, 1])
@@ -271,14 +269,12 @@ def test_process_wl_pool_attach_observer_fires(tmp_path):
 
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
     """After a swap, each worker's _potential reflects the new configuration."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms, atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0, 1],
     ) as pool:
         # Drive the two replicas to different occupation vectors.
@@ -445,17 +441,15 @@ def test_process_wl_pool_mixed_walkers_per_window(tmp_path):
 
 def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
     """converged_flags is False for a slot unless all walkers are converged."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
     # fill_factor_limit=0.5 means a single halving (1.0 -> 0.5) converges.
     # We drive halving directly via FORCE_HALVE on individual workers to
     # decouple this test from coordinator dynamics.
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 0.05, e0 + 0.05)],
-        energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
         ensemble_kwargs={"fill_factor_limit": 0.5},
@@ -503,14 +497,12 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
     """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
     ) as pool:
@@ -541,14 +533,12 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
 
 def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
     """per_window_data_containers returns W containers per slot."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms, atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0, 1],
         n_walkers_per_window=[1, 2],
     ) as pool:
@@ -560,14 +550,12 @@ def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
 
 def test_process_wl_pool_at_halve_cadence_skips_non_halve_merge(tmp_path):
     """merge_cadence='at_halve' + no halve event ⇒ no inter-walker merge."""
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from tests._in_process_pool import make_in_process_wl_pool
 
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms],
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
         windows=[(e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
         seeds=[0],
         n_walkers_per_window=2,
         flatness_mode="per_walker",

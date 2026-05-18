@@ -1,16 +1,15 @@
-"""In-process drop-in for :class:`ProcessPool` used by single-round-trip
-tests.
+"""In-process drop-ins for :class:`ProcessPool` and
+:class:`ProcessWangLandauPool` used by single-round-trip tests.
 
-Constructs the same parent-side ``ProcessPool`` object but replaces the
-spawned worker processes with :class:`InProcessWorkerConn` instances
-backed by real :class:`Replica` instances. The pool's public API
-(``attach_observer``, ``advance_all``, ``data_containers``,
-``get_observers``, ...) is exercised unchanged; only the IPC layer is
-inlined.
+Each helper constructs the same parent-side pool object but replaces
+the spawned worker processes with :class:`InProcessWorkerConn`
+instances backed by real :class:`Replica` /
+:class:`WangLandauReplica` instances. The pool API surface is
+exercised unchanged; only the IPC layer is inlined.
 
-Use for tests that exercise a single configuration round-trip through
-the pool's plumbing and do not depend on real process isolation or the
-pickle boundary.
+Use for tests that exercise a single round-trip through the pool's
+plumbing and do not depend on real process isolation or the pickle
+boundary.
 """
 
 from __future__ import annotations
@@ -18,11 +17,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from ase import Atoms
 from mchammer.ensembles import CanonicalEnsemble
 
-from mchammer_pt.parallel.processes import ProcessPool
+from mchammer_pt.parallel.processes import (
+    ProcessPool,
+    ProcessWangLandauPool,
+    ProcessWangLandauWindow,
+)
 from mchammer_pt.replica import Replica
+from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+from mchammer_pt.wl_replica import WangLandauReplica
 from tests._in_process_worker import InProcessWorkerConn
 
 
@@ -86,6 +92,97 @@ def make_in_process_pool(
         pool._workers.append((_DummyProcess(), conn))  # type: ignore[arg-type]
     pool._ensemble_cls_fqn = (
         f"{ensemble_cls.__module__}.{ensemble_cls.__qualname__}"
+    )
+    pool._ensemble_kwargs_hash = ""
+    return pool
+
+
+def make_in_process_wl_pool(
+    tmp_path: Path,
+    *,
+    windows: list[tuple[float | None, float | None]],
+    seeds: list[int] | None = None,
+    n_walkers_per_window: int | list[int] = 1,
+    ensemble_kwargs: dict[str, Any] | None = None,
+    flatness_mode: str = "pooled",
+    merge_cadence: str = "at_halve",
+) -> ProcessWangLandauPool:
+    """Build a :class:`ProcessWangLandauPool` whose workers are in-process conns.
+
+    Mirrors the production constructor's argument layout closely
+    enough that tests can swap one call for the other. The cluster
+    expansion and atoms come from the WL test fixtures. The CE file
+    is written into ``tmp_path`` so worker-side factories can reload
+    it via ``replica.cluster_expansion_path``.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+
+    n_windows = len(windows)
+    if seeds is None:
+        seeds = list(range(n_windows))
+    if isinstance(n_walkers_per_window, int):
+        walkers_per_window = [n_walkers_per_window] * n_windows
+    else:
+        walkers_per_window = list(n_walkers_per_window)
+    extra_kwargs = dict(ensemble_kwargs) if ensemble_kwargs else {}
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    del e0  # only used by tests that compute their own windows
+
+    pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
+    pool._flatness_mode = flatness_mode  # type: ignore[assignment]
+    pool._merge_cadence = merge_cadence  # type: ignore[assignment]
+    pool._windows = list(windows)
+    pool._energy_spacing = 0.1
+    pool._slots = []
+
+    for (lo, hi), window_seed, W_w in zip(
+        windows, seeds, walkers_per_window, strict=True
+    ):
+        if W_w == 1:
+            walker_seeds = [int(window_seed)]
+            rng_seed = int(window_seed)
+        else:
+            sub = np.random.SeedSequence(int(window_seed))
+            children = sub.spawn(W_w + 1)
+            walker_seeds = [
+                int(c.generate_state(1)[0]) for c in children[:W_w]
+            ]
+            rng_seed = int(children[W_w].generate_state(1)[0])
+        workers: list[Any] = []
+        for w_seed in walker_seeds:
+            replica = WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=lo,
+                energy_limit_right=hi,
+                random_seed=int(w_seed),
+                ensemble_cls=CoordinatedWangLandauEnsemble,
+                ensemble_kwargs=extra_kwargs,
+                cluster_expansion_path=str(ce_path),
+            )
+            conn = InProcessWorkerConn(replica)
+            workers.append((_DummyProcess(), conn))
+        pool._slots.append(ProcessWangLandauWindow(
+            workers=workers,
+            rng=np.random.default_rng(rng_seed),
+            flatness_mode=flatness_mode,  # type: ignore[arg-type]
+            merge_cadence=merge_cadence,  # type: ignore[arg-type]
+            schedule=str(extra_kwargs.get("schedule", "halving")),
+        ))
+    pool._ensemble_cls_fqn = (
+        f"{CoordinatedWangLandauEnsemble.__module__}."
+        f"{CoordinatedWangLandauEnsemble.__qualname__}"
     )
     pool._ensemble_kwargs_hash = ""
     return pool
