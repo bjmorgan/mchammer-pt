@@ -35,7 +35,7 @@ def _make_replicas(n: int = 2):
 
 def test_merge_entropies_aligns_constants_via_intersection_mean():
     """Two walkers with same shape offset by different constants merge cleanly."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     # Both walkers visit bins {0, 1, 2}. Walker A's S = m(E) + 10;
     # walker B's S = m(E) + 50, where m = {0: 0.0, 1: 5.0, 2: 10.0}.
@@ -53,7 +53,7 @@ def test_merge_entropies_aligns_constants_via_intersection_mean():
 
 def test_merge_entropies_no_coverage_boundary_distortion():
     """Partial coverage does not introduce shape artefacts at coverage edges."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     # Walker A visits {0, 1, 2}; walker B visits {1, 2, 3}. Both share
     # m(E) = E + 0.0 on their visited bins (zero additive constants).
@@ -75,7 +75,7 @@ def test_merge_entropies_no_coverage_boundary_distortion():
 
 def test_merge_entropies_partial_coverage_uses_visiting_walkers_only():
     """Bin visited only by one walker takes that walker's rebased value."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     # Common = {1, 2}. Bin 0 is in A only; bin 3 is in B only.
     a = {0: 0.0, 1: 1.0, 2: 2.0}
@@ -94,7 +94,7 @@ def test_merge_entropies_partial_coverage_uses_visiting_walkers_only():
 
 def test_merge_entropies_filters_unentered_walkers():
     """Walker with empty entropy dict is excluded from the merge."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     a = {0: 0.0, 1: 1.0}
     empty: dict[int, float] = {}
@@ -106,7 +106,7 @@ def test_merge_entropies_filters_unentered_walkers():
 
 def test_merge_entropies_single_walker_fast_path():
     """One walker after filtering returns its dict shifted so min=0."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     a = {0: 7.0, 1: 10.0, 2: 8.0}
     merged = merge_entropies([a])
@@ -117,7 +117,7 @@ def test_merge_entropies_single_walker_fast_path():
 
 def test_merge_entropies_no_walkers_returns_empty():
     """All walkers empty (or zero walkers) returns empty dict."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     assert merge_entropies([]) == {}
     assert merge_entropies([{}, {}]) == {}
@@ -125,7 +125,7 @@ def test_merge_entropies_no_walkers_returns_empty():
 
 def test_merge_entropies_empty_intersection_raises():
     """Walkers with no shared bin cannot be rebased; raise RuntimeError."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     a = {0: 0.0, 1: 1.0}
     b = {2: 2.0, 3: 3.0}
@@ -135,7 +135,7 @@ def test_merge_entropies_empty_intersection_raises():
 
 def test_merge_entropies_min_value_is_zero():
     """Result always satisfies the icet convention min(merged) == 0."""
-    from mchammer_pt.wl_window_group import merge_entropies
+    from mchammer_pt.wl_coordinator import merge_entropies
 
     a = {0: 100.0, 1: 105.0, 2: 102.0}
     b = {0: 200.0, 1: 205.0, 2: 202.0}
@@ -264,7 +264,7 @@ def test_attach_observer_factory_type_check():
 
 def test_decide_bp_switch_all_eligible_returns_true():
     """All walkers in halving phase with 1/t > f → switch."""
-    from mchammer_pt.wl_window_group import decide_bp_switch
+    from mchammer_pt.wl_coordinator import decide_bp_switch
 
     # phases all "halving", t/f such that 1/t > f for both.
     assert (
@@ -277,7 +277,7 @@ def test_decide_bp_switch_all_eligible_returns_true():
 
 def test_decide_bp_switch_any_walker_below_threshold_returns_false():
     """One walker with 1/t <= f → no switch."""
-    from mchammer_pt.wl_window_group import decide_bp_switch
+    from mchammer_pt.wl_coordinator import decide_bp_switch
 
     # walker 1: 1/100 = 0.01, f = 0.02 -> 1/t < f
     assert (
@@ -290,7 +290,7 @@ def test_decide_bp_switch_any_walker_below_threshold_returns_false():
 
 def test_decide_bp_switch_already_switched_returns_false():
     """Any walker already in 1_over_t phase → no further switch."""
-    from mchammer_pt.wl_window_group import decide_bp_switch
+    from mchammer_pt.wl_coordinator import decide_bp_switch
 
     assert (
         decide_bp_switch(
@@ -570,28 +570,28 @@ def test_maybe_switch_to_one_over_t_does_not_grow_fill_factor_history():
 
 
 def test_validate_flatness_mode_accepts_known_values():
-    from mchammer_pt.wl_window_group import _validate_flatness_mode
+    from mchammer_pt.wl_coordinator import _validate_flatness_mode
 
     _validate_flatness_mode("per_walker")
     _validate_flatness_mode("pooled")
 
 
 def test_validate_flatness_mode_rejects_unknown_value():
-    from mchammer_pt.wl_window_group import _validate_flatness_mode
+    from mchammer_pt.wl_coordinator import _validate_flatness_mode
 
     with pytest.raises(ValueError, match="flatness_mode must be one of"):
         _validate_flatness_mode("bogus")
 
 
 def test_validate_merge_cadence_accepts_known_values():
-    from mchammer_pt.wl_window_group import _validate_merge_cadence
+    from mchammer_pt.wl_coordinator import _validate_merge_cadence
 
     _validate_merge_cadence("at_halve")
     _validate_merge_cadence("never")
 
 
 def test_validate_merge_cadence_rejects_unknown_value():
-    from mchammer_pt.wl_window_group import _validate_merge_cadence
+    from mchammer_pt.wl_coordinator import _validate_merge_cadence
 
     with pytest.raises(ValueError, match="merge_cadence must be one of"):
         _validate_merge_cadence("bogus")
@@ -599,7 +599,7 @@ def test_validate_merge_cadence_rejects_unknown_value():
 
 def test_summed_histogram_is_flat_false_when_unentered():
     """Pooled flatness false if any walker has not entered the window."""
-    from mchammer_pt.wl_window_group import _summed_histogram_is_flat
+    from mchammer_pt.wl_coordinator import _summed_histogram_is_flat
 
     replicas = _make_replicas(2)
     replicas[0].ensemble._reached_energy_window = True
@@ -611,7 +611,7 @@ def test_summed_histogram_is_flat_false_when_unentered():
 
 def test_summed_histogram_flat_when_per_walker_is_not():
     """Pooled flat but per-walker not: pooling fixes the gap."""
-    from mchammer_pt.wl_window_group import _summed_histogram_is_flat
+    from mchammer_pt.wl_coordinator import _summed_histogram_is_flat
 
     replicas = _make_replicas(2)
     for r in replicas:
@@ -629,7 +629,7 @@ def test_summed_histogram_flat_when_per_walker_is_not():
 
 def test_summed_histogram_flat_from_snapshots_matches_live():
     """Snapshot-based helper agrees with the live-replica helper."""
-    from mchammer_pt.wl_window_group import (
+    from mchammer_pt.wl_coordinator import (
         WalkerPostBlockState,
         _summed_histogram_flat_from_snapshots,
         _summed_histogram_is_flat,
@@ -669,8 +669,8 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
 
 def test_summed_histogram_flat_from_snapshots_false_when_unentered():
     """Pooled flatness from snapshots returns False if any walker has not entered."""
-    from mchammer_pt.parallel.processes import WalkerPostBlockState
-    from mchammer_pt.wl_window_group import (
+    from mchammer_pt.wl_coordinator import (
+        WalkerPostBlockState,
         _summed_histogram_flat_from_snapshots,
     )
 

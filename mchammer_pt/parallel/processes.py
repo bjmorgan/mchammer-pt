@@ -32,7 +32,7 @@ from ..checkpoint import _compute_ensemble_kwargs_hash
 from ..replica import Replica
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
-from ..wl_window_group import (
+from ..wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,

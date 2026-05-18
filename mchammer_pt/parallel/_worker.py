@@ -66,7 +66,7 @@ from mchammer.observers.base_observer import (
 
 from ..replica import Replica
 from ..wl_replica import WangLandauReplica
-from ..wl_window_group import WalkerPostBlockState
+from ..wl_coordinator import WalkerPostBlockState
 from ._comms import Reply
 
 

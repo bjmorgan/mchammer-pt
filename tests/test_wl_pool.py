@@ -667,7 +667,7 @@ def _make_slot(
     """
     from unittest.mock import MagicMock
 
-    from mchammer_pt.wl_window_group import WalkerPostBlockState
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
 
     workers = [(MagicMock(), MagicMock()) for _ in range(n_walkers)]
     slot = ProcessWangLandauWindow(
@@ -702,7 +702,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker():
     """Coordinator plan omits BP switch when any walker has not entered."""
     from unittest.mock import MagicMock
 
-    from mchammer_pt.wl_window_group import WalkerPostBlockState
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
 
     # Walker 0 has entered, walker 1 has not. f is tiny so 1/t > f for
     # any plausible t after a collective halve -- the BP switch would
@@ -857,7 +857,7 @@ def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
 
 def test_wl_worker_advance_ack_carries_state(tmp_path):
     """ADVANCE ack returns a WalkerPostBlockState with typed fields."""
-    from mchammer_pt.wl_window_group import WalkerPostBlockState
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
 
     process, conn = _spawn_wl_worker(tmp_path)
     try:
