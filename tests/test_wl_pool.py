@@ -829,6 +829,27 @@ def test_wl_worker_force_halve_round_trip(tmp_path):
         process.join(timeout=5.0)
 
 
+def test_wl_worker_finalise_merge_writes_entropy_and_refreshes_last_state(
+    tmp_path,
+):
+    """FINALISE_MERGE writes the supplied dict to _entropy and refreshes _last_state."""
+    process, conn = _spawn_wl_worker(tmp_path)
+    try:
+        # Run some MC so the data container exists and _last_state is initialised.
+        request(conn, ("ADVANCE", 50), 0)
+        merged = {0: 0.0, 1: 5.0}
+        request(conn, ("FINALISE_MERGE", merged), 0)
+        # Entropy on the ensemble matches the supplied dict.
+        got = request(conn, ("GET_ENTROPY",), 0)
+        assert got == merged
+        # The data container's _last_state was refreshed with the merged values.
+        dc = request(conn, ("GET_DC",), 0)
+        assert dict(dc._last_state["entropy"]) == merged
+    finally:
+        request(conn, ("SHUTDOWN",), 0)
+        process.join(timeout=5.0)
+
+
 def test_wl_worker_set_phase_round_trip(tmp_path):
     """SET_PHASE switches ensemble._phase under the 1/t schedule."""
     # SET_PHASE -> "1_over_t" is only meaningful for schedule="1_over_t"

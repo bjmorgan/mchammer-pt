@@ -38,6 +38,7 @@ REWL-only opcodes (``WangLandauWorker``):
 - ``("SET_ENTROPY", merged_entropy)`` -> ``Reply("OK", ..., None)``
 - ``("FORCE_HALVE",)`` -> ``Reply("OK", ..., None)``
 - ``("SET_PHASE", phase)`` -> ``Reply("OK", ..., None)``
+- ``("FINALISE_MERGE", merged_entropy)`` -> ``Reply("OK", ..., None)``
 
 Every reply is a ``Reply(status, op, payload)`` named tuple.
 ``status`` is ``"OK"``, ``"ERR_PICKLE"`` (unpicklable reply;
@@ -292,6 +293,7 @@ class WangLandauWorker(BaseWorker):
             "SET_ENTROPY": self._handle_set_entropy,
             "FORCE_HALVE": self._handle_force_halve,
             "SET_PHASE": self._handle_set_phase,
+            "FINALISE_MERGE": self._handle_finalise_merge,
         })
 
     def _build_replica(self) -> WangLandauReplica:
@@ -372,6 +374,19 @@ class WangLandauWorker(BaseWorker):
             if entry is not None:
                 t = e.step - entry + 1
                 e._fill_factor = 1.0 / t
+        self._reply(None)
+
+    def _handle_finalise_merge(self, cmd: tuple[Any, ...]) -> None:
+        """Write the supplied merged entropy dict; refresh ``_last_state``.
+
+        Used at end of run by the coordinator's finalise-for-reporting
+        path. Mirrors ``SET_ENTROPY`` but also calls
+        ``refresh_last_state`` so the data container picks up the
+        merged values without an additional round-trip.
+        """
+        merged = cmd[1]
+        self._replica.ensemble._entropy = dict(merged)
+        self._replica.refresh_last_state()
         self._reply(None)
 
 
