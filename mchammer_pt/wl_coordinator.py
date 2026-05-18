@@ -279,3 +279,61 @@ def merge_entropies(
     # Post-shift to icet convention: min(merged) == 0.
     shift = min(merged.values())
     return {b: v - shift for b, v in merged.items()}
+
+
+def decide_block_actions(view: SlotView) -> CoordinatorPlan:
+    """Decide the per-block coordinator actions for one slot.
+
+    Pure function. Reads only ``view``; returns a ``CoordinatorPlan``
+    describing whether to halve, what entropy to write back (if any),
+    and whether to flip to the 1/t phase.
+
+    In the 1/t phase no mid-run merge fires regardless of
+    ``view.merge_cadence`` — walker entropies are reconciled only at
+    end-of-run via ``finalise_for_reporting``.
+    """
+    if view.phase != "halving":
+        return CoordinatorPlan(
+            halve=False, merged_entropy=None, switch_to_phase=None
+        )
+
+    if view.flatness_mode == "per_walker":
+        should_halve = all(s.is_flat for s in view.walker_states)
+    else:  # pooled
+        should_halve = _summed_histogram_flat_from_snapshots(
+            list(view.walker_states), view.flatness_limit
+        )
+
+    if not should_halve:
+        return CoordinatorPlan(
+            halve=False, merged_entropy=None, switch_to_phase=None
+        )
+
+    merged_entropy: dict[int, float] | None = None
+    if view.merge_cadence == "at_halve" and view.n_walkers > 1:
+        merged_entropy = merge_entropies(
+            [dict(s.entropy) for s in view.walker_states]
+        )
+
+    switch_to_phase: str | None = None
+    if view.schedule == "1_over_t":
+        unentered = any(
+            s.window_entry_step is None for s in view.walker_states
+        )
+        if not unentered:
+            phases = ["halving"] * view.n_walkers
+            ts = [
+                s.step - s.window_entry_step + 1  # type: ignore[operator]
+                for s in view.walker_states
+            ]
+            post_halve_fs = [
+                s.fill_factor / 2.0 for s in view.walker_states
+            ]
+            if decide_bp_switch(phases, ts, post_halve_fs):
+                switch_to_phase = "1_over_t"
+
+    return CoordinatorPlan(
+        halve=True,
+        merged_entropy=merged_entropy,
+        switch_to_phase=switch_to_phase,
+    )
