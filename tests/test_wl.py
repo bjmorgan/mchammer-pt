@@ -460,15 +460,10 @@ def test_wl_pt_rejects_pool_plus_ensemble_kwargs():
         )
 
 
-def test_wl_pt_resume_wraps_replicas_in_window_groups(tmp_path):
-    """Resumed serial pool slots are WangLandauWindowGroup, not bare WangLandauReplica.
-
-    Bare replica slots would never halve under the default
-    CoordinatedWangLandauEnsemble (the coordinator drives halving),
-    silently producing wrong WL output post-resume.
-    """
+def test_wl_pt_resume_slots_are_bare_replicas(tmp_path):
+    """Resumed serial pool slots are bare WangLandauReplica, not WangLandauWindowGroup."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+    from mchammer_pt.wl_replica import WangLandauReplica
 
     e0 = _initial_energy()
     pt_a = WangLandauParallelTempering(
@@ -488,8 +483,7 @@ def test_wl_pt_resume_wraps_replicas_in_window_groups(tmp_path):
         cluster_expansion=make_wl_ce(),
     )
     for slot in pt_b.pool.replicas:
-        assert isinstance(slot, WangLandauWindowGroup)
-        assert len(slot._replicas) == 1
+        assert isinstance(slot, WangLandauReplica)
 
 
 def test_wl_pt_resume_process_pool_round_trips(tmp_path):
@@ -741,10 +735,10 @@ def test_wl_pt_process_pool_records_actual_ensemble_identity():
         assert pt._ensemble_kwargs_hash != empty_hash
 
 
-def test_wl_pt_n_walkers_1_wraps_in_window_groups():
-    """n_walkers_per_window=1 wraps each replica in a single-walker window group."""
+def test_wl_pt_n_walkers_1_slots_are_bare_replicas():
+    """n_walkers_per_window=1 places bare WangLandauReplica instances as slots."""
     from mchammer_pt.wl import WangLandauParallelTempering
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+    from mchammer_pt.wl_replica import WangLandauReplica
 
     e0 = _initial_energy()
     pt = WangLandauParallelTempering(
@@ -758,8 +752,7 @@ def test_wl_pt_n_walkers_1_wraps_in_window_groups():
     )
     assert len(pt.pool) == 2
     for slot in pt.pool.replicas:
-        assert isinstance(slot, WangLandauWindowGroup)
-        assert len(slot._replicas) == 1
+        assert isinstance(slot, WangLandauReplica)
 
 
 def test_wl_pt_n_walkers_2_creates_window_groups():
@@ -802,9 +795,10 @@ def test_wl_pt_n_walkers_2_rejects_data_container_file():
         )
 
 
-def test_wl_pt_n_walkers_per_window_sequence_creates_window_groups():
-    """n_walkers_per_window=[1, 2]: both windows wrap in WangLandauWindowGroup."""
+def test_wl_pt_n_walkers_per_window_sequence_mixed_slot_types():
+    """n_walkers_per_window=[1, 2]: W=1 window is a bare replica, W=2 is a group."""
     from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     e0 = _initial_energy()
@@ -817,8 +811,7 @@ def test_wl_pt_n_walkers_per_window_sequence_creates_window_groups():
         random_seed=0,
         n_walkers_per_window=[1, 2],
     )
-    assert isinstance(pt.pool.replicas[0], WangLandauWindowGroup)
-    assert len(pt.pool.replicas[0]._replicas) == 1
+    assert isinstance(pt.pool.replicas[0], WangLandauReplica)
     assert isinstance(pt.pool.replicas[1], WangLandauWindowGroup)
     assert len(pt.pool.replicas[1]._replicas) == 2
 
@@ -1020,13 +1013,13 @@ def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
         )
 
 
-def test_wl_pt_serial_w1_slot_is_window_group():
-    """Serial path always wraps replicas in WangLandauWindowGroup, even W=1."""
+def test_wl_pt_serial_w1_slot_is_bare_replica():
+    """Serial path uses bare WangLandauReplica slots for W=1."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl import WangLandauParallelTempering
     from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+    from mchammer_pt.wl_replica import WangLandauReplica
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
     e0 = float(
@@ -1045,7 +1038,7 @@ def test_wl_pt_serial_w1_slot_is_window_group():
         ensemble_cls=CoordinatedWangLandauEnsemble,
     )
     for slot in pt._pool.replicas:
-        assert isinstance(slot, WangLandauWindowGroup)
+        assert isinstance(slot, WangLandauReplica)
 
 
 def test_wl_pt_flatness_mode_default_pooled():

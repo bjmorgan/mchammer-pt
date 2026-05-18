@@ -244,12 +244,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     )
                     for j in range(W_w)
                 ]
-                slots.append(
-                    WangLandauWindowGroup(
-                        walker_replicas,
-                        random_seed=group_seeds[w],
+                if W_w == 1:
+                    slots.append(walker_replicas[0])
+                else:
+                    slots.append(
+                        WangLandauWindowGroup(
+                            walker_replicas,
+                            random_seed=group_seeds[w],
+                        )
                     )
-                )
             pool = SerialWangLandauPool(
                 slots,
                 energy_spacing=energy_spacing,
@@ -488,10 +491,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         # do not affect resumed RNG state because
         # ``WangLandauReplica.restart_from`` overwrites
         # ``ensemble._random_state`` from the data container before
-        # any MC step runs. Group seeds drive
-        # ``WangLandauWindowGroup``'s exchange-walker selection RNG,
-        # which is a no-op for W=1 (the only supported resume case;
-        # ``exchange_idx`` is always 0 when there is one walker).
+        # any MC step runs. Group seeds are spawned but unused on the
+        # resume path (resume is W=1-only; bare replicas are slots
+        # directly). The count must not change to preserve
+        # bit-identical RNG with previously-saved checkpoints.
         seed_sequence = np.random.SeedSequence(random_seed)
         child_seeds = seed_sequence.spawn(2 * n_windows + 1)
         replica_seeds = [
@@ -502,8 +505,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
             int(child_seeds[n_windows + i].generate_state(1)[0])
             for i in range(n_windows)
         ]
-
-        from .wl_window_group import WangLandauWindowGroup
 
         replicas = [
             WangLandauReplica.restart_from(
@@ -527,15 +528,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 strict=True,
             )
         ]
-        # Wrap each restored replica in a single-walker
-        # ``WangLandauWindowGroup`` so the coordinator drives halving.
-        slots: list[WangLandauSlot] = [
-            WangLandauWindowGroup(
-                [replica],
-                random_seed=group_seeds[i],
-            )
-            for i, replica in enumerate(replicas)
-        ]
+        # Resume is W=1-only today; bare replicas serve directly as slots.
+        slots: list[WangLandauSlot] = list(replicas)
         pool = SerialWangLandauPool(
             slots,
             energy_spacing=energy_spacing,
