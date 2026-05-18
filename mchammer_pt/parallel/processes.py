@@ -11,7 +11,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Literal
@@ -36,12 +36,12 @@ from ..wl_coordinator import (
     _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
+    SlotView,
     WalkerPostBlockState,
     _compute_per_walker_flat_min,
-    _summed_histogram_flat_from_snapshots,
     _validate_flatness_mode,
     _validate_merge_cadence,
-    decide_bp_switch,
+    decide_block_actions,
     merge_entropies,
 )
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
@@ -540,23 +540,6 @@ class ProcessPool:
         self.shutdown()
 
 
-@dataclass
-class _CoordinatorPlan:
-    """Decisions produced by the decide phase, consumed by the execute phase.
-
-    The execute phase applies actions in three independent batched
-    IPC rounds: FORCE_HALVE first, SET_ENTROPY second, SET_PHASE
-    last. The ordering is structural: FORCE_HALVE zeroes histograms
-    and halves the live ``_fill_factor``; SET_ENTROPY overwrites the
-    entropy dict on each walker; SET_PHASE flips ``_phase`` and
-    (for ``"1_over_t"``) updates ``_fill_factor`` to ``1/t``.
-    """
-
-    halve: bool
-    merged_entropy: dict[int, float] | None
-    switch_to_phase: str | None
-
-
 class ProcessWangLandauWindow:
     """Per-window remote walkers + coordinator-facing methods.
 
@@ -596,7 +579,7 @@ class ProcessWangLandauWindow:
         self._schedule: str = schedule
         self._flatness_limit: float = float(flatness_limit)
         self.phase: str = "halving"
-        self._last: list[WalkerPostBlockState] = [
+        self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
                 is_flat=False,
                 fill_factor=1.0,
@@ -614,13 +597,13 @@ class ProcessWangLandauWindow:
         return self.workers[self.exchange_idx][1]
 
     def collect_flatness_flags(self) -> list[bool]:
-        return [s.is_flat for s in self._last]
+        return [s.is_flat for s in self.walker_states]
 
     def collect_entropy_snapshots(self) -> list[dict[int, float]]:
-        return [dict(s.entropy) for s in self._last]
+        return [dict(s.entropy) for s in self.walker_states]
 
     def collect_fill_factors(self) -> list[float]:
-        return [s.fill_factor for s in self._last]
+        return [s.fill_factor for s in self.walker_states]
 
     def collect_ts(self) -> list[int]:
         """Per-walker ``t = step - window_entry_step + 1``.
@@ -630,7 +613,7 @@ class ProcessWangLandauWindow:
         Raises ``RuntimeError`` if any walker has not yet entered.
         """
         ts: list[int] = []
-        for s in self._last:
+        for s in self.walker_states:
             if s.window_entry_step is None:
                 raise RuntimeError(
                     "collect_ts called on slot with unentered walker; "
@@ -641,7 +624,7 @@ class ProcessWangLandauWindow:
 
     def has_unentered_walker(self) -> bool:
         """True iff any walker has not yet reached its window."""
-        return any(s.window_entry_step is None for s in self._last)
+        return any(s.window_entry_step is None for s in self.walker_states)
 
 
 def _merge_per_window_stats(
@@ -673,51 +656,16 @@ def _merge_per_window_stats(
     }
 
 
-def _compute_plan(slot: ProcessWangLandauWindow) -> _CoordinatorPlan:
-    """Decide per-slot coordinator actions from the slot's cached state.
-
-    Pure function on ``slot._last``; no IPC. Returns a
-    ``_CoordinatorPlan`` describing which collective actions (halve,
-    merge entropies, switch BP phase) the coordinator should apply for
-    this slot in the current block.
-
-    In the 1/t phase no mid-run merge fires, regardless of
-    ``merge_cadence`` — walker entropies are reconciled only at
-    end-of-run via ``finalise_for_reporting``.
-    """
-    plan = _CoordinatorPlan(
-        halve=False, merged_entropy=None, switch_to_phase=None
+def _view_of(slot: ProcessWangLandauWindow) -> SlotView:
+    """Build a SlotView from a process-backed slot's cached state."""
+    return SlotView(
+        walker_states=tuple(slot.walker_states),
+        phase=slot.phase,
+        flatness_mode=slot._flatness_mode,
+        merge_cadence=slot._merge_cadence,
+        schedule=slot._schedule,
+        flatness_limit=slot._flatness_limit,
     )
-    if slot.phase != "halving":
-        return plan
-
-    if slot._flatness_mode == "per_walker":
-        should_halve = all(slot.collect_flatness_flags())
-    else:  # pooled
-        should_halve = _summed_histogram_flat_from_snapshots(
-            slot._last, slot._flatness_limit
-        )
-    if should_halve:
-        plan.halve = True
-        if (
-            slot._merge_cadence == "at_halve"
-            and len(slot.workers) > 1
-        ):
-            plan.merged_entropy = merge_entropies(
-                slot.collect_entropy_snapshots()
-            )
-        if (
-            slot._schedule == "1_over_t"
-            and not slot.has_unentered_walker()
-        ):
-            phases = ["halving"] * len(slot.workers)
-            ts = slot.collect_ts()
-            post_halve_fs = [
-                f / 2.0 for f in slot.collect_fill_factors()
-            ]
-            if decide_bp_switch(phases, ts, post_halve_fs):
-                plan.switch_to_phase = "1_over_t"
-    return plan
 
 
 class ProcessWangLandauPool:
@@ -964,10 +912,10 @@ class ProcessWangLandauPool:
             for (slot, w), payload in zip(
                 walker_addrs, payloads, strict=True
             ):
-                slot._last[w] = payload
+                slot.walker_states[w] = payload
 
             # DECIDE: per-slot coordinator decisions; no IPC.
-            plans = [_compute_plan(slot) for slot in self._slots]
+            plans = [decide_block_actions(_view_of(slot)) for slot in self._slots]
 
             # EXECUTE step 1: batched FORCE_HALVE across halving slots.
             halve_targets = [
@@ -980,9 +928,9 @@ class ProcessWangLandauPool:
                 broadcast_gather(halve_targets, ("FORCE_HALVE",))
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.halve:
-                        slot._last = [
+                        slot.walker_states = [
                             replace(s, fill_factor=s.fill_factor / 2.0)
-                            for s in slot._last
+                            for s in slot.walker_states
                         ]
 
             # EXECUTE step 2: batched SET_ENTROPY with per-slot dicts.
@@ -1001,9 +949,9 @@ class ProcessWangLandauPool:
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.merged_entropy is not None:
                         merged = dict(plan.merged_entropy)
-                        slot._last = [
+                        slot.walker_states = [
                             replace(s, entropy=dict(merged))
-                            for s in slot._last
+                            for s in slot.walker_states
                         ]
 
             # EXECUTE step 3: batched SET_PHASE with per-slot phase.
@@ -1037,7 +985,7 @@ class ProcessWangLandauPool:
 
         For each window with more than one walker: compute the merged
         entropy on the coordinator side from the snapshot already cached
-        in ``slot._last``, then send ``FINALISE_MERGE`` to every walker
+        in ``slot.walker_states``, then send ``FINALISE_MERGE`` to every walker
         in the window in a single fan-out so each walker's ``_entropy``
         and data-container ``_last_state`` are updated in one round
         trip. Single-walker windows are skipped.
@@ -1067,9 +1015,9 @@ class ProcessWangLandauPool:
                 ):
                     if merged_opt is None:
                         continue
-                    slot._last = [
+                    slot.walker_states = [
                         replace(s, entropy=dict(merged_opt))
-                        for s in slot._last
+                        for s in slot.walker_states
                     ]
         except Exception:
             self.shutdown()
