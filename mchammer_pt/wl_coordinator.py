@@ -83,6 +83,45 @@ def _validate_merge_cadence(merge_cadence: Any) -> None:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SlotView:
+    """Read-only view of one slot at one decision point.
+
+    Pure data. Built by each backend's collect step from per-walker
+    snapshots plus the slot's scalar configuration. Consumed by
+    ``decide_block_actions``.
+    """
+
+    walker_states: tuple[WalkerPostBlockState, ...]
+    phase: str
+    flatness_mode: FlatnessMode
+    merge_cadence: MergeCadence
+    schedule: str
+    flatness_limit: float
+
+    @property
+    def n_walkers(self) -> int:
+        return len(self.walker_states)
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinatorPlan:
+    """Actions decided for one slot in one block.
+
+    ``halve``: every walker's fill factor should be halved and histogram
+    reset.
+    ``merged_entropy``: if not None, written into every walker's
+    ``_entropy``.
+    ``switch_to_phase``: if not None (currently always ``"1_over_t"``
+    when set), the slot's phase is flipped and per-walker
+    ``_fill_factor`` is set to ``1/t``.
+    """
+
+    halve: bool
+    merged_entropy: dict[int, float] | None
+    switch_to_phase: str | None
+
+
 def _summed_histogram_is_flat(replicas: list[WangLandauReplica]) -> bool:
     """Pool histograms across replicas; flatness criterion on the sum.
 
