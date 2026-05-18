@@ -22,6 +22,7 @@ from mchammer_pt.parallel._worker import (
     BaseWorker,
     CanonicalWorker,
     WangLandauWorker,
+    _Shutdown,
 )
 from mchammer_pt.replica import Replica
 from mchammer_pt.wl_replica import WangLandauReplica
@@ -56,8 +57,17 @@ class InProcessWorkerConn:
         return conn
 
     def send(self, msg: tuple[Any, ...]) -> None:
-        """Dispatch the command inline through the worker handler."""
-        self._worker._handle(msg)
+        """Dispatch the command inline through the worker handler.
+
+        ``_Shutdown`` propagates out of the production read loop to
+        break it; here it is swallowed so the in-process conn looks
+        like a normal pipe to callers that drive ``SHUTDOWN`` through
+        the pool's shutdown path.
+        """
+        try:
+            self._worker._handle(msg)
+        except _Shutdown:
+            pass
 
     def recv(self) -> Reply:
         """Pop the next queued reply."""
