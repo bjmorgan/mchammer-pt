@@ -115,8 +115,6 @@ def make_in_process_wl_pool(
     is written into ``tmp_path`` so worker-side factories can reload
     it via ``replica.cluster_expansion_path``.
     """
-    from mchammer.calculators import ClusterExpansionCalculator
-
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     ce, atoms = make_wl_ce(), make_wl_atoms()
@@ -131,12 +129,6 @@ def make_in_process_wl_pool(
     else:
         walkers_per_window = list(n_walkers_per_window)
     extra_kwargs = dict(ensemble_kwargs) if ensemble_kwargs else {}
-    e0 = float(
-        ClusterExpansionCalculator(atoms, ce).calculate_total(
-            occupations=atoms.numbers
-        )
-    )
-    del e0  # only used by tests that compute their own windows
 
     pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
     pool._flatness_mode = flatness_mode  # type: ignore[assignment]
