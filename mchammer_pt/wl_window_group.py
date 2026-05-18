@@ -354,6 +354,22 @@ class WangLandauWindowGroup:
                 r.ensemble._phase = "1_over_t"
                 r.ensemble._fill_factor = 1.0 / t
 
+    def finalise_for_reporting(self) -> None:
+        """Merge per-walker entropies into a single window estimate.
+
+        Called once at the end of a WL run, regardless of
+        ``merge_cadence``. Writes the merged dict into every walker's
+        ``_entropy`` and refreshes ``_last_state``, so any downstream
+        reader (``WindowResult``, data containers) sees a consistent
+        estimate regardless of which walker it samples from.
+
+        No-op for single-walker groups.
+        """
+        if len(self._replicas) <= 1:
+            return
+        self._merge_entropies_into_all()
+        self.refresh_last_state()
+
     @property
     def ensemble(self) -> Any:
         """The mchammer ensemble for the first walker.

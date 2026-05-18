@@ -712,3 +712,38 @@ def test_one_over_t_phase_no_midrun_merge_serial():
     # No merge in 1/t phase: per-walker entropies preserved.
     assert replicas[0].ensemble._entropy[0] == pytest.approx(1.0)
     assert replicas[1].ensemble._entropy[0] == pytest.approx(3.0)
+
+
+def test_finalise_for_reporting_merges_into_all_walkers():
+    """finalise_for_reporting merges entropies and writes to every walker."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+    # Identical shape, different additive constants.
+    replicas[0].ensemble._entropy = {0: 0.0, 1: 5.0}
+    replicas[1].ensemble._entropy = {0: 10.0, 1: 15.0}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.finalise_for_reporting()
+
+    # Both walkers receive the merged, min-shifted dict.
+    for r in replicas:
+        assert r.ensemble._entropy[0] == pytest.approx(0.0)
+        assert r.ensemble._entropy[1] == pytest.approx(5.0)
+
+
+def test_finalise_for_reporting_single_walker_noop():
+    """finalise_for_reporting is a no-op for single-walker groups."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(1)
+    replicas[0].ensemble._reached_energy_window = True
+    replicas[0].ensemble._entropy = {0: 1.0, 1: 2.0}
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.finalise_for_reporting()
+
+    # Untouched.
+    assert replicas[0].ensemble._entropy == {0: 1.0, 1: 2.0}
