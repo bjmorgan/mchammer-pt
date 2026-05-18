@@ -42,7 +42,6 @@ from ..wl_window_group import (
     _validate_flatness_mode,
     _validate_merge_cadence,
     decide_bp_switch,
-    decide_collective_halve,
     merge_entropies,
 )
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
@@ -1009,9 +1008,7 @@ class ProcessWangLandauPool:
             return plan
 
         if slot._flatness_mode == "per_walker":
-            should_halve = decide_collective_halve(
-                slot.collect_flatness_flags()
-            )
+            should_halve = all(slot.collect_flatness_flags())
         else:  # pooled
             should_halve = _summed_histogram_flat_from_snapshots(
                 slot._last, slot._flatness_limit

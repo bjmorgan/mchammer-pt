@@ -262,28 +262,6 @@ def test_attach_observer_factory_type_check():
         group.attach_observer_factory(lambda replica: "not an observer")
 
 
-def test_decide_collective_halve_all_flat_returns_true():
-    """All walkers flat → collective halve fires."""
-    from mchammer_pt.wl_window_group import decide_collective_halve
-
-    assert decide_collective_halve([True, True]) is True
-
-
-def test_decide_collective_halve_some_not_flat_returns_false():
-    """Any walker not flat → no halve."""
-    from mchammer_pt.wl_window_group import decide_collective_halve
-
-    assert decide_collective_halve([True, False]) is False
-    assert decide_collective_halve([False, False]) is False
-
-
-def test_decide_collective_halve_empty_returns_false():
-    """Empty flag list: degenerate case, no halve."""
-    from mchammer_pt.wl_window_group import decide_collective_halve
-
-    assert decide_collective_halve([]) is False
-
-
 def test_decide_bp_switch_all_eligible_returns_true():
     """All walkers in halving phase with 1/t > f → switch."""
     from mchammer_pt.wl_window_group import decide_bp_switch

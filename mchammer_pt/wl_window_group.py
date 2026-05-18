@@ -77,13 +77,6 @@ def _validate_merge_cadence(merge_cadence: Any) -> None:
         )
 
 
-def decide_collective_halve(flags: list[bool]) -> bool:
-    """Return ``True`` iff all walkers are flat (collective gate)."""
-    if not flags:
-        return False
-    return all(flags)
-
-
 def _summed_histogram_is_flat(replicas: list[WangLandauReplica]) -> bool:
     """Pool histograms across replicas; flatness criterion on the sum.
 

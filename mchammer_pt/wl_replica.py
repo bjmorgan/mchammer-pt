@@ -117,6 +117,7 @@ class WangLandauSlot(Protocol):
     def refresh_last_state(self) -> None: ...
     def window_stats(self) -> dict[str, Any]: ...
     def snapshot_for_checkpoint(self) -> dict[str, Any]: ...
+    def finalise_for_reporting(self) -> None: ...
     def attach_mchammer_observer(self, observer: BaseObserver) -> None: ...
     def attach_observer_class(
         self,
@@ -465,6 +466,10 @@ class WangLandauReplica:
             e._data_container._last_state[
                 "window_entry_step"
             ] = e._window_entry_step
+
+    def finalise_for_reporting(self) -> None:
+        """No-op for single-walker slots; the multi-walker counterpart on
+        WangLandauWindowGroup merges per-walker entropies."""
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
         """Refresh ``_last_state`` and return checkpoint extras.

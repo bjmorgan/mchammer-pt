@@ -496,11 +496,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
         # Wrap each restored replica in a single-walker
         # ``WangLandauWindowGroup`` so the coordinator drives halving.
-        # Multi-walker resume is rejected at save-time.
-        # Single-walker resume; flatness_mode/merge_cadence are inert
-        # here (no halve gate or merge cadence applies with one
-        # walker), but the constructor requires them as keyword
-        # arguments.
+        # Multi-walker resume is rejected at save time; flatness_mode
+        # and merge_cadence are inert for single-walker groups but the
+        # constructor requires them.
         slots: list[WangLandauSlot] = [
             WangLandauWindowGroup(
                 [replica],
