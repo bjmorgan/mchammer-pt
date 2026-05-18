@@ -363,6 +363,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 cb.on_cycle_end(c, effective_n, history)
             if converged:
                 break
+        self._pool.finalise_for_reporting()
         if self._data_container_file is not None:
             _write_checkpoint(self, Path(self._data_container_file))
         return history

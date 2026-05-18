@@ -155,6 +155,59 @@ def test_wl_pt_run_returns_history_with_expected_shape():
     assert history.swap_attempted.shape == (1,)
 
 
+def test_wl_pt_run_finalises_pool_for_reporting_at_exit(monkeypatch):
+    """``run`` calls ``pool.finalise_for_reporting`` exactly once at exit.
+
+    Downstream consumers of the per-window data containers expect a
+    consistent per-window entropy estimate regardless of the final
+    block's halve state, so the orchestrator must merge walker
+    entropies once before returning.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=20,
+        random_seed=0,
+    )
+    mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock)
+    pt.run(n_cycles=2)
+    assert mock.call_count == 1
+
+
+def test_wl_pt_run_finalises_pool_for_reporting_on_early_convergence(monkeypatch):
+    """``run`` calls ``pool.finalise_for_reporting`` on the early-exit path.
+
+    Convergence-triggered loop termination must still leave the
+    per-window data containers in the merged state expected by
+    ``results()`` and ``WindowResult`` consumers.
+    """
+    from unittest.mock import MagicMock
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=1,
+        random_seed=0,
+    )
+    for r in pt.pool.replicas:
+        r.ensemble._converged = True
+    mock = MagicMock()
+    monkeypatch.setattr(pt.pool, "finalise_for_reporting", mock)
+    pt.run(n_cycles=10)
+    assert mock.call_count == 1
+
+
 def test_wl_pt_run_stops_on_all_converged():
     """If every replica reports converged, the loop terminates early."""
     from mchammer_pt.wl import WangLandauParallelTempering
