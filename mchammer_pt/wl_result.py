@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from .wl_window_group import merge_entropies
+from .wl_coordinator import merge_entropies
 
 if TYPE_CHECKING:
     from mchammer.data_containers.wang_landau_data_container import (

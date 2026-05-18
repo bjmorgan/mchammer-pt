@@ -15,7 +15,12 @@ from mchammer.observers.base_observer import (
 )
 
 from ..replica import Replica
+from ..wl_coordinator import (
+    SlotView,
+    decide_block_actions,
+)
 from ..wl_replica import WangLandauReplica, WangLandauSlot
+from ..wl_window_group import WangLandauWindowGroup
 from ._imports import _resolve_replicas
 
 if TYPE_CHECKING:
@@ -220,6 +225,21 @@ class SerialPool:
         return None
 
 
+def _view_of_serial_slot(slot: WangLandauSlot) -> SlotView:
+    """Build a SlotView from a serial slot's walker_states."""
+    assert isinstance(slot, WangLandauWindowGroup), (
+        "serial slot must be a WangLandauWindowGroup"
+    )
+    return SlotView(
+        walker_states=tuple(slot.walker_states),
+        phase=slot._replicas[0].ensemble._phase,
+        flatness_mode=slot._flatness_mode,
+        merge_cadence=slot._merge_cadence,
+        schedule=slot._schedule,
+        flatness_limit=slot._replicas[0].ensemble._flatness_limit,
+    )
+
+
 class SerialWangLandauPool:
     """In-process pool of `WangLandauReplica` instances.
 
@@ -272,8 +292,27 @@ class SerialWangLandauPool:
         return self._energy_spacing
 
     def advance_all(self, n_steps: int) -> None:
-        for r in self._replicas:
-            r.advance(n_steps)
+        # ADVANCE + COLLECT: each slot advances its walkers and populates
+        # its walker_states from live ensemble state.
+        for slot in self._replicas:
+            slot.advance(n_steps)
+
+        # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
+        # Only WangLandauWindowGroup slots participate; single-walker
+        # WangLandauReplica slots carry their own coordinator internally.
+        group_slots = [
+            s for s in self._replicas if isinstance(s, WangLandauWindowGroup)
+        ]
+        plans = [decide_block_actions(_view_of_serial_slot(s))
+                 for s in group_slots]
+
+        # APPLY: per-slot mutation. No batching benefit in-process.
+        for slot, plan in zip(group_slots, plans, strict=True):
+            slot.apply_plan(plan)
+
+        # Re-roll exchange-walker selection per slot.
+        for slot in group_slots:
+            slot.reroll_exchange_idx()
 
     def current_energies(self) -> np.ndarray:
         return np.array(
