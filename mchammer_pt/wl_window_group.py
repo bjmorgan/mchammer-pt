@@ -33,6 +33,7 @@ class WalkerPostBlockState(NamedTuple):
     step: int
     window_entry_step: int | None
     histogram: dict[int, int]
+    reached_energy_window: bool
 
 FlatnessMode = Literal["per_walker", "pooled"]
 """Flatness gate mode for collective halving.
@@ -115,12 +116,11 @@ def _summed_histogram_flat_from_snapshots(
 
     Pools the per-walker histograms carried by each ``WalkerPostBlockState``
     and applies the same flatness criterion as ``_summed_histogram_is_flat``.
-    Returns False if any walker has not yet entered its window
-    (``window_entry_step is None``).
+    Returns False if any walker has not yet entered its window.
     """
     if not snapshots:
         return False
-    if any(s.window_entry_step is None for s in snapshots):
+    if not all(s.reached_energy_window for s in snapshots):
         return False
     combined: dict[int, int] = {}
     for s in snapshots:

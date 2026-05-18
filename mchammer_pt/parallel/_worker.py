@@ -27,9 +27,7 @@ Shared opcodes (``BaseWorker``):
 
 REWL-only opcodes (``WangLandauWorker``):
 
-- ``("ADVANCE", n_steps)``
-  -> ``Reply("OK", ..., (is_flat, fill_factor, entropy, step,
-  window_entry_step))``
+- ``("ADVANCE", n_steps)`` -> ``Reply("OK", ..., WalkerPostBlockState)``
 - ``("LOG_G_AT", E_i, E_j)``
   -> ``Reply("OK", ..., (g_at_E_i, g_at_E_j))``
 - ``("CONVERGED",)`` -> ``Reply("OK", ..., bool)``
@@ -335,6 +333,7 @@ class WangLandauWorker(BaseWorker):
                 else int(e._window_entry_step)
             ),
             histogram=dict(e._histogram),
+            reached_energy_window=bool(e._reached_energy_window),
         ))
 
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:

@@ -671,6 +671,7 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
             step=0,
             window_entry_step=0,
             histogram={0: 100, 1: 1000},
+            reached_energy_window=True,
         ),
         WalkerPostBlockState(
             is_flat=replicas[1].is_flat(),
@@ -679,12 +680,43 @@ def test_summed_histogram_flat_from_snapshots_matches_live():
             step=0,
             window_entry_step=0,
             histogram={0: 1000, 1: 100},
+            reached_energy_window=True,
         ),
     ]
     flatness_limit = replicas[0].ensemble._flatness_limit
     assert _summed_histogram_flat_from_snapshots(snapshots, flatness_limit) == (
         _summed_histogram_is_flat(replicas)
     )
+
+
+def test_summed_histogram_flat_from_snapshots_false_when_unentered():
+    """Pooled flatness from snapshots returns False if any walker has not entered."""
+    from mchammer_pt.parallel.processes import WalkerPostBlockState
+    from mchammer_pt.wl_window_group import (
+        _summed_histogram_flat_from_snapshots,
+    )
+
+    snapshots = [
+        WalkerPostBlockState(
+            is_flat=True,
+            fill_factor=1.0,
+            entropy={},
+            step=0,
+            window_entry_step=0,
+            histogram={0: 1000, 1: 1000},
+            reached_energy_window=True,
+        ),
+        WalkerPostBlockState(
+            is_flat=False,
+            fill_factor=1.0,
+            entropy={},
+            step=0,
+            window_entry_step=None,
+            histogram={},
+            reached_energy_window=False,
+        ),
+    ]
+    assert _summed_histogram_flat_from_snapshots(snapshots, 0.8) is False
 
 
 def test_one_over_t_phase_no_midrun_merge_serial():

@@ -578,6 +578,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 step=100,
                 window_entry_step=0,
                 histogram={},
+                reached_energy_window=True,
             ),
             WalkerPostBlockState(
                 is_flat=True,
@@ -586,6 +587,7 @@ def test_process_wl_window_bp_switch_refuses_unentered_walker(tmp_path):
                 step=100,
                 window_entry_step=None,
                 histogram={},
+                reached_energy_window=False,
             ),
         ]
         plan = pool._compute_plan(slot)
@@ -622,6 +624,7 @@ def _make_compute_plan_slot(
             step=100,
             window_entry_step=window_entry_step,
             histogram={},
+            reached_energy_window=window_entry_step is not None,
         )
         for _ in range(n)
     ]
@@ -659,6 +662,59 @@ def test_compute_plan_halving_all_flat_w2_at_halve_cadence(tmp_path):
         # min=0 yields {0: 0.0, 1: 1.0}.
         assert plan.merged_entropy == {0: 0.0, 1: 1.0}
         assert plan.switch_to_phase is None
+
+
+def test_compute_plan_pooled_flatness_default_schedule_halves(tmp_path):
+    """Default config (halving schedule, pooled flatness, W=2) actually halves.
+
+    Regression test: under the halving schedule, ``_window_entry_step``
+    stays ``None`` (icet only sets it under the 1/t schedule). A prior
+    gate on ``window_entry_step is None`` caused the pooled-flatness
+    halve to never fire under the documented default config. The gate
+    now uses ``reached_energy_window``, which is set under both
+    schedules.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    from mchammer_pt.wl_window_group import WalkerPostBlockState
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+        # Default flatness_mode="pooled", merge_cadence="at_halve",
+        # schedule="halving" (icet default).
+    ) as pool:
+        slot = pool._slots[0]
+        # Synthesise the post-block state under the halving schedule:
+        # both walkers have entered (reached_energy_window=True) and have
+        # accumulated a pooled-flat histogram, but window_entry_step
+        # remains None because icet only sets it under 1/t.
+        slot._last = [
+            WalkerPostBlockState(
+                is_flat=True,
+                fill_factor=1.0,
+                entropy={0: 1.0, 1: 2.0},
+                step=100,
+                window_entry_step=None,
+                histogram={0: 1000, 1: 1000},
+                reached_energy_window=True,
+            ),
+            WalkerPostBlockState(
+                is_flat=True,
+                fill_factor=1.0,
+                entropy={0: 1.0, 1: 2.0},
+                step=100,
+                window_entry_step=None,
+                histogram={0: 1000, 1: 1000},
+                reached_energy_window=True,
+            ),
+        ]
+        plan = pool._compute_plan(slot)
+        assert plan.halve is True
 
 
 def test_compute_plan_halving_not_flat_at_halve_cadence_skips_merge(tmp_path):
