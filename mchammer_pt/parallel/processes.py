@@ -123,7 +123,10 @@ class ProcessPool:
         self._temperatures: list[float] = [float(T) for T in temperatures_list]
         self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         if isinstance(initial_atoms, Atoms):
-            atoms_specs = [AtomsSpec.from_atoms(initial_atoms)] * len(temperatures_list)
+            atoms_specs = [
+                AtomsSpec.from_atoms(initial_atoms)
+                for _ in range(len(temperatures_list))
+            ]
         else:
             atoms_list = list(initial_atoms)
             if len(atoms_list) != len(temperatures_list):
@@ -153,7 +156,7 @@ class ProcessPool:
                     temperature=T,
                     seed=int(seed),
                     ensemble_cls=ensemble_cls,
-                    ensemble_kwargs=extra_kwargs,
+                    ensemble_kwargs=dict(extra_kwargs),
                 )
                 process = ctx.Process(
                     target=_worker,
@@ -784,7 +787,7 @@ class ProcessWangLandauPool:
                             energy_limit_right=hi,
                             seed=int(w_seed),
                             ensemble_cls=ensemble_cls,
-                            ensemble_kwargs=extra_kwargs,
+                            ensemble_kwargs=dict(extra_kwargs),
                         )
                         process = ctx.Process(
                             target=_wl_worker,

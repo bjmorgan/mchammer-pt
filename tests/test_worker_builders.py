@@ -22,6 +22,32 @@ def test_atoms_spec_round_trip_preserves_atoms():
     assert np.array_equal(restored.pbc, atoms.pbc)
 
 
+def test_atoms_spec_arrays_are_read_only():
+    """from_atoms locks the arrays; mutating in-place raises ValueError."""
+    import pytest
+
+    from mchammer_pt.parallel._builder import AtomsSpec
+
+    atoms = make_wl_atoms()
+    spec = AtomsSpec.from_atoms(atoms)
+    for name in ("numbers", "positions", "cell", "pbc"):
+        arr = getattr(spec, name)
+        with pytest.raises(ValueError, match="read-only|writeable"):
+            arr[0] = arr[0]
+
+
+def test_atoms_spec_does_not_alias_input_atoms():
+    """from_atoms breaks aliasing: mutating the input atoms does not change the spec."""
+    from mchammer_pt.parallel._builder import AtomsSpec
+
+    atoms = make_wl_atoms()
+    spec = AtomsSpec.from_atoms(atoms)
+    original_numbers = spec.numbers.copy()
+    # Mutate the input atoms; the spec must remain unchanged.
+    atoms.numbers[0] = 1 if atoms.numbers[0] != 1 else 2
+    assert np.array_equal(spec.numbers, original_numbers)
+
+
 def test_canonical_builder_build_returns_replica(tmp_path):
     """CanonicalBuilder.build() constructs a Replica with the configured fields."""
     from mchammer.ensembles import CanonicalEnsemble

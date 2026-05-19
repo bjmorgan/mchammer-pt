@@ -15,9 +15,10 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion
-from mchammer.ensembles import CanonicalEnsemble, WangLandauEnsemble
+from mchammer.ensembles import CanonicalEnsemble
 
 from ..replica import Replica
+from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 
 
@@ -47,12 +48,22 @@ class AtomsSpec:
 
     @classmethod
     def from_atoms(cls, atoms: Atoms) -> AtomsSpec:
-        """Capture an ``Atoms`` instance as a serialisable spec."""
+        """Capture an ``Atoms`` instance as a serialisable spec.
+
+        Copies each array (breaking aliasing with the input ``atoms``)
+        and marks the copies non-writeable so the spec is deeply
+        immutable, matching the ``frozen=True`` declaration.
+        """
+        def _frozen(arr: np.ndarray, dtype: np.dtype) -> np.ndarray:
+            out = np.array(arr, dtype=dtype)
+            out.setflags(write=False)
+            return out
+
         return cls(
-            numbers=np.asarray(atoms.numbers, dtype=np.int64),
-            positions=np.asarray(atoms.positions, dtype=np.float64),
-            cell=np.asarray(atoms.cell.array, dtype=np.float64),
-            pbc=np.asarray(atoms.pbc, dtype=bool),
+            numbers=_frozen(atoms.numbers, np.dtype(np.int64)),
+            positions=_frozen(atoms.positions, np.dtype(np.float64)),
+            cell=_frozen(atoms.cell.array, np.dtype(np.float64)),
+            pbc=_frozen(atoms.pbc, np.dtype(bool)),
         )
 
     def to_atoms(self) -> Atoms:
@@ -105,7 +116,7 @@ class WLBuilder:
     energy_limit_left: float | None
     energy_limit_right: float | None
     seed: int
-    ensemble_cls: type[WangLandauEnsemble]
+    ensemble_cls: type[CoordinatedWangLandauEnsemble]
     ensemble_kwargs: dict[str, Any]
 
     def build(self) -> WangLandauReplica:
