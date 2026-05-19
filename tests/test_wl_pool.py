@@ -57,6 +57,7 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
 
     from mchammer.calculators import ClusterExpansionCalculator
 
+    from mchammer_pt.parallel._builder import WLBuilder
     from mchammer_pt.parallel._worker import _wl_worker
     from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
@@ -74,21 +75,21 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
         "cell": np.asarray(atoms.cell.array, dtype=np.float64),
         "pbc": np.asarray(atoms.pbc, dtype=bool),
     }
+    builder = WLBuilder(
+        ce_path=str(ce_path),
+        atoms_dict=atoms_dict,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs=dict(ensemble_kwargs or {}),
+    )
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=True)
     process = ctx.Process(
         target=_wl_worker,
-        args=(
-            child_conn,
-            str(ce_path),
-            atoms_dict,
-            0.1,           # energy_spacing
-            e0 - 100.0,    # energy_limit_left
-            e0 + 100.0,    # energy_limit_right
-            42,            # seed
-            CoordinatedWangLandauEnsemble,
-            dict(ensemble_kwargs or {}),
-        ),
+        args=(child_conn, builder),
         daemon=True,
     )
     process.start()

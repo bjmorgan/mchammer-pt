@@ -46,6 +46,7 @@ from ..wl_coordinator import (
 )
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
+from ._builder import CanonicalBuilder, WLBuilder
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
@@ -155,17 +156,17 @@ class ProcessPool:
                 self._temperatures, seeds_list, atoms_dicts, strict=True
             ):
                 parent_conn, child_conn = ctx.Pipe(duplex=True)
+                builder = CanonicalBuilder(
+                    ce_path=str(ce_path),
+                    atoms_dict=ad,
+                    temperature=T,
+                    seed=int(seed),
+                    ensemble_cls=ensemble_cls,
+                    ensemble_kwargs=extra_kwargs,
+                )
                 process = ctx.Process(
                     target=_worker,
-                    args=(
-                        child_conn,
-                        str(ce_path),
-                        ad,
-                        T,
-                        int(seed),
-                        ensemble_cls,
-                        extra_kwargs,
-                    ),
+                    args=(child_conn, builder),
                     daemon=True,
                 )
                 process.start()
@@ -784,19 +785,19 @@ class ProcessWangLandauPool:
                 try:
                     for w_seed in walker_seeds:
                         parent_conn, child_conn = ctx.Pipe(duplex=True)
+                        builder = WLBuilder(
+                            ce_path=str(ce_path),
+                            atoms_dict=ad,
+                            energy_spacing=float(energy_spacing),
+                            energy_limit_left=lo,
+                            energy_limit_right=hi,
+                            seed=int(w_seed),
+                            ensemble_cls=ensemble_cls,
+                            ensemble_kwargs=extra_kwargs,
+                        )
                         process = ctx.Process(
                             target=_wl_worker,
-                            args=(
-                                child_conn,
-                                str(ce_path),
-                                ad,
-                                float(energy_spacing),
-                                lo,
-                                hi,
-                                int(w_seed),
-                                ensemble_cls,
-                                extra_kwargs,
-                            ),
+                            args=(child_conn, builder),
                             daemon=True,
                         )
                         process.start()
