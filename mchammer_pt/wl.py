@@ -82,6 +82,52 @@ def _array_to_windows(
     return result
 
 
+def _spawn_wl_seeds(
+    random_seed: int,
+    walkers_per_window: Sequence[int],
+) -> tuple[list[list[int]], list[int], int]:
+    """Spawn deterministic per-walker / per-group / master seeds.
+
+    Reproduces the constructor's SeedSequence walk as a standalone
+    helper so both the constructor and the resume path derive seeds
+    identically, without duplicating the spawn logic.
+
+    Args:
+        random_seed: top-level seed.
+        walkers_per_window: walker count per window.
+
+    Returns:
+        Tuple ``(walker_seeds, group_seeds, master_seed)`` where
+        ``walker_seeds[g][w]`` is walker w's seed in window g,
+        ``group_seeds[g]`` is the per-window-group exchange-RNG seed,
+        and ``master_seed`` seeds the orchestrator's swap-pair RNG.
+    """
+    n_windows = len(walkers_per_window)
+    seed_sequence = np.random.SeedSequence(int(random_seed))
+    total_walker_seeds = sum(walkers_per_window)
+    child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
+    offsets: list[int] = []
+    off = 0
+    for ww in walkers_per_window:
+        offsets.append(off)
+        off += ww
+    walker_seeds = [
+        [
+            int(child_seeds[offsets[w] + j].generate_state(1)[0])
+            for j in range(walkers_per_window[w])
+        ]
+        for w in range(n_windows)
+    ]
+    group_seeds = [
+        int(child_seeds[total_walker_seeds + g].generate_state(1)[0])
+        for g in range(n_windows)
+    ]
+    master_seed = int(
+        child_seeds[total_walker_seeds + n_windows].generate_state(1)[0]
+    )
+    return walker_seeds, group_seeds, master_seed
+
+
 class WangLandauParallelTempering(BaseParallelTempering):
     """REWL orchestrator across a sequence of energy windows.
 
@@ -192,28 +238,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         if any(w > 1 for w in walkers_per_window) and data_container_file is not None:
             raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
 
-        seed_sequence = np.random.SeedSequence(int(random_seed))
-        # Walker seeds are packed contiguously in window order, followed
-        # by one group seed per window, then one master seed.
-        total_walker_seeds = sum(walkers_per_window)
-        child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
-        offsets: list[int] = []
-        offset = 0
-        for ww in walkers_per_window:
-            offsets.append(offset)
-            offset += ww
-        walker_seeds = [
-            [
-                int(child_seeds[offsets[w] + j].generate_state(1)[0])
-                for j in range(walkers_per_window[w])
-            ]
-            for w in range(n_windows)
-        ]
-        group_seeds = [
-            int(child_seeds[total_walker_seeds + w].generate_state(1)[0])
-            for w in range(n_windows)
-        ]
-        master_seed = int(child_seeds[-1].generate_state(1)[0])
+        walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
+            random_seed, walkers_per_window
+        )
 
         if pool is not None and (
             ensemble_cls is not CoordinatedWangLandauEnsemble or ensemble_kwargs

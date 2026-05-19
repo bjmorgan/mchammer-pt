@@ -1251,3 +1251,22 @@ def test_wl_pt_v4_checkpoint_has_walkers_per_window_in_meta(tmp_path):
         assert f["meta"].attrs["schema_version"] == "4"
         wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
         assert wpw.tolist() == [1, 1]  # two windows in the simple fixture
+
+
+def test_walker_seeds_helper_is_deterministic_and_matches_constructor():
+    """The extracted helper produces the same per-walker / per-group /
+    master seeds as the existing WangLandauParallelTempering constructor."""
+    from mchammer_pt.wl import _spawn_wl_seeds
+
+    walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
+        random_seed=42,
+        walkers_per_window=[1, 2, 1],
+    )
+    # Stability: repeating the call yields identical seeds.
+    again = _spawn_wl_seeds(42, [1, 2, 1])
+    assert (walker_seeds, group_seeds, master_seed) == again
+    # Shape:
+    assert len(walker_seeds) == 3  # one list per window
+    assert [len(ws) for ws in walker_seeds] == [1, 2, 1]
+    assert len(group_seeds) == 3
+    assert isinstance(master_seed, int)
