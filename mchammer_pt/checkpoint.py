@@ -283,7 +283,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
             "a populated `_last_state` until a run completes."
         )
     meta: dict[str, MetaValue] = {
-        "schema_version": "3",
+        "schema_version": "4",
         "block_size": int(pt._block_size),  # type: ignore[attr-defined]
         "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
         "ce_identity": pt._ce_identity,  # type: ignore[attr-defined]

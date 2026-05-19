@@ -1226,3 +1226,28 @@ def test_wl_pt_w1_unified_path_produces_finite_results():
         assert df is not None
         assert len(df) > 0
         assert np.all(np.isfinite(df["entropy"].to_numpy()))
+
+
+def test_wl_pt_v4_checkpoint_has_walkers_per_window_in_meta(tmp_path):
+    """Schema v4: /meta carries walkers_per_window as an int array."""
+    import h5py
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r") as f:
+        assert f["meta"].attrs["schema_version"] == "4"
+        wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
+        assert wpw.tolist() == [1, 1]  # two windows in the simple fixture

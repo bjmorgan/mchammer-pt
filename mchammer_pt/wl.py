@@ -288,6 +288,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         self._energy_spacing = float(energy_spacing)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
         self._ce_identity = _compute_ce_identity(cluster_expansion)
@@ -349,14 +350,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
         """Return the WL-specific checkpoint metadata.
 
-        Contains the window edges, energy spacing, flatness mode, and
-        merge cadence.
+        Contains the window edges, energy spacing, flatness mode,
+        merge cadence, and walkers-per-window boundary array.
         """
         return {
             "windows": _windows_to_array(self._windows),
             "energy_spacing": float(self._energy_spacing),
             "flatness_mode": self._flatness_mode,
             "merge_cadence": self._merge_cadence,
+            "walkers_per_window": np.asarray(
+                self._walkers_per_window, dtype=np.int32
+            ),
         }
 
     def run(self, n_cycles: int) -> ExchangeHistory:
