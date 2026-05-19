@@ -642,6 +642,52 @@ def test_write_checkpoint_passes_window_groups_through_to_hdf5(tmp_path):
         assert "exchange_idx" in f["orchestrator/window_groups/0"]
 
 
+def test_read_window_groups_raises_on_phase_mismatch(tmp_path):
+    """_read_window_groups raises ValueError when the on-disk group phase
+    disagrees with any of its walkers' _last_state['phase']."""
+    import h5py
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.checkpoint import _read_window_groups
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    def _initial_energy():
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        return float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    # Corrupt: flip the group phase on window 0 to a value that
+    # disagrees with the walkers' _last_state['phase'].
+    with h5py.File(path, "r+") as f:
+        del f["orchestrator/window_groups/0/phase"]
+        f["orchestrator/window_groups/0"].create_dataset(
+            "phase", data="__corrupted__",
+        )
+
+    with pytest.raises(ValueError, match="phase"):
+        _read_window_groups(path)
+
+
 def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
     """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely
     (or leaves the group empty); _read_window_groups returns all Nones."""

@@ -255,7 +255,15 @@ def _read_window_groups(path: Path | str) -> list[dict | None]:
         KeyError: if ``/meta``, ``/meta/walkers_per_window``, or
             ``/orchestrator`` is missing — sign of a pre-v4 file or
             one that was not written as a checkpoint.
+        ValueError: if the on-disk group phase for any window
+            disagrees with the ``_last_state["phase"]`` of any of
+            its walkers' replica containers, indicating a corrupted
+            checkpoint file.
     """
+    import tempfile
+
+    from mchammer.data_containers.base_data_container import BaseDataContainer
+
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"no such file: {path}")
@@ -293,6 +301,43 @@ def _read_window_groups(path: Path | str) -> list[dict | None]:
                     else str(phase_raw)
                 ),
             })
+
+        # Validate phase consistency: for every W>1 window, the group
+        # phase on disk must match _last_state["phase"] of each walker.
+        # A mismatch indicates the file is corrupted. Read walker
+        # containers from the /replicas/ tarballs within the same open
+        # to avoid a second file open. Skip if /replicas/ is absent —
+        # hand-crafted test fixtures without replica payloads are not
+        # real checkpoints and cannot be validated here.
+        if "replicas" in f:
+            flat = 0
+            for g, entry in enumerate(out):
+                nw = int(wpw[g])
+                if entry is not None:
+                    group_phase = entry["phase"]
+                    for w in range(nw):
+                        replica_idx = flat + w
+                        payload = f[f"replicas/{replica_idx}"][()].tobytes()
+                        tmp_file = tempfile.NamedTemporaryFile(
+                            suffix=".dc", delete=False
+                        )
+                        tmp_path = Path(tmp_file.name)
+                        tmp_file.close()
+                        try:
+                            tmp_path.write_bytes(payload)
+                            container = BaseDataContainer.read(str(tmp_path))
+                        finally:
+                            tmp_path.unlink(missing_ok=True)
+                        walker_phase = container._last_state.get("phase")
+                        if walker_phase != group_phase:
+                            raise ValueError(
+                                f"{path}: phase consistency failure at "
+                                f"window {g} walker {w}: group phase "
+                                f"{group_phase!r} vs walker _last_state "
+                                f"phase {walker_phase!r}; checkpoint is "
+                                f"corrupted."
+                            )
+                flat += nw
     return out
 
 
