@@ -20,6 +20,7 @@ from .wl_coordinator import (
 from .wl_replica import WangLandauReplica
 
 if TYPE_CHECKING:
+    from mchammer.data_containers.base_data_container import BaseDataContainer
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
     )
@@ -287,6 +288,49 @@ class WangLandauWindowGroup:
                 "phase": self._replicas[0].ensemble._phase,
             },
         }
+
+    def restore_state(
+        self,
+        containers: list[BaseDataContainer],
+        per_walker_extras: list[dict[str, Any]],
+        group_state: dict[str, Any],
+    ) -> None:
+        """Restore every walker's MC state and the group-level state.
+
+        Per-walker phase consistency is validated at read time in
+        ``checkpoint._read_window_groups``, not here — so this method does
+        not re-check.
+
+        Args:
+            containers: one container per walker, in walker order.
+            per_walker_extras: one per-walker extras dict per walker.
+            group_state: dict with ``rng_state``, ``exchange_idx``, ``phase``.
+
+        Raises:
+            ValueError: lengths of ``containers`` and ``per_walker_extras``
+                do not both equal the walker count.
+        """
+        import json
+
+        if len(containers) != len(self._replicas):
+            raise ValueError(
+                f"restore_state expects {len(self._replicas)} containers, "
+                f"got {len(containers)}"
+            )
+        if len(per_walker_extras) != len(self._replicas):
+            raise ValueError(
+                f"restore_state expects {len(self._replicas)} per_walker_extras, "
+                f"got {len(per_walker_extras)}"
+            )
+        for replica, container, extra in zip(
+            self._replicas, containers, per_walker_extras, strict=True
+        ):
+            replica.restore_state(
+                container,
+                sites_by_species=extra["sites_by_species"],
+            )
+        self._rng.bit_generator.state = json.loads(group_state["rng_state"])
+        self._exchange_idx = int(group_state["exchange_idx"])
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""
