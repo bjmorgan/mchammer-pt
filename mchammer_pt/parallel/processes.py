@@ -46,18 +46,10 @@ from ..wl_coordinator import (
 )
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
+from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
 from ._worker import _wl_worker, _worker
-
-
-def _atoms_to_dict(atoms: Atoms) -> dict[str, Any]:
-    return {
-        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
-        "positions": np.asarray(atoms.positions, dtype=np.float64),
-        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
-        "pbc": np.asarray(atoms.pbc, dtype=bool),
-    }
 
 
 class ProcessPool:
@@ -131,7 +123,10 @@ class ProcessPool:
         self._temperatures: list[float] = [float(T) for T in temperatures_list]
         self._workers: list[tuple[mp.process.BaseProcess, Connection]] = []
         if isinstance(initial_atoms, Atoms):
-            atoms_dicts = [_atoms_to_dict(initial_atoms)] * len(temperatures_list)
+            atoms_specs = [
+                AtomsSpec.from_atoms(initial_atoms)
+                for _ in range(len(temperatures_list))
+            ]
         else:
             atoms_list = list(initial_atoms)
             if len(atoms_list) != len(temperatures_list):
@@ -139,7 +134,7 @@ class ProcessPool:
                     f"initial_atoms has {len(atoms_list)} entries but "
                     f"temperatures has {len(temperatures_list)}"
                 )
-            atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
+            atoms_specs = [AtomsSpec.from_atoms(a) for a in atoms_list]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
@@ -151,21 +146,21 @@ class ProcessPool:
         # workers in ``self._workers`` that ``shutdown()`` then joins.
         ctx = mp.get_context("spawn")
         try:
-            for T, seed, ad in zip(
-                self._temperatures, seeds_list, atoms_dicts, strict=True
+            for T, seed, atoms_spec in zip(
+                self._temperatures, seeds_list, atoms_specs, strict=True
             ):
                 parent_conn, child_conn = ctx.Pipe(duplex=True)
+                builder = CanonicalBuilder(
+                    ce_path=str(ce_path),
+                    atoms=atoms_spec,
+                    temperature=T,
+                    seed=int(seed),
+                    ensemble_cls=ensemble_cls,
+                    ensemble_kwargs=dict(extra_kwargs),
+                )
                 process = ctx.Process(
                     target=_worker,
-                    args=(
-                        child_conn,
-                        str(ce_path),
-                        ad,
-                        T,
-                        int(seed),
-                        ensemble_cls,
-                        extra_kwargs,
-                    ),
+                    args=(child_conn, builder),
                     daemon=True,
                 )
                 process.start()
@@ -757,7 +752,7 @@ class ProcessWangLandauPool:
             )
         self._windows: list[tuple[float | None, float | None]] = windows_list
         self._energy_spacing = float(energy_spacing)
-        atoms_dicts = [_atoms_to_dict(a) for a in atoms_list]
+        atoms_specs = [AtomsSpec.from_atoms(a) for a in atoms_list]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
@@ -768,8 +763,8 @@ class ProcessWangLandauPool:
         # slots in self._slots that shutdown() then joins.
         ctx = mp.get_context("spawn")
         try:
-            for (lo, hi), window_seed, ad, W_w in zip(
-                windows_list, seeds_list, atoms_dicts, walkers_per_window, strict=True,
+            for (lo, hi), window_seed, atoms_spec, W_w in zip(
+                windows_list, seeds_list, atoms_specs, walkers_per_window, strict=True,
             ):
                 if W_w == 1:
                     walker_seeds = [int(window_seed)]
@@ -784,19 +779,19 @@ class ProcessWangLandauPool:
                 try:
                     for w_seed in walker_seeds:
                         parent_conn, child_conn = ctx.Pipe(duplex=True)
+                        builder = WLBuilder(
+                            ce_path=str(ce_path),
+                            atoms=atoms_spec,
+                            energy_spacing=float(energy_spacing),
+                            energy_limit_left=lo,
+                            energy_limit_right=hi,
+                            seed=int(w_seed),
+                            ensemble_cls=ensemble_cls,
+                            ensemble_kwargs=dict(extra_kwargs),
+                        )
                         process = ctx.Process(
                             target=_wl_worker,
-                            args=(
-                                child_conn,
-                                str(ce_path),
-                                ad,
-                                float(energy_spacing),
-                                lo,
-                                hi,
-                                int(w_seed),
-                                ensemble_cls,
-                                extra_kwargs,
-                            ),
+                            args=(child_conn, builder),
                             daemon=True,
                         )
                         process.start()

@@ -37,7 +37,7 @@ class StubWorker(BaseWorker):
     """Concrete BaseWorker subclass for testing."""
 
     def __init__(self, *, reply_sink, fail_build: bool = False):
-        super().__init__(reply_sink=reply_sink)
+        super().__init__(builder=None, reply_sink=reply_sink)
         self._fail_build = fail_build
 
     def _build_replica(self):

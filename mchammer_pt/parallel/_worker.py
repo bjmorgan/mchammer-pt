@@ -54,12 +54,6 @@ from collections.abc import Callable
 from multiprocessing.connection import Connection
 from typing import Any
 
-from ase import Atoms
-from icet import ClusterExpansion
-from mchammer.ensembles import (
-    CanonicalEnsemble,
-    WangLandauEnsemble,
-)
 from mchammer.observers.base_observer import (
     BaseObserver,
 )
@@ -67,6 +61,7 @@ from mchammer.observers.base_observer import (
 from ..replica import Replica
 from ..wl_coordinator import WalkerPostBlockState
 from ..wl_replica import WangLandauReplica
+from ._builder import CanonicalBuilder, WLBuilder
 from ._comms import Reply
 
 
@@ -77,13 +72,26 @@ class _Shutdown(BaseException):
 class BaseWorker:
     """Command-loop base class for persistent pool workers.
 
-    Subclasses implement ``_build_replica`` and optionally extend
-    ``self._handlers`` with extra opcode handlers. Replies flow
-    through ``reply_sink``; the worker does not own a ``Connection``.
-    The production read loop lives in ``_run_worker_loop``.
+    Construction takes a ``Builder`` describing how to construct the
+    replica (or ``None`` when the caller will set ``self._replica``
+    externally, used by in-process tests). The ``reply_sink`` callable
+    receives :class:`Reply` instances; the worker does not own a
+    ``Connection``. The production read loop lives in
+    ``_run_worker_loop``.
+
+    Subclasses do not provide their own ``__init__`` or
+    ``_build_replica``: construction is handled here, replica
+    construction lives on the :class:`Builder`. Subclasses override
+    ``_register_extra_handlers`` to add opcodes beyond the base set.
     """
 
-    def __init__(self, *, reply_sink: Callable[[Reply], None]) -> None:
+    def __init__(
+        self,
+        *,
+        builder: CanonicalBuilder | WLBuilder | None,
+        reply_sink: Callable[[Reply], None],
+    ) -> None:
+        self._builder = builder
         self._reply_sink = reply_sink
         self._op: str = ""
         self._replica: Any = None
@@ -101,9 +109,25 @@ class BaseWorker:
             "GET_OBSERVERS": self._handle_get_observers,
             "SHUTDOWN": self._handle_shutdown,
         }
+        self._register_extra_handlers()
+
+    def _register_extra_handlers(self) -> None:
+        """Hook for subclasses to add opcodes."""
 
     def _build_replica(self) -> Any:
-        raise NotImplementedError
+        """Construct the replica from the worker's builder.
+
+        Called by ``_run_worker_loop`` on the production path. Raises
+        ``RuntimeError`` if no builder was supplied; the in-process-test
+        path uses ``for_replica`` (which sets ``self._replica``
+        externally and never calls this method).
+        """
+        if self._builder is None:
+            raise RuntimeError(
+                "_build_replica called on a worker constructed with "
+                "builder=None; the caller must set self._replica directly"
+            )
+        return self._builder.build()
 
     def _handle(self, cmd: tuple[Any, ...]) -> None:
         """Dispatch one command through the handler table.
@@ -199,26 +223,11 @@ class BaseWorker:
 
 
 class CanonicalWorker(BaseWorker):
-    """Worker for canonical-ensemble replicas."""
+    """Worker for canonical-ensemble replicas.
 
-    def __init__(
-        self,
-        ce_path: str,
-        atoms_dict: dict[str, Any],
-        temperature: float,
-        seed: int,
-        ensemble_cls: type[CanonicalEnsemble],
-        ensemble_kwargs: dict[str, Any],
-        *,
-        reply_sink: Callable[[Reply], None],
-    ) -> None:
-        super().__init__(reply_sink=reply_sink)
-        self._ce_path = ce_path
-        self._atoms_dict = atoms_dict
-        self._temperature = temperature
-        self._seed = seed
-        self._ensemble_cls = ensemble_cls
-        self._ensemble_kwargs = ensemble_kwargs
+    Adds only the ``for_replica`` test-construction classmethod;
+    all dispatch behaviour is inherited from :class:`BaseWorker`.
+    """
 
     @classmethod
     def for_replica(
@@ -229,70 +238,18 @@ class CanonicalWorker(BaseWorker):
     ) -> CanonicalWorker:
         """Build a worker around a pre-existing replica.
 
-        Skips the production ``ce_path`` / ``atoms_dict`` build path,
-        which is only meaningful inside a spawned subprocess. Used by
-        in-process tests that drive the worker's handler table against
-        a real replica without crossing the pickle boundary.
-
-        Because the build path is skipped, ``_ce_path`` /
-        ``_atoms_dict`` and other build-input attributes are not set.
-        All current handlers operate via ``self._replica``; a handler
-        that needs build-time inputs should accept them as part of the
-        command payload rather than reading them off ``self`` directly,
-        otherwise it will fail when driven via this constructor.
+        For in-process tests that drive the worker's handler table
+        against a real replica without crossing the pickle boundary.
         """
-        worker = cls.__new__(cls)
-        BaseWorker.__init__(worker, reply_sink=reply_sink)
+        worker = cls(builder=None, reply_sink=reply_sink)
         worker._replica = replica
         return worker
-
-    def _build_replica(self) -> Replica:
-        atoms = Atoms(
-            numbers=self._atoms_dict["numbers"],
-            positions=self._atoms_dict["positions"],
-            cell=self._atoms_dict["cell"],
-            pbc=self._atoms_dict["pbc"],
-        )
-        ce = ClusterExpansion.read(self._ce_path)
-        return Replica(
-            cluster_expansion=ce,
-            atoms=atoms,
-            temperature=self._temperature,
-            random_seed=self._seed,
-            ensemble_cls=self._ensemble_cls,
-            ensemble_kwargs=self._ensemble_kwargs,
-            cluster_expansion_path=self._ce_path,
-        )
 
 
 class WangLandauWorker(BaseWorker):
     """Worker for Wang-Landau (REWL) replicas."""
 
-    def __init__(
-        self,
-        ce_path: str,
-        atoms_dict: dict[str, Any],
-        energy_spacing: float,
-        energy_limit_left: float | None,
-        energy_limit_right: float | None,
-        seed: int,
-        ensemble_cls: type[WangLandauEnsemble],
-        ensemble_kwargs: dict[str, Any],
-        *,
-        reply_sink: Callable[[Reply], None],
-    ) -> None:
-        super().__init__(reply_sink=reply_sink)
-        self._ce_path = ce_path
-        self._atoms_dict = atoms_dict
-        self._energy_spacing = energy_spacing
-        self._energy_limit_left = energy_limit_left
-        self._energy_limit_right = energy_limit_right
-        self._seed = seed
-        self._ensemble_cls = ensemble_cls
-        self._ensemble_kwargs = ensemble_kwargs
-        self._register_rewl_handlers()
-
-    def _register_rewl_handlers(self) -> None:
+    def _register_extra_handlers(self) -> None:
         """Add REWL-only opcode handlers to the dispatch table."""
         self._handlers.update({
             "LOG_G_AT": self._handle_log_g_at,
@@ -314,43 +271,12 @@ class WangLandauWorker(BaseWorker):
     ) -> WangLandauWorker:
         """Build a worker around a pre-existing replica.
 
-        Skips the production ``ce_path`` / ``atoms_dict`` build path,
-        which is only meaningful inside a spawned subprocess. Used by
-        in-process tests that drive the worker's handler table against
-        a real replica without crossing the pickle boundary.
-
-        Because the build path is skipped, ``_ce_path`` /
-        ``_atoms_dict`` and other build-input attributes are not set.
-        All current handlers operate via ``self._replica``; a handler
-        that needs build-time inputs should accept them as part of the
-        command payload rather than reading them off ``self`` directly,
-        otherwise it will fail when driven via this constructor.
+        For in-process tests that drive the worker's handler table
+        against a real replica without crossing the pickle boundary.
         """
-        worker = cls.__new__(cls)
-        BaseWorker.__init__(worker, reply_sink=reply_sink)
+        worker = cls(builder=None, reply_sink=reply_sink)
         worker._replica = replica
-        worker._register_rewl_handlers()
         return worker
-
-    def _build_replica(self) -> WangLandauReplica:
-        atoms = Atoms(
-            numbers=self._atoms_dict["numbers"],
-            positions=self._atoms_dict["positions"],
-            cell=self._atoms_dict["cell"],
-            pbc=self._atoms_dict["pbc"],
-        )
-        ce = ClusterExpansion.read(self._ce_path)
-        return WangLandauReplica(
-            cluster_expansion=ce,
-            atoms=atoms,
-            energy_spacing=self._energy_spacing,
-            energy_limit_left=self._energy_limit_left,
-            energy_limit_right=self._energy_limit_right,
-            random_seed=self._seed,
-            ensemble_cls=self._ensemble_cls,
-            ensemble_kwargs=self._ensemble_kwargs,
-            cluster_expansion_path=self._ce_path,
-        )
 
     def _handle_get_dc(self, cmd: tuple[Any, ...]) -> None:
         self._replica.refresh_last_state()
@@ -459,49 +385,13 @@ def _run_worker_loop(worker: BaseWorker, conn: Connection) -> None:
             return
 
 
-def _worker(
-    conn: Connection,
-    ce_path: str,
-    atoms_dict: dict[str, Any],
-    temperature: float,
-    seed: int,
-    ensemble_cls: type[CanonicalEnsemble],
-    ensemble_kwargs: dict[str, Any],
-) -> None:
+def _worker(conn: Connection, builder: CanonicalBuilder) -> None:
     """Canonical worker entry point for Process(target=...)."""
-    worker = CanonicalWorker(
-        ce_path=ce_path,
-        atoms_dict=atoms_dict,
-        temperature=temperature,
-        seed=seed,
-        ensemble_cls=ensemble_cls,
-        ensemble_kwargs=ensemble_kwargs,
-        reply_sink=conn.send,
-    )
+    worker = CanonicalWorker(builder=builder, reply_sink=conn.send)
     _run_worker_loop(worker, conn)
 
 
-def _wl_worker(
-    conn: Connection,
-    ce_path: str,
-    atoms_dict: dict[str, Any],
-    energy_spacing: float,
-    energy_limit_left: float | None,
-    energy_limit_right: float | None,
-    seed: int,
-    ensemble_cls: type[WangLandauEnsemble],
-    ensemble_kwargs: dict[str, Any],
-) -> None:
+def _wl_worker(conn: Connection, builder: WLBuilder) -> None:
     """REWL worker entry point for Process(target=...)."""
-    worker = WangLandauWorker(
-        ce_path=ce_path,
-        atoms_dict=atoms_dict,
-        energy_spacing=energy_spacing,
-        energy_limit_left=energy_limit_left,
-        energy_limit_right=energy_limit_right,
-        seed=seed,
-        ensemble_cls=ensemble_cls,
-        ensemble_kwargs=ensemble_kwargs,
-        reply_sink=conn.send,
-    )
+    worker = WangLandauWorker(builder=builder, reply_sink=conn.send)
     _run_worker_loop(worker, conn)

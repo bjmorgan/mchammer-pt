@@ -30,6 +30,61 @@ def _make_process(toy_ce, toy_atoms, tmp_path: Path) -> ProcessPool:
     )
 
 
+def _spawn_canonical_worker(tmp_path, toy_ce, toy_atoms):
+    """Spawn a single _worker(conn, CanonicalBuilder) and return the connection.
+
+    Mirrors _spawn_wl_worker in test_wl_pool: a focused subprocess smoke test
+    confirming that the canonical entry point accepts a Builder and reaches
+    the STARTUP OK reply.
+
+    Caller is responsible for sending SHUTDOWN and joining.
+    """
+    import multiprocessing as mp
+
+    from mchammer.ensembles import CanonicalEnsemble
+
+    from mchammer_pt.parallel._builder import AtomsSpec, CanonicalBuilder
+    from mchammer_pt.parallel._comms import Reply
+    from mchammer_pt.parallel._worker import _worker
+
+    ce_path = tmp_path / "ce.ce"
+    toy_ce.write(str(ce_path))
+    builder = CanonicalBuilder(
+        ce_path=str(ce_path),
+        atoms=AtomsSpec.from_atoms(toy_atoms),
+        temperature=300.0,
+        seed=42,
+        ensemble_cls=CanonicalEnsemble,
+        ensemble_kwargs={},
+    )
+    ctx = mp.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=True)
+    process = ctx.Process(
+        target=_worker,
+        args=(child_conn, builder),
+        daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    reply = parent_conn.recv()
+    assert reply == Reply("OK", "STARTUP", None)
+    return process, parent_conn
+
+
+def test_canonical_worker_starts_up_with_builder(tmp_path, toy_ce, toy_atoms):
+    """Subprocess smoke test: _worker(conn, CanonicalBuilder) reaches STARTUP OK."""
+    process, parent_conn = _spawn_canonical_worker(tmp_path, toy_ce, toy_atoms)
+    try:
+        parent_conn.send(("SHUTDOWN",))
+        # Drain the shutdown reply.
+        parent_conn.recv()
+    finally:
+        parent_conn.close()
+        process.join(timeout=5.0)
+        if process.is_alive():
+            process.terminate()
+
+
 def test_serial_pool_satisfies_observable_pool(toy_ce, toy_atoms):
     pool = _make_serial(toy_ce, toy_atoms)
     try:
