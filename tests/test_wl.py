@@ -1270,3 +1270,21 @@ def test_walker_seeds_helper_is_deterministic_and_matches_constructor():
     assert [len(ws) for ws in walker_seeds] == [1, 2, 1]
     assert len(group_seeds) == 3
     assert isinstance(master_seed, int)
+
+
+def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
+    """The constructor no longer rejects W>1 + data_container_file."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+        data_container_file=tmp_path / "ckpt.h5",
+    )
+    assert pt is not None

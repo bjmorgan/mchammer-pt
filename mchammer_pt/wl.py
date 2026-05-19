@@ -30,7 +30,6 @@ from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
     _validate_flatness_mode,
@@ -235,9 +234,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"all n_walkers_per_window values must be >= 1; "
                 f"got {walkers_per_window}"
             )
-        if any(w > 1 for w in walkers_per_window) and data_container_file is not None:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-
         walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
             random_seed, walkers_per_window
         )
@@ -776,19 +772,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         cleaned when the returned orchestrator is garbage-collected.
         ``flatness_mode`` and ``merge_cadence`` have the same meaning
         as on :class:`WangLandauParallelTempering`.
-
-        Raises:
-            NotImplementedError: if any ``n_walkers_per_window`` value
-                is > 1 and ``data_container_file`` is not None.
         """
-        _w = n_walkers_per_window
-        multi = (
-            (isinstance(_w, int) and _w > 1)
-            or (not isinstance(_w, int) and any(int(w) > 1 for w in _w))
-        )
-        if multi and data_container_file is not None:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]
