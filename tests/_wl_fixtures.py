@@ -44,3 +44,35 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
         symbols[i] = "Au"
     atoms.set_chemical_symbols(symbols)
     return atoms
+
+
+def make_serial_wl_pool_mixed():
+    """SerialWangLandauPool with walkers_per_window=[1, 2].
+
+    Window 0 holds a bare WangLandauReplica (W=1); window 1 holds a
+    WangLandauWindowGroup with two walkers (W=2). Total M=3 walkers.
+
+    data_container_file is None to satisfy the current W>1 guard.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[1, 2],
+        data_container_file=None,
+    )
+    return pt._pool

@@ -868,6 +868,24 @@ def test_process_pool_finalise_for_reporting_merges_walker_entropies(tmp_path):
                 assert got == expected
 
 
+def test_serial_wl_pool_snapshot_returns_per_walker_and_group_state():
+    """For a pool with one W=1 slot and one W=2 slot, the snapshot
+    returns a dict with M=3 per_walker entries and N=2 group_state
+    entries (None for the W=1 slot)."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed  # [1, 2]
+
+    pool = make_serial_wl_pool_mixed()
+    snap = pool.snapshot_for_checkpoint()
+    assert set(snap.keys()) == {"per_walker", "group_state"}
+    assert len(snap["per_walker"]) == 3
+    assert len(snap["group_state"]) == 2
+    assert snap["group_state"][0] is None  # W=1 slot
+    assert isinstance(snap["group_state"][1], dict)
+    assert set(snap["group_state"][1].keys()) == {
+        "rng_state", "exchange_idx", "phase",
+    }
+
+
 def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path):
     """Single-walker slots are no-ops; their entropy is untouched."""
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)

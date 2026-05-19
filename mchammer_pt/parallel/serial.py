@@ -501,7 +501,20 @@ class SerialWangLandauPool:
             ) from exc
 
     def data_containers(self) -> list[WangLandauDataContainer]:
-        return [r.data_container() for r in self._replicas]
+        """Flat per-walker containers in window-major / walker-minor order.
+
+        For W=1 slots this is the bare replica's single container;
+        for W>1 slots this expands to all walkers in the group.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        out: list[WangLandauDataContainer] = []
+        for slot in self._replicas:
+            if isinstance(slot, WangLandauWindowGroup):
+                out.extend(r.data_container() for r in slot._replicas)
+            else:
+                out.append(slot.data_container())
+        return out
 
     def per_window_data_containers(self) -> list[list[WangLandauDataContainer]]:
         """All data containers grouped by window slot.
@@ -528,8 +541,32 @@ class SerialWangLandauPool:
         for r in self._replicas:
             r.finalise_for_reporting()
 
-    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
-        return [r.snapshot_for_checkpoint() for r in self._replicas]
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Snapshot per-walker and group-level checkpoint state.
+
+        Returns:
+            Dict with:
+                "per_walker": flat list of per-walker snapshot dicts in
+                    window-major / walker-minor order (length M = sum
+                    of walkers_per_window across slots).
+                "group_state": list of length N (one per window slot).
+                    Each entry is a dict with ``rng_state``,
+                    ``exchange_idx``, ``phase`` for W>1 slots, or
+                    ``None`` for bare-replica W=1 slots.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        per_walker: list[dict[str, Any]] = []
+        group_state: list[dict[str, Any] | None] = []
+        for slot in self._replicas:
+            if isinstance(slot, WangLandauWindowGroup):
+                snap = slot.snapshot_for_checkpoint()
+                per_walker.extend(snap["per_walker"])
+                group_state.append(snap["group"])
+            else:
+                per_walker.append(slot.snapshot_for_checkpoint())
+                group_state.append(None)
+        return {"per_walker": per_walker, "group_state": group_state}
 
     def shutdown(self) -> None:
         return None
