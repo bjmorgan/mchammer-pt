@@ -951,6 +951,63 @@ def test_process_wl_pool_snapshot_returns_structured_dict():
         pool.shutdown()
 
 
+def test_process_wl_pool_restore_round_trips_w2():
+    """Snapshot a W=2 process pool, restore into a fresh one; group-level
+    state (exchange_idx, phase) matches the snapshot."""
+    from tests._wl_fixtures import make_process_wl_pool_w2
+
+    pool_a = make_process_wl_pool_w2()
+    try:
+        snap = pool_a.snapshot_for_checkpoint()
+        containers = pool_a.data_containers()
+    finally:
+        pool_a.shutdown()
+
+    pool_b = make_process_wl_pool_w2()
+    try:
+        pool_b.restore_replica_state(
+            containers=containers,
+            per_walker_extras=snap["per_walker"],
+            group_state=snap["group_state"],
+        )
+        for slot, gs in zip(pool_b._slots, snap["group_state"]):
+            if gs is not None:
+                assert slot.exchange_idx == gs["exchange_idx"]
+                assert slot.phase == gs["phase"]
+    finally:
+        pool_b.shutdown()
+
+
+def test_process_wl_pool_restore_rejects_mismatched_inputs():
+    """Wrong-length containers / extras / group_state all raise."""
+    from tests._wl_fixtures import make_process_wl_pool_w2
+
+    pool = make_process_wl_pool_w2()
+    try:
+        snap = pool.snapshot_for_checkpoint()
+        containers = pool.data_containers()
+        with pytest.raises(ValueError, match="expects 4 containers"):
+            pool.restore_replica_state(
+                containers=[],
+                per_walker_extras=snap["per_walker"],
+                group_state=snap["group_state"],
+            )
+        with pytest.raises(ValueError, match="expects 4 extras"):
+            pool.restore_replica_state(
+                containers=containers,
+                per_walker_extras=[],
+                group_state=snap["group_state"],
+            )
+        with pytest.raises(ValueError, match="expects 2 group_state"):
+            pool.restore_replica_state(
+                containers=containers,
+                per_walker_extras=snap["per_walker"],
+                group_state=[],
+            )
+    finally:
+        pool.shutdown()
+
+
 def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path):
     """Single-walker slots are no-ops; their entropy is untouched."""
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)

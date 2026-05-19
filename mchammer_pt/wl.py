@@ -581,6 +581,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         from .checkpoint import (
             _read_orchestrator_state,
             _read_replica_extra,
+            _read_window_groups,
             _validate_kwargs_hash,
         )
         from .history import read_hdf5
@@ -604,6 +605,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
@@ -635,7 +637,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
-                containers, replica_extras
+                containers=containers,
+                per_walker_extras=replica_extras,
+                group_state=window_groups,
             )
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])

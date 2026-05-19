@@ -8,6 +8,7 @@ plumbing.
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import pickle
 from collections.abc import Callable, Mapping, Sequence
@@ -1207,49 +1208,83 @@ class ProcessWangLandauPool:
     def restore_replica_state(
         self,
         containers: list[BaseDataContainer],
-        replica_extras: list[dict[str, Any]],
+        per_walker_extras: list[dict[str, Any]],
+        group_state: list[dict[str, Any] | None],
     ) -> None:
-        """Push saved per-replica state into each worker.
+        """Push saved per-walker and group-level state into the live pool.
 
-        Sends each worker its corresponding `WangLandauDataContainer` and
-        the ``sites_by_species`` cache from ``replica_extras``; the worker
-        applies them via `WangLandauReplica.restore_state`. Used by
-        `WangLandauParallelTempering.resume_process_pool` to bring a
-        freshly-spawned process pool to the saved state.
+        Per-walker state is fanned out to each worker over IPC; group-level
+        state (rng, exchange_idx, phase) is assigned directly to each
+        :class:`ProcessWangLandauWindow` on the orchestrator side — no
+        worker involvement.
 
         Args:
-            containers: one container per worker, in slot order.
-                Length must equal `len(self)`.
-            replica_extras: one per-replica extras dict per worker.
+            containers: flat list of M containers in window-major /
+                walker-minor order. Length must equal the total number of
+                workers across all slots.
+            per_walker_extras: flat list of M extras dicts, same order.
                 Each must carry a ``"sites_by_species"`` key.
+            group_state: list of length N (one entry per window slot).
+                Must be a dict for W>1 slots — carrying ``rng_state``,
+                ``exchange_idx``, and ``phase`` — and ``None`` for W=1
+                slots.
 
         Raises:
             RuntimeError: pool is shut down, or any worker reports an
                 error during restoration.
-            ValueError: lengths of ``containers`` and ``replica_extras``
-                do not match `len(self)`.
+            ValueError: any input list length mismatches, or a
+                ``group_state`` entry has the wrong kind for its slot.
         """
         self._check_open()
-        if len(containers) != len(self):
+        expected_m = sum(len(slot.workers) for slot in self._slots)
+        if len(containers) != expected_m:
             raise ValueError(
-                f"restore_replica_state expects {len(self)} containers, "
+                f"restore_replica_state expects {expected_m} containers, "
                 f"got {len(containers)}"
             )
-        if len(replica_extras) != len(self):
+        if len(per_walker_extras) != expected_m:
             raise ValueError(
-                f"restore_replica_state expects {len(self)} extras dicts, "
-                f"got {len(replica_extras)}"
+                f"restore_replica_state expects {expected_m} extras dicts, "
+                f"got {len(per_walker_extras)}"
             )
-        for slot, container, extra in zip(
-            self._slots, containers, replica_extras, strict=True
-        ):
-            _, conn = slot.workers[0]
-            conn.send(
-                ("RESTORE_STATE", container, extra["sites_by_species"])
+        if len(group_state) != len(self._slots):
+            raise ValueError(
+                f"restore_replica_state expects {len(self._slots)} "
+                f"group_state entries, got {len(group_state)}"
             )
-        for i, slot in enumerate(self._slots):
-            _, conn = slot.workers[0]
-            recv_reply(conn, "RESTORE_STATE", i)
+
+        # Phase 1: fan out RESTORE_STATE to every worker.
+        offset = 0
+        for slot in self._slots:
+            for w, (_, conn) in enumerate(slot.workers):
+                conn.send((
+                    "RESTORE_STATE",
+                    containers[offset + w],
+                    per_walker_extras[offset + w]["sites_by_species"],
+                ))
+            offset += len(slot.workers)
+
+        # Phase 2: drain acks in the same order.
+        for g, slot in enumerate(self._slots):
+            for w, (_, conn) in enumerate(slot.workers):
+                recv_reply(conn, "RESTORE_STATE", f"window {g} walker {w}")
+
+        # Group-level state: assign directly to ProcessWangLandauWindow.
+        for slot, gs in zip(self._slots, group_state, strict=True):
+            multi = len(slot.workers) > 1
+            if gs is None:
+                if multi:
+                    raise ValueError(
+                        "group_state entry is None for a multi-walker slot"
+                    )
+                continue
+            if not multi:
+                raise ValueError(
+                    "group_state entry is non-None for a bare-replica slot"
+                )
+            slot.rng.bit_generator.state = json.loads(gs["rng_state"])
+            slot.exchange_idx = int(gs["exchange_idx"])
+            slot.phase = gs["phase"]
 
     def attach_observer(
         self,
