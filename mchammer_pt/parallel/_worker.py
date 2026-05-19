@@ -79,9 +79,10 @@ class BaseWorker:
     ``Connection``. The production read loop lives in
     ``_run_worker_loop``.
 
-    Subclasses override ``_register_extra_handlers`` to add opcodes
-    beyond the base set. The base ``_build_replica`` delegates to
-    ``builder.build()``; subclasses do not override it.
+    Subclasses do not provide their own ``__init__`` or
+    ``_build_replica``: construction is handled here, replica
+    construction lives on the :class:`Builder`. Subclasses override
+    ``_register_extra_handlers`` to add opcodes beyond the base set.
     """
 
     def __init__(
@@ -111,20 +112,21 @@ class BaseWorker:
         self._register_extra_handlers()
 
     def _register_extra_handlers(self) -> None:
-        """Hook for subclasses to add opcodes. Default: no-op."""
+        """Hook for subclasses to add opcodes."""
 
     def _build_replica(self) -> Any:
         """Construct the replica from the worker's builder.
 
-        Called by ``_run_worker_loop`` on the production path. Asserts
-        that a builder was supplied; the in-process-test path uses
-        ``for_replica`` (which sets ``self._replica`` externally and
-        never calls this method).
+        Called by ``_run_worker_loop`` on the production path. Raises
+        ``RuntimeError`` if no builder was supplied; the in-process-test
+        path uses ``for_replica`` (which sets ``self._replica``
+        externally and never calls this method).
         """
-        assert self._builder is not None, (
-            "_build_replica called on a worker constructed with "
-            "builder=None; the caller must set self._replica directly"
-        )
+        if self._builder is None:
+            raise RuntimeError(
+                "_build_replica called on a worker constructed with "
+                "builder=None; the caller must set self._replica directly"
+            )
         return self._builder.build()
 
     def _handle(self, cmd: tuple[Any, ...]) -> None:
@@ -223,10 +225,8 @@ class BaseWorker:
 class CanonicalWorker(BaseWorker):
     """Worker for canonical-ensemble replicas.
 
-    Empty marker subclass: all behaviour is inherited from
-    :class:`BaseWorker`. The class is kept as a named type so the
-    canonical entry point :func:`_worker` and any future
-    canonical-specific overrides have a place to live.
+    Adds only the ``for_replica`` test-construction classmethod;
+    all dispatch behaviour is inherited from :class:`BaseWorker`.
     """
 
     @classmethod

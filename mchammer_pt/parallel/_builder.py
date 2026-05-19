@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion
 from mchammer.ensembles import CanonicalEnsemble, WangLandauEnsemble
@@ -21,28 +22,61 @@ from ..wl_replica import WangLandauReplica
 
 
 @dataclass(frozen=True, slots=True)
+class AtomsSpec:
+    """Serialisable spec for :class:`ase.Atoms`.
+
+    Carries the four ase.Atoms fields that the workers need
+    (``numbers``, ``positions``, ``cell``, ``pbc``) as numpy arrays so
+    the spec can cross the pickle boundary cleanly.
+    """
+
+    numbers: np.ndarray
+    positions: np.ndarray
+    cell: np.ndarray
+    pbc: np.ndarray
+
+    @classmethod
+    def from_atoms(cls, atoms: Atoms) -> AtomsSpec:
+        """Capture an ``Atoms`` instance as a serialisable spec."""
+        return cls(
+            numbers=np.asarray(atoms.numbers, dtype=np.int64),
+            positions=np.asarray(atoms.positions, dtype=np.float64),
+            cell=np.asarray(atoms.cell.array, dtype=np.float64),
+            pbc=np.asarray(atoms.pbc, dtype=bool),
+        )
+
+    def to_atoms(self) -> Atoms:
+        """Reconstruct an ``Atoms`` instance from this spec."""
+        return Atoms(
+            numbers=self.numbers,
+            positions=self.positions,
+            cell=self.cell,
+            pbc=self.pbc,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CanonicalBuilder:
     """Build inputs for a canonical-ensemble :class:`Replica`."""
 
     ce_path: str
-    atoms_dict: dict[str, Any]
+    atoms: AtomsSpec
     temperature: float
     seed: int
     ensemble_cls: type[CanonicalEnsemble]
     ensemble_kwargs: dict[str, Any]
 
     def build(self) -> Replica:
-        """Construct the replica from the configured inputs."""
-        atoms = Atoms(
-            numbers=self.atoms_dict["numbers"],
-            positions=self.atoms_dict["positions"],
-            cell=self.atoms_dict["cell"],
-            pbc=self.atoms_dict["pbc"],
-        )
+        """Construct the replica from the configured inputs.
+
+        Reads ``ce_path`` from disk (typically inside the spawned
+        subprocess) and forwards everything to the :class:`Replica`
+        constructor.
+        """
         ce = ClusterExpansion.read(self.ce_path)
         return Replica(
             cluster_expansion=ce,
-            atoms=atoms,
+            atoms=self.atoms.to_atoms(),
             temperature=self.temperature,
             random_seed=self.seed,
             ensemble_cls=self.ensemble_cls,
@@ -56,7 +90,7 @@ class WLBuilder:
     """Build inputs for a Wang-Landau :class:`WangLandauReplica`."""
 
     ce_path: str
-    atoms_dict: dict[str, Any]
+    atoms: AtomsSpec
     energy_spacing: float
     energy_limit_left: float | None
     energy_limit_right: float | None
@@ -65,17 +99,16 @@ class WLBuilder:
     ensemble_kwargs: dict[str, Any]
 
     def build(self) -> WangLandauReplica:
-        """Construct the replica from the configured inputs."""
-        atoms = Atoms(
-            numbers=self.atoms_dict["numbers"],
-            positions=self.atoms_dict["positions"],
-            cell=self.atoms_dict["cell"],
-            pbc=self.atoms_dict["pbc"],
-        )
+        """Construct the replica from the configured inputs.
+
+        Reads ``ce_path`` from disk (typically inside the spawned
+        subprocess) and forwards everything to the
+        :class:`WangLandauReplica` constructor.
+        """
         ce = ClusterExpansion.read(self.ce_path)
         return WangLandauReplica(
             cluster_expansion=ce,
-            atoms=atoms,
+            atoms=self.atoms.to_atoms(),
             energy_spacing=self.energy_spacing,
             energy_limit_left=self.energy_limit_left,
             energy_limit_right=self.energy_limit_right,

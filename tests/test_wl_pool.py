@@ -57,7 +57,7 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
 
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.parallel._builder import WLBuilder
+    from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
     from mchammer_pt.parallel._worker import _wl_worker
     from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
@@ -69,15 +69,9 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
             occupations=atoms.numbers
         )
     )
-    atoms_dict = {
-        "numbers": np.asarray(atoms.numbers, dtype=np.int64),
-        "positions": np.asarray(atoms.positions, dtype=np.float64),
-        "cell": np.asarray(atoms.cell.array, dtype=np.float64),
-        "pbc": np.asarray(atoms.pbc, dtype=bool),
-    }
     builder = WLBuilder(
         ce_path=str(ce_path),
-        atoms_dict=atoms_dict,
+        atoms=AtomsSpec.from_atoms(atoms),
         energy_spacing=0.1,
         energy_limit_left=e0 - 100.0,
         energy_limit_right=e0 + 100.0,
