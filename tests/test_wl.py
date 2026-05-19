@@ -777,23 +777,6 @@ def test_wl_pt_n_walkers_2_creates_window_groups():
     assert len(pt.pool.replicas[1]._replicas) == 2
 
 
-def test_wl_pt_n_walkers_2_rejects_data_container_file():
-    """data_container_file with n_walkers_per_window > 1 raises NotImplementedError."""
-    from mchammer_pt.wl import WangLandauParallelTempering
-
-    e0 = _initial_energy()
-    with pytest.raises(NotImplementedError, match="checkpointing"):
-        WangLandauParallelTempering(
-            cluster_expansion=make_wl_ce(),
-            atoms=[make_wl_atoms(), make_wl_atoms()],
-            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
-            energy_spacing=0.1,
-            block_size=5,
-            random_seed=0,
-            n_walkers_per_window=2,
-            data_container_file="test.hdf5",
-        )
-
 
 def test_wl_pt_n_walkers_per_window_sequence_mixed_slot_types():
     """n_walkers_per_window=[1, 2]: W=1 window is a bare replica, W=2 is a group."""
@@ -1382,3 +1365,51 @@ def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
         data_container_file=tmp_path / "ckpt.h5",
     )
     assert pt is not None
+
+
+def test_wl_pt_checkpoint_round_trip_mixed_walkers_per_window(tmp_path):
+    """walkers_per_window=[1, 2, 1] round-trips through save/resume.
+
+    Asserts structural correctness only — per the relaxed W>1 same-pool
+    contract documented in test_wl_pt_resume_w2_round_trips. The
+    heterogeneous slot layout exercises the bare-replica / WindowGroup
+    dispatch path in both snapshot and restore.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms(), make_wl_atoms()],
+        windows=[
+            (None, e0 + 50.0),
+            (e0 - 50.0, e0 + 50.0),
+            (e0 - 50.0, None),
+        ],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[1, 2, 1],
+    )
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    resumed = WangLandauParallelTempering.resume(
+        path, cluster_expansion=make_wl_ce(),
+    )
+
+    # Pool structure: 3 slots — bare/group/bare.
+    assert len(resumed.pool) == 3
+    assert isinstance(resumed.pool.replicas[0], WangLandauReplica)
+    assert isinstance(resumed.pool.replicas[1], WangLandauWindowGroup)
+    assert len(resumed.pool.replicas[1]._replicas) == 2
+    assert isinstance(resumed.pool.replicas[2], WangLandauReplica)
+
+    history = resumed.run(n_cycles=2)
+    assert history.energies_per_cycle.shape == (3, 3)
+    assert np.all(np.isfinite(resumed.pool.current_energies()))
+    for wr in resumed.results():
+        assert wr.get_entropy() is not None
