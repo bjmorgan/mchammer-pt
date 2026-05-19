@@ -579,3 +579,67 @@ def test_resume_rejects_mismatched_ensemble_kwargs_hash(toy_ce, toy_atoms, tmp_p
             cluster_expansion=toy_ce,
             ensemble_kwargs={"user_tag": "second"},
         )
+
+
+def test_read_window_groups_returns_one_entry_per_window(tmp_path):
+    """Returns list[dict|None] of length N; None for windows whose
+    subgroup is absent (W=1 by convention)."""
+    import h5py
+    from mchammer_pt.checkpoint import _read_window_groups
+
+    path = tmp_path / "t.h5"
+    with h5py.File(path, "w") as f:
+        meta = f.create_group("meta")
+        meta.attrs["walkers_per_window"] = np.array([1, 2, 1], dtype=np.int32)
+        wg = f.create_group("orchestrator/window_groups")
+        sub = wg.create_group("1")
+        sub.create_dataset("rng_state", data='{"bit_generator": "PCG64"}')
+        sub.create_dataset("exchange_idx", data=np.int32(1))
+        sub.create_dataset("phase", data="1_over_t")
+
+    out = _read_window_groups(path)
+    assert out[0] is None
+    assert out[1] == {
+        "rng_state": '{"bit_generator": "PCG64"}',
+        "exchange_idx": 1,
+        "phase": "1_over_t",
+    }
+    assert out[2] is None
+
+
+def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
+    """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely
+    (or leaves the group empty); _read_window_groups returns all Nones."""
+    import h5py
+    from mchammer_pt.checkpoint import _read_window_groups
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    def _initial_energy():
+        from mchammer.calculators import ClusterExpansionCalculator
+        return float(
+            ClusterExpansionCalculator(make_wl_atoms(), make_wl_ce())
+            .calculate_total(occupations=make_wl_atoms().numbers)
+        )
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r") as f:
+        wg = f["orchestrator"].get("window_groups")
+        # Either absent entirely, or present-but-empty.
+        if wg is not None:
+            assert len(wg.keys()) == 0
+    assert _read_window_groups(path) == [None, None]

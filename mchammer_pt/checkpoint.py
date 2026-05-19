@@ -240,6 +240,62 @@ def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     return {"replica_labels": replica_labels, "rng_state": rng_state}
 
 
+def _read_window_groups(path: Path | str) -> list[dict | None]:
+    """Read per-window group-level state from a v4 checkpoint.
+
+    Returns:
+        One entry per window. Each entry is a dict with keys
+        ``rng_state`` (JSON str), ``exchange_idx`` (int), and
+        ``phase`` (str) when ``/orchestrator/window_groups/<g>/``
+        exists; ``None`` when the subgroup is absent (the W=1
+        convention).
+
+    Raises:
+        FileNotFoundError: if `path` does not exist.
+        KeyError: if ``/meta``, ``/meta/walkers_per_window``, or
+            ``/orchestrator`` is missing — sign of a pre-v4 file or
+            one that was not written as a checkpoint.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"no such file: {path}")
+    with h5py.File(path, "r") as f:
+        if (
+            "meta" not in f
+            or "walkers_per_window" not in f["meta"].attrs
+            or "orchestrator" not in f
+        ):
+            raise KeyError(
+                f"{path}: missing /meta/walkers_per_window or "
+                f"/orchestrator; not a v4 checkpoint."
+            )
+        wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
+        n_windows = len(wpw)
+        wg_parent = f["orchestrator"].get("window_groups")
+        out: list[dict | None] = []
+        for g in range(n_windows):
+            if wg_parent is None or str(g) not in wg_parent:
+                out.append(None)
+                continue
+            sub = wg_parent[str(g)]
+            rng_raw = sub["rng_state"][()]
+            phase_raw = sub["phase"][()]
+            out.append({
+                "rng_state": (
+                    rng_raw.decode("utf-8")
+                    if isinstance(rng_raw, bytes)
+                    else str(rng_raw)
+                ),
+                "exchange_idx": int(sub["exchange_idx"][()]),
+                "phase": (
+                    phase_raw.decode("utf-8")
+                    if isinstance(phase_raw, bytes)
+                    else str(phase_raw)
+                ),
+            })
+    return out
+
+
 def _serialise_rng_state(rng: np.random.Generator) -> str:
     """JSON-encode `rng.bit_generator.state` for HDF5 round-trip.
 
