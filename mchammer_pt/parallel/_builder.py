@@ -23,11 +23,21 @@ from ..wl_replica import WangLandauReplica
 
 @dataclass(frozen=True, slots=True)
 class AtomsSpec:
-    """Serialisable spec for :class:`ase.Atoms`.
+    """Pickle-safe spec for an ``ase.Atoms`` instance.
 
-    Carries the four ase.Atoms fields that the workers need
-    (``numbers``, ``positions``, ``cell``, ``pbc``) as numpy arrays so
-    the spec can cross the pickle boundary cleanly.
+    ``ase.Atoms`` is not reliably picklable (its ``Cell`` carries
+    C-extension state); ``AtomsSpec`` captures the four fields the
+    workers need as plain numpy arrays so a worker's builder can
+    reconstruct the ``Atoms`` inside the spawned subprocess.
+
+    Attributes:
+        numbers: ``(N,)`` ``int64`` array of atomic numbers, one per
+            site.
+        positions: ``(N, 3)`` ``float64`` array of Cartesian
+            coordinates (angstrom).
+        cell: ``(3, 3)`` ``float64`` array; rows are the cell vectors
+            (angstrom).
+        pbc: ``(3,)`` ``bool`` array; per-axis periodic boundary flags.
     """
 
     numbers: np.ndarray
