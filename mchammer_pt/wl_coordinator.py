@@ -12,12 +12,6 @@ from typing import Any, Literal
 
 import numpy as np
 
-_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED = (
-    "checkpointing is not yet supported for n_walkers_per_window > 1; "
-    "pass data_container_file=None and avoid save_checkpoint() / "
-    "attach_checkpoint_writer() when using multiple walkers per window."
-)
-
 
 @dataclass(frozen=True, slots=True)
 class WalkerPostBlockState:
