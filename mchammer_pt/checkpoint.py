@@ -360,7 +360,15 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     # `data_containers()` because the snapshot side-effect populates
     # each container's `_last_state`, which mchammer's
     # `_restart_ensemble` reads on resume.
-    replica_extra = pt._pool.snapshot_for_checkpoint()  # type: ignore[attr-defined]
+    snapshot = pt._pool.snapshot_for_checkpoint()  # type: ignore[attr-defined]
+    if isinstance(snapshot, dict):
+        # WL pools (v4 shape): per_walker + group_state.
+        replica_extra = snapshot["per_walker"]
+        window_groups = snapshot["group_state"]
+    else:
+        # Canonical PT pools still return a flat list.
+        replica_extra = snapshot
+        window_groups = None
     write_hdf5(
         Path(path),
         history=pt._history,  # type: ignore[attr-defined]
@@ -368,6 +376,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         meta=meta,
         orchestrator_state=orchestrator_state,
         replica_extra=replica_extra,
+        window_groups=window_groups,
     )
 
 

@@ -607,6 +607,41 @@ def test_read_window_groups_returns_one_entry_per_window(tmp_path):
     assert out[2] is None
 
 
+def test_write_checkpoint_passes_window_groups_through_to_hdf5(tmp_path):
+    """A W=2 PT round-trips through save_checkpoint with
+    /orchestrator/window_groups/<g>/ on disk."""
+    import h5py
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+    with h5py.File(path, "r") as f:
+        assert "orchestrator/window_groups/0" in f
+        assert "orchestrator/window_groups/1" in f
+        assert "exchange_idx" in f["orchestrator/window_groups/0"]
+
+
 def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
     """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely
     (or leaves the group empty); _read_window_groups returns all Nones."""
