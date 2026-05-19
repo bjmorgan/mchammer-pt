@@ -649,10 +649,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         _, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "3":
+        if schema_version != "4":
             raise ValueError(
-                f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '3' only."
+                f"{path}: unsupported schema_version {schema_version!r}; this "
+                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
+                f"with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -671,6 +672,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
+        walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
         # Checkpoints written before ``flatness_mode`` and
         # ``merge_cadence`` were persisted in meta resume with the
         # values that were the defaults at the time of writing
@@ -682,17 +684,23 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("merge_cadence", "at_halve")
         )  # type: ignore[assignment]
 
-        atoms_list = [container.structure.copy() for container in containers]
+        # One Atoms per window (not per walker) for the constructor path.
+        atoms_per_window: list[Atoms] = []
+        offset = 0
+        for g in range(len(windows)):
+            atoms_per_window.append(containers[offset].structure.copy())
+            offset += walkers_per_window[g]
 
         pt = cls.process_pool(
             cluster_expansion=cluster_expansion,
-            atoms=atoms_list,
+            atoms=atoms_per_window,
             windows=windows,
             energy_spacing=energy_spacing,
             block_size=block_size,
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            n_walkers_per_window=walkers_per_window,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
         )

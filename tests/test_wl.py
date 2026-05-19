@@ -995,22 +995,25 @@ def test_wl_pt_results_matches_data_containers_w1():
             assert wr_entropy["entropy"].min() == 0.0  # min-shifted
 
 
-def test_wl_pt_process_pool_rejects_multi_walker_with_checkpoint():
-    """process_pool() rejects n_walkers > 1 with data_container_file before spawning."""
+def test_wl_pt_process_pool_accepts_multi_walker_with_checkpoint(tmp_path):
+    """process_pool() accepts n_walkers > 1 with data_container_file."""
     from mchammer_pt.wl import WangLandauParallelTempering
 
     e0 = _initial_energy()
-    with pytest.raises(NotImplementedError, match="checkpointing"):
-        WangLandauParallelTempering.process_pool(
-            cluster_expansion=make_wl_ce(),
-            atoms=[make_wl_atoms(), make_wl_atoms()],
-            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
-            energy_spacing=0.1,
-            block_size=5,
-            random_seed=0,
-            n_walkers_per_window=2,
-            data_container_file="test.hdf5",
-        )
+    pt = WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+        data_container_file=tmp_path / "ckpt.hdf5",
+    )
+    try:
+        assert pt is not None
+    finally:
+        pt._pool.shutdown()
 
 
 def test_wl_pt_serial_w1_slot_is_bare_replica():
@@ -1319,6 +1322,48 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
     assert np.all(np.isfinite(resumed.pool.current_energies()))
     for wr in resumed.results():
         assert wr.get_entropy() is not None
+
+
+def test_wl_pt_resume_process_pool_w2_round_trips(tmp_path):
+    """W=2 process pool resume reconstructs structure and continues without errors.
+
+    Same relaxed contract as the serial-pool W=2 resume test
+    (test_wl_pt_resume_w2_round_trips): finalise_for_reporting in run()'s
+    finally destroys pre-merge per-walker entropy, so resumed runs are
+    structurally correct but not bit-identical to uninterrupted runs.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering.process_pool(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    try:
+        pt.run(n_cycles=2)
+        path = tmp_path / "ckpt.h5"
+        pt.save_checkpoint(path)
+    finally:
+        pt._pool.shutdown()
+
+    resumed = WangLandauParallelTempering.resume_process_pool(
+        path, cluster_expansion=make_wl_ce(),
+    )
+    try:
+        assert len(resumed._pool) == 2
+        assert all(len(slot.workers) == 2 for slot in resumed._pool._slots)
+        history = resumed.run(n_cycles=2)
+        assert history.energies_per_cycle.shape == (3, 2)
+        assert np.all(np.isfinite(resumed._pool.current_energies()))
+        for wr in resumed.results():
+            assert wr.get_entropy() is not None
+    finally:
+        resumed._pool.shutdown()
 
 
 def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
