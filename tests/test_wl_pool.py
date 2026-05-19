@@ -699,24 +699,6 @@ def test_process_wl_pool_at_halve_cadence_skips_non_halve_merge(tmp_path):
         assert e0_dict != e1_dict
 
 
-def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
-    """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
-    from tests._in_process_pool import make_in_process_wl_pool
-
-    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
-    pool = make_in_process_wl_pool(
-        tmp_path,
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        seeds=[0],
-        n_walkers_per_window=2,
-    )
-    try:
-        with pytest.raises(NotImplementedError, match="checkpointing"):
-            pool.snapshot_for_checkpoint()
-    finally:
-        pool.shutdown()
-
-
 def test_wl_worker_advance_ack_carries_state(tmp_path):
     """ADVANCE ack returns a WalkerPostBlockState with typed fields."""
     from mchammer_pt.wl_coordinator import WalkerPostBlockState
@@ -950,6 +932,23 @@ def test_serial_wl_pool_restore_rejects_mismatched_group_state_kind():
             per_walker_extras=snap["per_walker"],
             group_state=flipped,
         )
+
+
+def test_process_wl_pool_snapshot_returns_structured_dict():
+    """ProcessWangLandauPool snapshot under W=2 returns per_walker
+    (length M) and group_state (length N, dicts for W>1 slots)."""
+    from tests._wl_fixtures import make_process_wl_pool_w2  # 2 windows x W=2
+
+    pool = make_process_wl_pool_w2()
+    try:
+        snap = pool.snapshot_for_checkpoint()
+        assert set(snap.keys()) == {"per_walker", "group_state"}
+        assert len(snap["per_walker"]) == 4
+        assert len(snap["group_state"]) == 2
+        for gs in snap["group_state"]:
+            assert set(gs.keys()) == {"rng_state", "exchange_idx", "phase"}
+    finally:
+        pool.shutdown()
 
 
 def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path):

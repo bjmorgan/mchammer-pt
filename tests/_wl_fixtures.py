@@ -8,6 +8,9 @@ deterministic.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 from ase import Atoms
 from ase.build import bulk
@@ -44,6 +47,38 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
         symbols[i] = "Au"
     atoms.set_chemical_symbols(symbols)
     return atoms
+
+
+def make_process_wl_pool_w2():
+    """ProcessWangLandauPool (in-process workers) with 2 windows x W=2.
+
+    Both windows share the same energy range; W=2 walkers per window
+    gives M=4 total walkers. ``data_container_file`` is not used for
+    in-process pools, so the W>1 + file guard in ``process_pool`` is
+    irrelevant here.
+
+    Returns a :class:`ProcessWangLandauPool` backed by
+    :class:`InProcessWorkerConn` instances. Callers are responsible for
+    calling ``pool.shutdown()`` after use.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    tmp_dir = tempfile.mkdtemp()
+    return make_in_process_wl_pool(
+        Path(tmp_dir),
+        windows=[(lo, hi), (lo, hi)],
+        seeds=[0, 1],
+        n_walkers_per_window=2,
+    )
 
 
 def make_serial_wl_pool_mixed():

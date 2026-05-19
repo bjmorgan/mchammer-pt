@@ -28,10 +28,9 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
-from ..checkpoint import _compute_ensemble_kwargs_hash
+from ..checkpoint import _compute_ensemble_kwargs_hash, _serialise_rng_state
 from ..replica import Replica
 from ..wl_coordinator import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
     Phase,
@@ -1119,9 +1118,12 @@ class ProcessWangLandauPool:
         return result
 
     def data_containers(self) -> list[BaseDataContainer]:
+        """Flat per-walker containers in window-major / walker-minor order."""
         self._check_open()
         targets = [
-            (slot.workers[0][1], i) for i, slot in enumerate(self._slots)
+            (conn, f"window {g} walker {w}")
+            for g, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
         ]
         return broadcast_gather(targets, ("GET_DC",))
 
@@ -1168,14 +1170,39 @@ class ProcessWangLandauPool:
             offset += n_workers
         return result
 
-    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Snapshot per-walker and group-level checkpoint state across workers.
+
+        Returns:
+            Dict with:
+                ``"per_walker"``: list of M dicts in window-major /
+                    walker-minor order, each from a worker's
+                    ``SNAPSHOT_FOR_CHECKPOINT`` handler.
+                ``"group_state"``: list of length N (one per window slot).
+                    Dict containing ``rng_state``, ``exchange_idx``, and
+                    ``phase`` for W>1 slots (pulled from the
+                    orchestrator-side
+                    :class:`ProcessWangLandauWindow`); ``None`` for W=1
+                    slots.
+        """
         self._check_open()
-        if any(len(slot.workers) > 1 for slot in self._slots):
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
         targets = [
-            (slot.workers[0][1], i) for i, slot in enumerate(self._slots)
+            (conn, f"window {g} walker {w}")
+            for g, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
         ]
-        return broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
+        per_walker = broadcast_gather(targets, ("SNAPSHOT_FOR_CHECKPOINT",))
+        group_state: list[dict[str, Any] | None] = []
+        for slot in self._slots:
+            if len(slot.workers) > 1:
+                group_state.append({
+                    "rng_state": _serialise_rng_state(slot.rng),
+                    "exchange_idx": int(slot.exchange_idx),
+                    "phase": slot.phase,
+                })
+            else:
+                group_state.append(None)
+        return {"per_walker": per_walker, "group_state": group_state}
 
     def restore_replica_state(
         self,
