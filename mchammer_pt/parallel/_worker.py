@@ -241,10 +241,7 @@ class CanonicalWorker(BaseWorker):
         For in-process tests that drive the worker's handler table
         against a real replica without crossing the pickle boundary.
         """
-        worker = cls.__new__(cls)
-        BaseWorker.__init__(
-            worker, builder=None, reply_sink=reply_sink
-        )
+        worker = cls(builder=None, reply_sink=reply_sink)
         worker._replica = replica
         return worker
 
@@ -277,11 +274,7 @@ class WangLandauWorker(BaseWorker):
         For in-process tests that drive the worker's handler table
         against a real replica without crossing the pickle boundary.
         """
-        worker = cls.__new__(cls)
-        BaseWorker.__init__(
-            worker, builder=None, reply_sink=reply_sink
-        )
-        worker._register_extra_handlers()
+        worker = cls(builder=None, reply_sink=reply_sink)
         worker._replica = replica
         return worker
 
