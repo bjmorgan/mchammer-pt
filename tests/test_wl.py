@@ -1272,6 +1272,55 @@ def test_walker_seeds_helper_is_deterministic_and_matches_constructor():
     assert isinstance(master_seed, int)
 
 
+def test_wl_pt_resume_w2_round_trips(tmp_path):
+    """Save mid-run with W=2, resume, and continue running without errors.
+
+    W>1 resume does not guarantee bit-identical continuation: ``run()``
+    calls ``finalise_for_reporting`` at exit, which merges per-walker
+    entropies in each window group. The resumed walkers therefore start
+    from the merged entropy rather than the individual entropies they
+    held at the split point, so the MC acceptance chain diverges from
+    an uninterrupted run. The test instead checks that:
+
+    - ``resume`` reconstructs the correct pool structure (W=2 slots).
+    - The resumed run completes without errors.
+    - All per-window results return non-None entropy.
+    - Current energies are finite after resuming.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    resumed = WangLandauParallelTempering.resume(
+        path, cluster_expansion=make_wl_ce(),
+    )
+
+    # Pool structure: 2 WangLandauWindowGroup slots, each with 2 replicas.
+    assert len(resumed.pool) == 2
+    for slot in resumed.pool.replicas:
+        assert isinstance(slot, WangLandauWindowGroup)
+        assert len(slot._replicas) == 2
+
+    history = resumed.run(n_cycles=2)
+    assert history.energies_per_cycle.shape == (3, 2)
+    assert np.all(np.isfinite(resumed.pool.current_energies()))
+    for wr in resumed.results():
+        assert wr.get_entropy() is not None
+
+
 def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
     """The constructor no longer rejects W>1 + data_container_file."""
     from mchammer_pt.wl import WangLandauParallelTempering

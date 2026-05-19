@@ -471,27 +471,30 @@ class WangLandauParallelTempering(BaseParallelTempering):
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
 
-        Schema-3 only. CE identity, ensemble_cls FQN, and
+        Schema-4 only. CE identity, ensemble_cls FQN, and
         ensemble_kwargs hash validate against the checkpoint;
         mismatches raise. Bit-identical resume requires the original
         `_sites_by_species` cache, which is persisted in the
-        checkpoint.
+        checkpoint. Supports any mix of W=1 and W>1 windows.
         """
         import json
 
         from .checkpoint import (
             _read_orchestrator_state,
             _read_replica_extra,
+            _read_window_groups,
             _validate_kwargs_hash,
         )
         from .history import read_hdf5
+        from .wl_window_group import WangLandauWindowGroup
 
         _, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "3":
+        if schema_version != "4":
             raise ValueError(
-                f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '3' only."
+                f"{path}: unsupported schema_version {schema_version!r}; this "
+                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
+                f"with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -505,10 +508,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
+        walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
         # Checkpoints written before ``flatness_mode`` and
         # ``merge_cadence`` were persisted in meta resume with the
         # values that were the defaults at the time of writing
@@ -520,43 +525,75 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("merge_cadence", "at_halve")
         )  # type: ignore[assignment]
 
+        walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
+            random_seed, walkers_per_window
+        )
+
         atoms_list = [container.structure.copy() for container in containers]
-        # Per-replica random_seed is overwritten by restart_from via
-        # restore_state before any MC step runs; the orchestrator's
-        # RNG is loaded from saved JSON below. Pass random_seed
-        # directly to every replica.
-        replicas = [
-            WangLandauReplica.restart_from(
-                container,
-                cluster_expansion=cluster_expansion,
-                atoms=atoms,
-                energy_spacing=energy_spacing,
-                energy_limit_left=lo,
-                energy_limit_right=hi,
-                random_seed=random_seed,
-                ensemble_cls=ensemble_cls,
-                ensemble_kwargs=ensemble_kwargs,
-                sites_by_species=extra["sites_by_species"],
-            )
-            for container, atoms, (lo, hi), extra in zip(
-                containers,
-                atoms_list,
-                windows,
-                replica_extras,
-                strict=True,
-            )
-        ]
-        # Resume is W=1-only today; bare replicas serve directly as slots.
-        slots: list[WangLandauSlot] = list(replicas)
+
+        # Build the flat list of replicas (one per walker across all windows).
+        # Per-replica RNG state is restored inside restart_from; the seed
+        # passed here is only used to initialise the ensemble before restore.
+        flat_replicas: list[WangLandauReplica] = []
+        flat_idx = 0
+        for g, (lo, hi) in enumerate(windows):
+            for w in range(walkers_per_window[g]):
+                flat_replicas.append(
+                    WangLandauReplica.restart_from(
+                        containers[flat_idx],
+                        cluster_expansion=cluster_expansion,
+                        atoms=atoms_list[flat_idx],
+                        energy_spacing=energy_spacing,
+                        energy_limit_left=lo,
+                        energy_limit_right=hi,
+                        random_seed=walker_seeds[g][w],
+                        ensemble_cls=ensemble_cls,
+                        ensemble_kwargs=ensemble_kwargs,
+                        sites_by_species=replica_extras[flat_idx]["sites_by_species"],
+                    )
+                )
+                flat_idx += 1
+
+        # Build slots: bare replica for W=1 windows, WindowGroup for W>1.
+        slots: list[WangLandauSlot] = []
+        offset = 0
+        for g in range(len(windows)):
+            nw = walkers_per_window[g]
+            if nw == 1:
+                slots.append(flat_replicas[offset])
+            else:
+                gs = window_groups[g]
+                if gs is None:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g} missing despite "
+                        f"walkers_per_window[{g}] = {nw}; corrupted checkpoint."
+                    )
+                group = WangLandauWindowGroup(
+                    flat_replicas[offset : offset + nw],
+                    random_seed=group_seeds[g],
+                )
+                group._rng.bit_generator.state = json.loads(gs["rng_state"])
+                group._exchange_idx = int(gs["exchange_idx"])
+                slots.append(group)
+            offset += nw
+
         pool = SerialWangLandauPool(
             slots,
             energy_spacing=energy_spacing,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
         )
+
+        # One Atoms per window (not per walker) for the constructor.
+        atoms_per_window: list[Atoms] = []
+        offset = 0
+        for g in range(len(windows)):
+            atoms_per_window.append(atoms_list[offset])
+            offset += walkers_per_window[g]
+
         pt = cls(
             cluster_expansion=cluster_expansion,
-            atoms=atoms_list,
+            atoms=atoms_per_window,
             windows=windows,
             energy_spacing=energy_spacing,
             block_size=block_size,
@@ -564,6 +601,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool=pool,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
         pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
