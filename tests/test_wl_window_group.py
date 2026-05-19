@@ -290,13 +290,22 @@ def test_mismatched_flatness_limits_raises():
         WangLandauWindowGroup([r0, r1], random_seed=0)
 
 
-def test_snapshot_for_checkpoint_raises():
-    """snapshot_for_checkpoint raises NotImplementedError."""
+def test_window_group_snapshot_returns_per_walker_and_group_dicts():
+    """snapshot_for_checkpoint returns a dict with per_walker
+    (list of len W) and group (dict with rng_state, exchange_idx, phase)."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
-    with pytest.raises(NotImplementedError, match="checkpointing"):
-        group.snapshot_for_checkpoint()
+    snap = group.snapshot_for_checkpoint()
+
+    assert set(snap.keys()) == {"per_walker", "group"}
+    assert len(snap["per_walker"]) == 2
+    for entry in snap["per_walker"]:
+        assert "sites_by_species" in entry
+    assert set(snap["group"].keys()) == {"rng_state", "exchange_idx", "phase"}
+    assert isinstance(snap["group"]["rng_state"], str)
+    assert isinstance(snap["group"]["exchange_idx"], int)
+    assert snap["group"]["phase"] in {"halving", "1_over_t"}
 
 
 def test_attach_observer_factory_type_check():

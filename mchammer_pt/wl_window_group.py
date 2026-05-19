@@ -10,7 +10,6 @@ import numpy as np
 from mchammer.observers.base_observer import BaseObserver
 
 from .wl_coordinator import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     CoordinatorPlan,
     Phase,
     Schedule,
@@ -266,7 +265,28 @@ class WangLandauWindowGroup:
             r.refresh_last_state()
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+        """Refresh each walker's _last_state and return checkpoint extras.
+
+        Returns:
+            Dict with:
+                "per_walker": list of W per-walker snapshot dicts (each
+                    carries ``sites_by_species`` for the walker's
+                    configuration cache).
+                "group": dict with ``rng_state`` (JSON str of the exchange
+                    RNG state), ``exchange_idx`` (current swap-walker
+                    index), and ``phase`` (collective WL phase taken from
+                    walker 0's ensemble).
+        """
+        from .checkpoint import _serialise_rng_state
+
+        return {
+            "per_walker": [r.snapshot_for_checkpoint() for r in self._replicas],
+            "group": {
+                "rng_state": _serialise_rng_state(self._rng),
+                "exchange_idx": int(self._exchange_idx),
+                "phase": self._replicas[0].ensemble._phase,
+            },
+        }
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""
