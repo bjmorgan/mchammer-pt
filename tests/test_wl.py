@@ -598,12 +598,12 @@ def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
     pt.save_checkpoint(cp)
     with h5py.File(cp, "r+") as f:
         f["meta"].attrs["schema_version"] = "999"
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(ValueError, match="0.9.0"):
         WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
 
 
-def test_wl_pt_resume_rejects_legacy_schema_2(tmp_path):
-    """A schema-2 checkpoint (v0.7.0 era) cannot resume as a schema-3 reader."""
+def test_wl_pt_resume_rejects_v3_schema(tmp_path):
+    """v4 readers refuse v3 files with a message pointing at 0.9.0."""
     import h5py
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -613,15 +613,15 @@ def test_wl_pt_resume_rejects_legacy_schema_2(tmp_path):
         atoms=[make_wl_atoms(), make_wl_atoms()],
         windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
         energy_spacing=0.1,
-        block_size=5,
+        block_size=10,
         random_seed=0,
     )
     pt.run(n_cycles=2)
     cp = tmp_path / "wl.hdf5"
     pt.save_checkpoint(cp)
     with h5py.File(cp, "r+") as f:
-        f["meta"].attrs["schema_version"] = "2"
-    with pytest.raises(ValueError, match="schema_version"):
+        f["meta"].attrs["schema_version"] = "3"
+    with pytest.raises(ValueError, match="0.9.0"):
         WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
 
 

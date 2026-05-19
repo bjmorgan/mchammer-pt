@@ -258,7 +258,7 @@ def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_pa
     pt.save_checkpoint(path)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert meta["block_size"] == 10
     assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
     assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
@@ -289,7 +289,7 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     pt.run(n_cycles=3)
 
     _, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
 
@@ -361,7 +361,7 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
 
     # And the final file is a valid resumable checkpoint.
     history, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
 
@@ -424,7 +424,25 @@ def test_resume_rejects_unknown_schema_version(toy_ce, toy_atoms, tmp_path):
     with h5py.File(path, "r+") as f:
         f["meta"].attrs["schema_version"] = "999"
 
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(ValueError, match="0.9.0"):
+        CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
+
+
+def test_resume_rejects_v3_schema(toy_ce, toy_atoms, tmp_path):
+    """v4 readers refuse v3 files with a message pointing at 0.9.0."""
+    import h5py
+
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r+") as f:
+        f["meta"].attrs["schema_version"] = "3"
+
+    with pytest.raises(ValueError, match="0.9.0"):
         CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
 
 
@@ -449,7 +467,7 @@ def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path
         pt.run(n_cycles=3)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert len(containers) == 3
     _read_orchestrator_state(path)
 
