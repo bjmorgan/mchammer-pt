@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-19
+
 ### Added
 
 - ``flatness_mode`` and ``merge_cadence`` parameters on
@@ -23,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phase. The 1/t phase never merges mid-run regardless of cadence.
 - ``CoordinatedWangLandauEnsemble``, a subclass of mchammer's
   ``WangLandauEnsemble`` with internal halving suppressed. Halving
-  is now driven by ``WangLandauWindowGroup`` after each block.
+  is now driven by the pool-level coordinator after each block.
   ``WangLandauReplica`` defaults ``ensemble_cls`` to this subclass
   and rejects any ``ensemble_cls`` that is not a subclass of it.
 - ``WangLandauPool.finalise_for_reporting()`` protocol method,
@@ -40,6 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ``FINALISE_MERGE`` worker opcode for the process pool. Receives
   a merged entropy dict, writes it to ``_entropy``, and refreshes
   ``_last_state`` in one round-trip.
+- ``mchammer_pt/wl_coordinator.py`` module owning the collective
+  Wang-Landau policy as pure data + a pure function. Carries
+  ``WalkerPostBlockState``, ``SlotView``, ``CoordinatorPlan``,
+  ``FlatnessMode``, ``MergeCadence``, ``Schedule``, ``Phase``,
+  and ``decide_block_actions(SlotView) -> CoordinatorPlan``.
+- ``mchammer_pt/parallel/_builder.py`` module with frozen
+  dataclasses ``AtomsSpec``, ``CanonicalBuilder``, and
+  ``WLBuilder``. Each Builder carries the inputs required to
+  construct one replica and exposes a ``build()`` method;
+  ``AtomsSpec`` holds the four numpy-array fields required to
+  reconstruct an ``ase.Atoms`` across the spawn boundary, deeply
+  immutable (arrays copied + marked non-writeable in
+  ``from_atoms``).
+- ``docs/architecture.md`` — developer-facing overview of the
+  REWL runtime (Pool → Slot → Walker → Ensemble model, the
+  four-phase ``advance_all`` pipeline shared across backends).
+  Linked from the README.
 
 ### Changed
 
@@ -58,10 +77,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   others, producing a curve with coverage-boundary artefacts.
   Intersection-mean rebasing preserves the shape across partial
   coverage.
-- Single-walker runs are routed through ``WangLandauWindowGroup``
-  for path uniformity. The convergence criterion is unchanged; the
-  flatness check now fires at block boundaries rather than at
-  ``flatness_check_interval`` step boundaries.
+- The collective-halving policy is expressed as one pure function
+  ``decide_block_actions(SlotView) -> CoordinatorPlan`` in the new
+  ``wl_coordinator`` module. Both ``SerialWangLandauPool.advance_all``
+  and ``ProcessWangLandauPool.advance_all`` follow the same
+  four-phase shape: advance walkers, collect per-walker snapshots,
+  decide (shared), apply (backend-specific). Previously the policy
+  was duplicated across a coordinator block on
+  ``WangLandauWindowGroup`` (serial) and a separate ``_compute_plan``
+  function on ``processes.py`` (process pool); the duplication is
+  gone.
+- Single-walker windows use bare ``WangLandauReplica`` slots
+  directly. The ``WangLandauWindowGroup`` wrap is now applied only
+  to windows with ``n_walkers_per_window > 1``. The
+  ``WangLandauSlot`` Protocol widened with ``walker_states``,
+  ``apply_plan``, ``reroll_exchange_idx``, ``phase``, ``schedule``,
+  and ``flatness_limit`` so the bare replica satisfies it. The
+  flatness check fires at block boundaries (after every
+  ``advance_all``) rather than at the ensemble's
+  ``flatness_check_interval`` step boundaries, on both single- and
+  multi-walker paths.
+- ``flatness_mode`` and ``merge_cadence`` now live on the pool
+  rather than on the window group. ``SerialWangLandauPool.__init__``
+  gained both as keyword arguments (already present on
+  ``ProcessWangLandauPool``). ``WangLandauWindowGroup.__init__`` no
+  longer accepts them; the constructor now also validates that all
+  walkers in the group share the same ``schedule`` and
+  ``flatness_limit`` as well as the existing energy-window /
+  spacing checks. ``WangLandauWindowGroup`` now requires
+  ``n_walkers >= 2`` and raises if constructed with a single
+  walker (use a bare ``WangLandauReplica`` instead).
+- Worker construction in ``mchammer_pt/parallel/_worker.py``
+  separates build inputs from runtime state. ``BaseWorker.__init__``
+  takes a ``Builder`` (``CanonicalBuilder | WLBuilder | None``)
+  and a ``reply_sink``; ``_build_replica`` delegates to
+  ``self._builder.build()``. The subclass ``__init__`` and
+  ``_build_replica`` overrides are gone; ``WangLandauWorker``
+  registers its REWL opcodes via a ``_register_extra_handlers``
+  hook called from ``BaseWorker.__init__``. ``CanonicalWorker`` is
+  now a near-empty subclass with only the test-construction
+  ``for_replica`` classmethod. Process-pool entry points
+  ``_worker``/``_wl_worker`` take a single ``Builder`` argument
+  rather than individual fields.
 - Process-pool window state is now exposed through a
   ``ProcessWangLandauWindow`` class with coordinator-facing
   methods (replacing the previous private ``_WindowSlot``
@@ -87,17 +144,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   walker noise unnecessarily. End-of-run merging via
   ``finalise_for_reporting`` reconciles divergent walker
   entropies on every exit path.
-- ``WangLandauParallelTempering.resume`` now wraps each restored
-  replica in a single-walker ``WangLandauWindowGroup`` so the
-  coordinator drives halving. Before the fix, resumed runs used
-  bare ``WangLandauReplica`` slots, which under the default
-  ``CoordinatedWangLandauEnsemble`` (halving-suppressed) silently
-  produced no halving and never converged.
+- ``WangLandauParallelTempering.resume`` now produces slot objects
+  that the pool-level coordinator drives through
+  ``decide_block_actions``. Before the fix, resumed runs used bare
+  ``WangLandauReplica`` instances that did not participate in the
+  coordinator; with the default ``CoordinatedWangLandauEnsemble``
+  (halving-suppressed) they silently produced no halving and never
+  converged.
 - ``_fill_factor_history`` no longer records the Belardinelli-
   Pereyra phase transition at the same step as the halve. The
   dict now records halve events only, restoring symmetry with
   ``_entropy_history`` so downstream analysis that pairs the two
   dicts sees coherent post-halve state at each key.
+- ``BaseWorker._build_replica`` raises ``RuntimeError`` (rather
+  than ``assert``) when called on a worker constructed with
+  ``builder=None`` and no externally-set ``_replica``. ``assert``
+  is stripped under ``python -O``; the user-facing failure mode
+  would otherwise have been a stripped attribute error on
+  ``None.build()``.
 
 ### Performance
 
@@ -113,7 +177,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 
 - Output APIs (``WindowResult.get_entropy``, ``get_histogram``,
-  ``WangLandauParallelTempering.results``) are unchanged.
+  ``WangLandauParallelTempering.results``) are unchanged. Pool
+  constructors gained kwargs but the orchestrator-level
+  (``WangLandauParallelTempering``) public surface is unchanged.
 - Multi-walker checkpointing remains unsupported.
 
 ## [0.8.0] - 2026-05-14
