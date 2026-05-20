@@ -233,3 +233,43 @@ class TestOrchestratorDelegation:
 
         assert pt.merge_events == (event,)
         assert pt.merge_events[0].step == 42
+
+
+class TestStepKeyAlignment:
+    def test_event_step_keys_walker_histories(self, tmp_path) -> None:
+        """event.step must match a key in every walker's mchammer
+        ``_fill_factor_history`` / ``_entropy_history``. This is the
+        join contract the diagnostic relies on."""
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(e0 - 5.0, e0 + 5.0), (e0 - 5.0, e0 + 5.0)],
+            energy_spacing=0.5,
+            block_size=200,
+            random_seed=0,
+            n_walkers_per_window=2,
+        )
+        pt.run(n_cycles=30)
+
+        if not pt.merge_events:
+            pytest.skip(
+                "no halving merge fired in 30 cycles; bump block_size/cycles"
+            )
+
+        for event in pt.merge_events:
+            slot = pt._pool._replicas[event.slot_index]
+            for walker in slot._replicas:
+                e = walker._ensemble
+                assert event.step in e._fill_factor_history
+                assert event.step in e._entropy_history
