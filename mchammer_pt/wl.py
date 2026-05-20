@@ -36,6 +36,7 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
 )
+from .wl_merge_diagnostics import MergeEvent
 from .wl_ensemble import CoordinatedWangLandauEnsemble
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
@@ -309,6 +310,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
     @property
     def energy_spacing(self) -> float:
         return self._energy_spacing
+
+    @property
+    def merge_events(self) -> tuple[MergeEvent, ...]:
+        """Merged-entropy events recorded by the underlying pool.
+
+        Delegates to ``pool.merge_events``. See
+        :class:`mchammer_pt.wl_merge_diagnostics.MergeEvent`.
+        """
+        return self._pool.merge_events
 
     def _log_prob_ratio(self, i: int, j: int) -> float:
         """Log of the REWL exchange acceptance ratio.

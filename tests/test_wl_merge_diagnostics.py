@@ -214,3 +214,22 @@ class TestProtocolSurface:
         assert isinstance(pool, WangLandauPool)
         # The property is the new contract point.
         assert hasattr(pool, "merge_events")
+
+
+class TestOrchestratorDelegation:
+    def test_pt_merge_events_returns_pool_merge_events(self) -> None:
+        """The orchestrator property forwards directly to the pool's
+        attribute. Tested via ``__new__`` + a stand-in pool object to
+        keep this a true unit test of the delegator; the end-to-end
+        path is covered by the smoke test in Task 7."""
+        from types import SimpleNamespace
+
+        from mchammer_pt.wl import WangLandauParallelTempering
+        from mchammer_pt.wl_merge_diagnostics import MergeEvent
+
+        event = MergeEvent(slot_index=0, step=42, merged_entropy={0: 0.0, 1: 1.0})
+        pt = WangLandauParallelTempering.__new__(WangLandauParallelTempering)
+        pt._pool = SimpleNamespace(merge_events=(event,))  # type: ignore[assignment]
+
+        assert pt.merge_events == (event,)
+        assert pt.merge_events[0].step == 42
