@@ -130,6 +130,7 @@ def make_in_process_wl_pool(
     pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
     pool._flatness_mode = flatness_mode  # type: ignore[assignment]
     pool._merge_cadence = merge_cadence  # type: ignore[assignment]
+    pool._merge_events = []
     pool._flatness_limit = flatness_limit
     pool._windows = list(windows)
     pool._energy_spacing = 0.1

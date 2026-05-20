@@ -28,6 +28,7 @@ from .parallel.processes import ProcessPool, ProcessWangLandauPool
 from .parallel.serial import SerialPool, SerialWangLandauPool
 from .replica import Replica
 from .wl import WangLandauParallelTempering
+from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica
 
 __version__ = "0.8.0"
@@ -41,6 +42,7 @@ __all__ = [
     "ExchangeCallback",
     "ExchangeHistory",
     "ExchangePrinter",
+    "MergeEvent",
     "ObservablePool",
     "ProcessPool",
     "ProcessWangLandauPool",
