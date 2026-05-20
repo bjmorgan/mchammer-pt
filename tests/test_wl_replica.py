@@ -574,3 +574,65 @@ def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
 
     replica = wl_replica_factory()
     assert isinstance(replica, WangLandauSlot)
+
+
+def test_set_occupations_seeds_new_bin_into_histogram_and_entropy():
+    """set_occupations records the new bin if it wasn't already tracked.
+
+    REWL exchanges and process-pool transports go through
+    set_occupations, so this seeding also covers exchange arrivals.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+
+    # Construct alternative occupations that produce a different energy
+    # (and therefore a different bin) but stay inside the window.
+    occ = replica.current_occupations()
+    # Flip the species of the first two distinct sites to change energy.
+    species_a, species_b = int(occ[0]), None
+    for s in occ[1:]:
+        if int(s) != species_a:
+            species_b = int(s)
+            break
+    assert species_b is not None, "fixture should have two species"
+    new_occ = occ.copy()
+    # Find one site of each species and swap them.
+    idx_a = int(np.where(new_occ == species_a)[0][0])
+    idx_b = int(np.where(new_occ == species_b)[0][0])
+    new_occ[idx_a], new_occ[idx_b] = species_b, species_a
+
+    # Compute the bin this configuration lands in.
+    new_potential = float(e.calculator.calculate_total(occupations=new_occ))
+    new_bin = e._get_bin_index(new_potential)
+
+    # Sanity: make sure we're actually moving to a fresh bin.
+    if new_bin in e._histogram:
+        pytest.skip("swap didn't change bin; fixture-dependent")
+
+    replica.set_occupations(new_occ)
+
+    assert new_bin in e._histogram
+    assert e._histogram[new_bin] == 0
+    assert new_bin in e._entropy
+    assert e._entropy[new_bin] == 0.0
+
+
+def test_set_occupations_preserves_existing_count_for_known_bin():
+    """If the new bin is already in _histogram, its count is unchanged.
+
+    setdefault semantics: only initialise when missing.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+
+    # Pretend the starting bin has been visited a thousand times.
+    e._histogram[bin_init] = 1000
+    e._entropy[bin_init] = 7.5
+
+    # set_occupations with the SAME initial occupations: new_bin == bin_init.
+    occ = replica.current_occupations()
+    replica.set_occupations(occ)
+
+    assert e._histogram[bin_init] == 1000
+    assert e._entropy[bin_init] == 7.5

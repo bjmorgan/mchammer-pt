@@ -350,6 +350,11 @@ class WangLandauReplica:
                 f"{proposed_potential} (bin {new_bin}), outside window "
                 f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
+        # Seed the new bin so the flatness gate sees it. See the
+        # docstring of __init__ and
+        # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
+        e._histogram.setdefault(new_bin, 0)
+        e._entropy.setdefault(new_bin, 0.0)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
