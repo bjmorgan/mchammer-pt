@@ -603,6 +603,7 @@ def test_read_window_groups_returns_one_entry_per_window(tmp_path):
     """Returns list[dict|None] of length N; None for windows whose
     subgroup is absent (W=1 by convention)."""
     import h5py
+
     from mchammer_pt.checkpoint import _read_window_groups
 
     path = tmp_path / "t.h5"
@@ -668,7 +669,6 @@ def test_read_window_groups_raises_on_phase_mismatch(tmp_path):
 
     from mchammer_pt.checkpoint import _read_window_groups
     from mchammer_pt.wl import WangLandauParallelTempering
-
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     def _initial_energy():
@@ -710,9 +710,9 @@ def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
     """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely
     (or leaves the group empty); _read_window_groups returns all Nones."""
     import h5py
+
     from mchammer_pt.checkpoint import _read_window_groups
     from mchammer_pt.wl import WangLandauParallelTempering
-
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
     def _initial_energy():

@@ -127,7 +127,7 @@ def test_rewl_w2_checkpoint_resume_serial_pool(tmp_path: Path) -> None:
     assert len(resumed.pool) == 2
     for slot in resumed.pool.replicas:
         assert isinstance(slot, WangLandauWindowGroup)
-        assert len(slot._replicas) == 2
+        assert len(slot.walker_states) == 2
 
     history = resumed.run(n_cycles=10)
 

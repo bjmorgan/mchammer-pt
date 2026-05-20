@@ -192,6 +192,11 @@ class WangLandauWindowGroup:
         return self._schedule
 
     @property
+    def exchange_idx(self) -> int:
+        """Index of the walker currently chosen as the exchange representative."""
+        return self._exchange_idx
+
+    @property
     def flatness_limit(self) -> float:
         return float(self._replicas[0].ensemble._flatness_limit)
 

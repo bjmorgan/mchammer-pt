@@ -738,7 +738,7 @@ def test_window_group_restore_state_round_trips_exchange_rng():
     # Both groups must now produce identical next exchange indices.
     group_a.reroll_exchange_idx()
     group_b.reroll_exchange_idx()
-    assert group_a._exchange_idx == group_b._exchange_idx
+    assert group_a.exchange_idx == group_b.exchange_idx
 
 
 def test_window_group_restore_state_rejects_wrong_length_containers():

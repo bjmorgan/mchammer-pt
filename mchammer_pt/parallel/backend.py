@@ -89,31 +89,19 @@ class ReplicaPool(Protocol):
         """
         ...
 
-    def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        """Per-walker state snapshot for the checkpoint payload.
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]] | dict[str, Any]:
+        """Per-replica state snapshot for the checkpoint payload.
 
-        Each pool implementation calls ``Replica.snapshot_for_checkpoint``
-        on its replicas — for ``ProcessPool`` this is a worker-boundary
-        round trip — and returns a structured dict with two keys:
+        Refreshes each replica's ``BaseDataContainer._last_state`` as a
+        side effect. Call this before ``data_containers()`` — mchammer's
+        ``_restart_ensemble`` reads ``_last_state`` on resume and the
+        checkpoint write path depends on it being populated.
 
-        ``"per_walker"``: flat list of per-walker snapshot dicts in
-            window-major / walker-minor order (length M = sum of
-            walkers_per_window). W=1 slots contribute one entry;
-            W>1 slots contribute W entries.
-        ``"group_state"``: list of length N (one per window slot).
-            Each entry is a dict with ``rng_state``, ``exchange_idx``,
-            and ``phase`` for W>1 slots, or ``None`` for W=1 slots.
-
-        As a side effect, each replica's ``BaseDataContainer`` has its
-        ``_last_state`` refreshed (mchammer's ``write_data_container``
-        does the same refresh inline; the checkpoint write path
-        serialises containers directly and so must replicate it).
-
-        Used by ``CanonicalParallelTempering.save_checkpoint`` and
-        ``CheckpointWriter`` immediately before reading
-        ``data_containers()``. Call this *first*: ``data_containers()``
-        returns containers whose ``_last_state`` is empty unless this
-        method has populated it.
+        Canonical pools (``SerialPool``, ``ProcessPool``) return a flat
+        ``list[dict[str, Any]]``, one entry per replica. Wang-Landau pools
+        (``SerialWangLandauPool``, ``ProcessWangLandauPool``) return a
+        ``dict`` with ``"per_walker"`` and ``"group_state"`` keys.
+        ``_write_checkpoint`` dispatches on the return type.
         """
         ...
 

@@ -888,7 +888,7 @@ def test_serial_wl_pool_restore_round_trips_via_snapshot():
     # The W>1 slot must now match.
     pool_a._replicas[1].reroll_exchange_idx()
     pool_b._replicas[1].reroll_exchange_idx()
-    assert pool_a._replicas[1]._exchange_idx == pool_b._replicas[1]._exchange_idx
+    assert pool_a._replicas[1].exchange_idx == pool_b._replicas[1].exchange_idx
 
 
 def test_serial_wl_pool_restore_rejects_wrong_lengths():
@@ -970,7 +970,7 @@ def test_process_wl_pool_restore_round_trips_w2():
             per_walker_extras=snap["per_walker"],
             group_state=snap["group_state"],
         )
-        for slot, gs in zip(pool_b._slots, snap["group_state"]):
+        for slot, gs in zip(pool_b._slots, snap["group_state"], strict=True):
             if gs is not None:
                 assert slot.exchange_idx == gs["exchange_idx"]
                 assert slot.phase == gs["phase"]

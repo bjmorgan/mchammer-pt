@@ -240,7 +240,7 @@ def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     return {"replica_labels": replica_labels, "rng_state": rng_state}
 
 
-def _read_window_groups(path: Path | str) -> list[dict | None]:
+def _read_window_groups(path: Path | str) -> list[dict[str, Any] | None]:
     """Read per-window group-level state from a v4 checkpoint.
 
     Returns:
@@ -280,7 +280,7 @@ def _read_window_groups(path: Path | str) -> list[dict | None]:
         wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
         n_windows = len(wpw)
         wg_parent = f["orchestrator"].get("window_groups")
-        out: list[dict | None] = []
+        out: list[dict[str, Any] | None] = []
         for g in range(n_windows):
             if wg_parent is None or str(g) not in wg_parent:
                 out.append(None)

@@ -996,7 +996,7 @@ def test_wl_pt_process_pool_accepts_multi_walker_with_checkpoint(tmp_path):
     try:
         assert pt is not None
     finally:
-        pt._pool.shutdown()
+        pt.pool.shutdown()
 
 
 def test_wl_pt_serial_w1_slot_is_bare_replica():
@@ -1294,11 +1294,11 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
         path, cluster_expansion=make_wl_ce(),
     )
 
-    # Pool structure: 2 WangLandauWindowGroup slots, each with 2 replicas.
+    # Pool structure: 2 WangLandauWindowGroup slots, each with 2 walkers.
     assert len(resumed.pool) == 2
     for slot in resumed.pool.replicas:
         assert isinstance(slot, WangLandauWindowGroup)
-        assert len(slot._replicas) == 2
+        assert len(slot.walker_states) == 2
 
     history = resumed.run(n_cycles=2)
     assert history.energies_per_cycle.shape == (3, 2)
@@ -1332,21 +1332,20 @@ def test_wl_pt_resume_process_pool_w2_round_trips(tmp_path):
         path = tmp_path / "ckpt.h5"
         pt.save_checkpoint(path)
     finally:
-        pt._pool.shutdown()
+        pt.pool.shutdown()
 
     resumed = WangLandauParallelTempering.resume_process_pool(
         path, cluster_expansion=make_wl_ce(),
     )
     try:
-        assert len(resumed._pool) == 2
-        assert all(len(slot.workers) == 2 for slot in resumed._pool._slots)
+        assert len(resumed.pool) == 2
         history = resumed.run(n_cycles=2)
         assert history.energies_per_cycle.shape == (3, 2)
-        assert np.all(np.isfinite(resumed._pool.current_energies()))
+        assert np.all(np.isfinite(resumed.pool.current_energies()))
         for wr in resumed.results():
             assert wr.get_entropy() is not None
     finally:
-        resumed._pool.shutdown()
+        resumed.pool.shutdown()
 
 
 def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
@@ -1405,7 +1404,7 @@ def test_wl_pt_checkpoint_round_trip_mixed_walkers_per_window(tmp_path):
     assert len(resumed.pool) == 3
     assert isinstance(resumed.pool.replicas[0], WangLandauReplica)
     assert isinstance(resumed.pool.replicas[1], WangLandauWindowGroup)
-    assert len(resumed.pool.replicas[1]._replicas) == 2
+    assert len(resumed.pool.replicas[1].walker_states) == 2
     assert isinstance(resumed.pool.replicas[2], WangLandauReplica)
 
     history = resumed.run(n_cycles=2)

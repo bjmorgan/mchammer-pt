@@ -629,7 +629,7 @@ class SerialWangLandauPool:
                     group_state=gs,
                 )
                 offset += n
-            else:
+            elif isinstance(slot, WangLandauReplica):
                 if gs is not None:
                     raise ValueError(
                         "group_state entry is non-None for a bare-replica slot"
@@ -639,6 +639,12 @@ class SerialWangLandauPool:
                     sites_by_species=per_walker_extras[offset]["sites_by_species"],
                 )
                 offset += 1
+            else:
+                raise TypeError(
+                    f"unexpected slot type {type(slot).__name__!r} in "
+                    f"restore_replica_state; expected WangLandauReplica or "
+                    f"WangLandauWindowGroup"
+                )
 
     def shutdown(self) -> None:
         return None
