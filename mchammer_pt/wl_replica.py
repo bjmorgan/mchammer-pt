@@ -573,6 +573,9 @@ class WangLandauReplica:
         e._data_container._last_state["schedule"] = e._schedule
         e._data_container._last_state["phase"] = e._phase
         e._data_container._last_state["window_entry_step"] = e._window_entry_step
+        e._data_container._last_state["visited_bins"] = sorted(
+            e._visited_bins
+        )
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on
@@ -667,6 +670,16 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
+        # Restore _visited_bins from the saved state if present (so the
+        # diagnostic reflects the full run history, not just this
+        # resume's visits). Backwards-compatible: older checkpoints
+        # without this field start from an empty set, which the
+        # subsequent .add(new_bin) seeds with the restored bin.
+        saved_visited = last_state.get("visited_bins")
+        if saved_visited is not None:
+            e._visited_bins = {int(b) for b in saved_visited}
+        else:
+            e._visited_bins = set()
         # Seed the restored bin so the flatness gate sees it from
         # restore-time onward. The saved _last_state may already
         # contain this bin (with a real count, restored via

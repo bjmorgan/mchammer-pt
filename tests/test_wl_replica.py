@@ -759,3 +759,32 @@ def test_restore_state_adds_restored_bin_to_visited_bins():
     dst.restore_state(container)
     restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
     assert restored_bin in dst.ensemble._visited_bins
+
+
+def test_refresh_last_state_persists_visited_bins():
+    """refresh_last_state writes _visited_bins to _last_state as a sorted list."""
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+    e._visited_bins = {bin_init, bin_init + 1, bin_init - 1}
+
+    replica.refresh_last_state()
+
+    saved = e._data_container._last_state["visited_bins"]
+    assert saved == sorted({bin_init - 1, bin_init, bin_init + 1})
+
+
+def test_restore_state_round_trips_visited_bins():
+    """A round-trip through refresh + restore preserves _visited_bins."""
+    src = _make_wl_replica()
+    src_bin_init = src.ensemble._get_bin_index(src.ensemble._potential)
+    src.ensemble._visited_bins = {src_bin_init, src_bin_init + 2}
+    src.refresh_last_state()
+    container = src.data_container()
+
+    dst = _make_wl_replica()
+    dst.ensemble._visited_bins.clear()
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._visited_bins == {src_bin_init, src_bin_init + 2}
