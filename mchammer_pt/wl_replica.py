@@ -355,7 +355,6 @@ class WangLandauReplica:
         # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
-        e._visited_bins.add(new_bin)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
@@ -670,11 +669,14 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
-        # Restore _visited_bins from the saved state if present (so the
-        # diagnostic reflects the full run history, not just this
-        # resume's visits). Backwards-compatible: older checkpoints
-        # without this field start from an empty set, which the
-        # subsequent .add(new_bin) seeds with the restored bin.
+        # Restore _visited_bins from the saved state if present (so
+        # the diagnostic reflects the full MC-travel history, not
+        # just this resume's visits). Backwards-compatible: older
+        # checkpoints without this field start from an empty set.
+        # The restored bin is *not* added here: restore_state places
+        # the walker at `new_bin` but the walker has not travelled
+        # there via MC. The next `_update_entropy` after a step will
+        # populate the set naturally if the walker stays.
         saved_visited = last_state.get("visited_bins")
         if saved_visited is not None:
             e._visited_bins = {int(b) for b in saved_visited}
@@ -689,7 +691,6 @@ class WangLandauReplica:
         # the saved run.
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
-        e._visited_bins.add(new_bin)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 

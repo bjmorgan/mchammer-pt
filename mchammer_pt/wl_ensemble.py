@@ -21,15 +21,16 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # Per-walker set of bins the walker has been at since
-        # construction. Distinct from `_histogram` (which resets to
-        # zero values at every halving): this set monotonically
-        # grows and is the right denominator for trap diagnostics —
-        # "has the walker ever reached this bin?".
+        # Bins the walker has MC-travelled to since window entry.
+        # Populated only by `_update_entropy` (guarded on
+        # `_reached_energy_window`). Crucially **not** seeded by
+        # construction, `set_occupations`, or `restore_state`: those
+        # sites populate `_histogram`/`_entropy` (to make the
+        # flatness gate aware of the bin) but the walker has been
+        # *placed* there, not *travelled* there. Keeping the two
+        # notions separate is what lets `bins_visited < bins_known`
+        # signal a trap (placed-but-can't-return).
         self._visited_bins: set[int] = set()
-        bin_init = self._get_bin_index(self._potential)
-        if bin_init is not None and self._inside_energy_window(bin_init):
-            self._visited_bins.add(bin_init)
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's

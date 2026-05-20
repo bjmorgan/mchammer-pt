@@ -706,59 +706,23 @@ def test_window_stats_reports_bins_visited_and_bins_known():
     assert stats["bins_known"] == 3
 
 
-def test_init_populates_visited_bins_with_starting_bin():
-    """The constructor seeds `_visited_bins` with the starting bin."""
+def test_init_leaves_visited_bins_empty():
+    """The constructor does not seed `_visited_bins`.
+
+    `_visited_bins` tracks bins the walker has MC-travelled to since
+    window entry. At construction the walker has been *placed* at
+    `bin_init` but has not yet travelled there via any MC step, so
+    the set starts empty. The first `_update_entropy` call (if the
+    walker is rejected back to `bin_init`) or any subsequent
+    step that lands there will populate it. This is what makes
+    `bins_visited < bins_known` a meaningful trap signal: in a
+    trap scenario the walker is placed at the GS bin via construction
+    (so the GS bin appears in `_histogram` via the seed) but never
+    travels there via MC (so it's absent from `_visited_bins`),
+    giving the divergence.
+    """
     replica = _make_wl_replica()
-    e = replica.ensemble
-    bin_init = e._get_bin_index(e._potential)
-    assert e._visited_bins == {bin_init}
-
-
-def test_set_occupations_adds_new_bin_to_visited_bins():
-    """set_occupations adds the new bin to `_visited_bins`."""
-    replica = _make_wl_replica()
-    e = replica.ensemble
-    bin_init = e._get_bin_index(e._potential)
-
-    occ = replica.current_occupations()
-    species_a = int(occ[0])
-    species_b = None
-    for s in occ[1:]:
-        if int(s) != species_a:
-            species_b = int(s)
-            break
-    assert species_b is not None
-    new_occ = occ.copy()
-    idx_a = int(np.where(new_occ == species_a)[0][0])
-    idx_b = int(np.where(new_occ == species_b)[0][0])
-    new_occ[idx_a], new_occ[idx_b] = species_b, species_a
-
-    new_potential = float(e.calculator.calculate_total(occupations=new_occ))
-    new_bin = e._get_bin_index(new_potential)
-    if new_bin == bin_init:
-        pytest.skip("swap didn't change bin; fixture-dependent")
-
-    replica.set_occupations(new_occ)
-    assert bin_init in e._visited_bins
-    assert new_bin in e._visited_bins
-
-
-def test_restore_state_adds_restored_bin_to_visited_bins():
-    """restore_state adds the restored bin to `_visited_bins`."""
-    src = _make_wl_replica()
-    src.refresh_last_state()
-    container = src.data_container()
-    container._last_state["histogram"] = {}
-    container._last_state["entropy"] = {}
-
-    dst = _make_wl_replica()
-    dst.ensemble._histogram.clear()
-    dst.ensemble._entropy.clear()
-    dst.ensemble._visited_bins.clear()  # start from empty
-
-    dst.restore_state(container)
-    restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
-    assert restored_bin in dst.ensemble._visited_bins
+    assert replica.ensemble._visited_bins == set()
 
 
 def test_refresh_last_state_persists_visited_bins():
