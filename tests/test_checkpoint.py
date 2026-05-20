@@ -668,6 +668,7 @@ def test_read_window_groups_raises_on_phase_mismatch(tmp_path):
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.checkpoint import _read_window_groups
+    from mchammer_pt.history import read_hdf5
     from mchammer_pt.wl import WangLandauParallelTempering
     from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
@@ -702,13 +703,14 @@ def test_read_window_groups_raises_on_phase_mismatch(tmp_path):
             "phase", data="__corrupted__",
         )
 
-    with pytest.raises(ValueError, match="phase"):
-        _read_window_groups(path)
+    _, containers, _ = read_hdf5(path)
+    with pytest.raises(ValueError, match="phase consistency"):
+        _read_window_groups(path, containers)
 
 
-def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
-    """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely
-    (or leaves the group empty); _read_window_groups returns all Nones."""
+def test_w1_only_checkpoint_omits_window_groups_subgroup(tmp_path):
+    """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely;
+    _read_window_groups returns all Nones."""
     import h5py
 
     from mchammer_pt.checkpoint import _read_window_groups
@@ -737,8 +739,7 @@ def test_w1_only_checkpoint_has_no_window_groups_subgroup(tmp_path):
     pt.save_checkpoint(path)
 
     with h5py.File(path, "r") as f:
-        wg = f["orchestrator"].get("window_groups")
-        # Either absent entirely, or present-but-empty.
-        if wg is not None:
-            assert len(wg.keys()) == 0
+        # The writer must omit the /orchestrator/window_groups/ subgroup
+        # entirely when every window has W=1 (not create-and-leave-empty).
+        assert "window_groups" not in f["orchestrator"]
     assert _read_window_groups(path) == [None, None]

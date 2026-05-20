@@ -567,7 +567,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
-        window_groups = _read_window_groups(path)
+        window_groups = _read_window_groups(path, containers)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
@@ -733,7 +733,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
-        window_groups = _read_window_groups(path)
+        window_groups = _read_window_groups(path, containers)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])

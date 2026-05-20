@@ -1272,6 +1272,84 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
         assert wr.get_entropy() is not None
 
 
+def test_wl_pt_resume_rejects_walker_count_mismatch(tmp_path):
+    """Truncated /replicas/ relative to walkers_per_window must raise.
+
+    Constructs a real W=2 checkpoint, then corrupts the file by lying
+    about walkers_per_window so it claims more walkers than the
+    /replicas/ group contains. resume must reject before reconstruction.
+    """
+    import h5py
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,  # 2 replicas total
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+    # Lie about the walker count without adjusting /replicas/.
+    with h5py.File(path, "r+") as f:
+        f["meta"].attrs["walkers_per_window"] = np.array([2, 2], dtype=np.int32)
+
+    with pytest.raises(ValueError, match="walker-count mismatch"):
+        WangLandauParallelTempering.resume(
+            path, cluster_expansion=make_wl_ce(),
+        )
+
+
+def test_wl_pt_round_trip_twice_preserves_continuation(tmp_path):
+    """save -> resume -> run -> save -> resume keeps the orchestrator
+    consistent across two save/resume cycles.
+
+    Pins identity-copy-through: nothing accumulates spurious state, and
+    the second resume reconstructs the orchestrator with the same pool
+    shape, finite energies, and non-None entropies as the first.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    cp1 = tmp_path / "ckpt-1.h5"
+    pt.save_checkpoint(cp1)
+
+    with pytest.warns(UserWarning, match="not bit-identical"):
+        resumed_1 = WangLandauParallelTempering.resume(
+            cp1, cluster_expansion=make_wl_ce(),
+        )
+    resumed_1.run(n_cycles=2)
+    cp2 = tmp_path / "ckpt-2.h5"
+    resumed_1.save_checkpoint(cp2)
+
+    with pytest.warns(UserWarning, match="not bit-identical"):
+        resumed_2 = WangLandauParallelTempering.resume(
+            cp2, cluster_expansion=make_wl_ce(),
+        )
+    history = resumed_2.run(n_cycles=2)
+    assert history.energies_per_cycle.shape == (3, 2)
+    assert np.all(np.isfinite(resumed_2.pool.current_energies()))
+    assert len(resumed_2.pool) == 2
+    for wr in resumed_2.results():
+        assert wr.get_entropy() is not None
+
+
 def test_wl_pt_resume_emits_warning_for_multi_walker_windows(tmp_path):
     """W>1 resume emits UserWarning naming the affected windows."""
     from mchammer_pt.wl import WangLandauParallelTempering

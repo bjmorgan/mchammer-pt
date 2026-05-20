@@ -274,16 +274,24 @@ def write_hdf5(
                         "window_groups requires orchestrator_state to be supplied; "
                         "the /orchestrator group must exist to host the subgroup."
                     )
-                wg_parent = f["orchestrator"].create_group("window_groups")
-                for g, entry in enumerate(window_groups):
-                    if entry is None:
-                        continue
-                    sub = wg_parent.create_group(str(g))
-                    sub.create_dataset("rng_state", data=str(entry["rng_state"]))
-                    sub.create_dataset(
-                        "exchange_idx", data=np.int32(entry["exchange_idx"])
-                    )
-                    sub.create_dataset("phase", data=str(entry["phase"]))
+                # Omit /orchestrator/window_groups/ entirely when every
+                # entry is None (the all-W=1 case). The reader relies on
+                # subgroup absence to mean "this is a single-walker
+                # window"; an empty-but-present parent group leaks an
+                # internal detail of the writer.
+                if any(entry is not None for entry in window_groups):
+                    wg_parent = f["orchestrator"].create_group("window_groups")
+                    for g, entry in enumerate(window_groups):
+                        if entry is None:
+                            continue
+                        sub = wg_parent.create_group(str(g))
+                        sub.create_dataset(
+                            "rng_state", data=str(entry["rng_state"])
+                        )
+                        sub.create_dataset(
+                            "exchange_idx", data=np.int32(entry["exchange_idx"])
+                        )
+                        sub.create_dataset("phase", data=str(entry["phase"]))
         os.replace(tmp_target, path)
     except BaseException:
         # Clean the partial .tmp on any failure; leave the target path

@@ -40,7 +40,7 @@ import hashlib
 import json
 import pickle
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -257,8 +257,23 @@ def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     return {"replica_labels": replica_labels, "rng_state": rng_state}
 
 
-def _read_window_groups(path: Path | str) -> list[dict[str, Any] | None]:
+def _read_window_groups(
+    path: Path | str,
+    containers: Sequence[Any] | None = None,
+) -> list[dict[str, Any] | None]:
     """Read per-window group-level state from a v4 checkpoint.
+
+    Args:
+        path: HDF5 file written by `_write_checkpoint`.
+        containers: optional flat list of `BaseDataContainer` instances
+            already deserialised via `history.read_hdf5`, in window-major /
+            walker-minor order (length M = sum of walkers_per_window).
+            When supplied, the phase consistency check reads
+            ``_last_state["phase"]`` directly from these in-memory
+            containers, avoiding the cost of re-deserialising the
+            replica tarballs. When omitted, the phase check is skipped
+            (used by hand-crafted unit fixtures that have no
+            ``/replicas/`` payloads to validate against).
 
     Returns:
         One entry per window. Each entry is a dict with keys
@@ -272,15 +287,11 @@ def _read_window_groups(path: Path | str) -> list[dict[str, Any] | None]:
         KeyError: if ``/meta``, ``/meta/walkers_per_window``, or
             ``/orchestrator`` is missing — sign of a pre-v4 file or
             one that was not written as a checkpoint.
-        ValueError: if the on-disk group phase for any window
-            disagrees with the ``_last_state["phase"]`` of any of
-            its walkers' replica containers, indicating a corrupted
-            checkpoint file.
+        ValueError: if `containers` is supplied and the on-disk group
+            phase for any window disagrees with the
+            ``_last_state["phase"]`` of any of its walkers, indicating
+            a corrupted checkpoint file.
     """
-    import tempfile
-
-    from mchammer.data_containers.base_data_container import BaseDataContainer
-
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"no such file: {path}")
@@ -320,42 +331,24 @@ def _read_window_groups(path: Path | str) -> list[dict[str, Any] | None]:
                 ),
             })
 
-        # Validate phase consistency: for every W>1 window, the group
-        # phase on disk must match _last_state["phase"] of each walker.
-        # A mismatch indicates the file is corrupted. Read walker
-        # containers from the /replicas/ tarballs within the same open
-        # to avoid a second file open. Skip if /replicas/ is absent —
-        # hand-crafted test fixtures without replica payloads are not
-        # real checkpoints and cannot be validated here.
-        if "replicas" in f:
-            flat = 0
-            for g, entry in enumerate(out):
-                nw = int(wpw[g])
-                if entry is not None:
-                    group_phase = entry["phase"]
-                    for w in range(nw):
-                        replica_idx = flat + w
-                        payload = f[f"replicas/{replica_idx}"][()].tobytes()
-                        tmp_file = tempfile.NamedTemporaryFile(
-                            suffix=".dc", delete=False
-                        )
-                        tmp_path = Path(tmp_file.name)
-                        tmp_file.close()
-                        try:
-                            tmp_path.write_bytes(payload)
-                            container = BaseDataContainer.read(str(tmp_path))
-                        finally:
-                            tmp_path.unlink(missing_ok=True)
-                        walker_phase = container._last_state.get("phase")
-                        if walker_phase != group_phase:
-                            raise ValueError(
-                                f"{path}: phase consistency failure at "
-                                f"window {g} walker {w}: group phase "
-                                f"{group_phase!r} vs walker _last_state "
-                                f"phase {walker_phase!r}; checkpoint is "
-                                f"corrupted."
-                            )
-                flat += nw
+    if containers is None:
+        return out
+    flat = 0
+    for g, entry in enumerate(out):
+        nw = int(wpw[g])
+        if entry is not None:
+            group_phase = entry["phase"]
+            for w in range(nw):
+                walker_phase = containers[flat + w]._last_state.get("phase")
+                if walker_phase != group_phase:
+                    raise ValueError(
+                        f"{path}: phase consistency failure at "
+                        f"window {g} walker {w}: group phase "
+                        f"{group_phase!r} vs walker _last_state "
+                        f"phase {walker_phase!r}; checkpoint is "
+                        f"corrupted."
+                    )
+        flat += nw
     return out
 
 
