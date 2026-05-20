@@ -331,9 +331,7 @@ class WangLandauProgressPrinter:
             halvings_str = str(s["halvings"])
 
             hist = s["histogram"]
-            visited = s.get("bins_visited", 0)
-            known = s.get("bins_known", 0)
-            bins_str = f"{visited}/{known}"
+            bins_str = f"{s['bins_visited']}/{s['bins_known']}"
 
             # flat_min reports the quantity the halve gate is actually
             # checking. Under flatness_mode='per_walker' the gate uses
