@@ -155,6 +155,23 @@ class WangLandauReplica:
     relies on this invariant to short-circuit cleanly when only the
     "cross-bin" terms can be -inf.
 
+    Invariant: every bin the walker has been placed at — by
+    construction (``bin_init``), ``set_occupations`` (``new_bin``),
+    or ``restore_state`` (``new_bin``) — appears as a key in the
+    underlying ensemble's ``_histogram`` (count 0) and ``_entropy``
+    (value 0.0). Each of those sites uses ``setdefault`` so existing
+    entries from prior visits are not overwritten. The Wang-Landau
+    flatness gate iterates over the ``_histogram`` values, so a
+    zero-count seeded bin blocks the gate until the walker visits it.
+
+    Invariant: ``CoordinatedWangLandauEnsemble._visited_bins`` is the
+    set of bins the walker has reached via ``_update_entropy`` since
+    window entry. ``_update_entropy`` is the only site that inserts,
+    guarded on ``_reached_energy_window``. ``refresh_last_state``
+    writes the set to the data container and ``restore_state`` reads
+    it back, so membership survives checkpoint round-trips.
+    ``window_stats`` reports ``bins_visited`` from this set.
+
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
         atoms: starting structure. Its energy must lie inside the
@@ -261,13 +278,7 @@ class WangLandauReplica:
                 f"energy lies in its window."
             )
 
-        # Seed the starting bin into the histogram and entropy so the
-        # flatness gate is aware of it from construction. Without this,
-        # a walker whose first move leaves bin_init and never returns
-        # would have bin_init absent from the dict; the flatness check
-        # then operates on the saturated subset of bins actually visited
-        # and may halve prematurely. See
-        # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
+        # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(bin_init, 0)
         e._entropy.setdefault(bin_init, 0.0)
 
@@ -350,9 +361,7 @@ class WangLandauReplica:
                 f"{proposed_potential} (bin {new_bin}), outside window "
                 f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
-        # Seed the new bin so the flatness gate sees it. See the
-        # docstring of __init__ and
-        # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
+        # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
@@ -479,17 +488,18 @@ class WangLandauReplica:
     def window_stats(self) -> dict[str, Any]:
         """Per-window convergence metrics.
 
-        Returns fill_factor, halvings, histogram, bins_visited,
-        bins_known, converged. For a single-walker replica
-        ``flatness_mode`` and ``per_walker_flat_min`` are omitted
-        (the progress reporter falls through to the pooled
-        computation, which is exact for n_walkers == 1).
+        Returns ``fill_factor``, ``halvings``, ``histogram``,
+        ``bins_visited``, ``bins_known``, ``converged``. For a
+        single-walker replica ``flatness_mode`` and
+        ``per_walker_flat_min`` are omitted (the progress reporter
+        falls through to the pooled computation, which is exact
+        for n_walkers == 1).
 
-        ``bins_visited`` is the number of bins the walker has ever
-        been at since window entry (``len(_visited_bins)``). This is
-        monotone-increasing within a run and survives halvings — the
-        right denominator for trap diagnostics. ``bins_known`` is
-        ``len(_histogram)`` and includes seeded-but-unvisited bins.
+        ``bins_visited`` is ``len(_visited_bins)`` — the count of
+        bins the walker has reached via MC since window entry.
+        Monotone within a run; survives halvings. ``bins_known``
+        is ``len(_histogram)`` and includes seeded-but-unvisited
+        bins.
         """
         e = self._ensemble
         histogram = dict(e._histogram)
@@ -669,26 +679,15 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
-        # Restore _visited_bins from the saved state if present (so
-        # the diagnostic reflects the full MC-travel history, not
-        # just this resume's visits). Backwards-compatible: older
-        # checkpoints without this field start from an empty set.
-        # The restored bin is *not* added here: restore_state places
-        # the walker at `new_bin` but the walker has not travelled
-        # there via MC. The next `_update_entropy` after a step will
-        # populate the set naturally if the walker stays.
+        # `_visited_bins` is restored from the saved state when
+        # present; absent in checkpoints written before this field
+        # existed, in which case the set starts empty.
         saved_visited = last_state.get("visited_bins")
         if saved_visited is not None:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
-        # Seed the restored bin so the flatness gate sees it from
-        # restore-time onward. The saved _last_state may already
-        # contain this bin (with a real count, restored via
-        # _restart_ensemble); setdefault preserves that. The seed
-        # matters when the saved histogram is empty (pre-step
-        # checkpoint) or when the restored bin was never visited in
-        # the saved run.
+        # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
         if sites_by_species is not None:

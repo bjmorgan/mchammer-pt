@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``CoordinatedWangLandauEnsemble._visited_bins``: set of bins the
+  walker has reached via ``_update_entropy`` since window entry.
+  Persisted across ``refresh_last_state`` / ``restore_state``
+  round-trips.
+- ``bins_visited`` and ``bins_known`` keys on the dict returned by
+  ``WangLandauReplica.window_stats`` and
+  ``WangLandauWindowGroup.window_stats``. ``bins_visited`` is
+  ``len(_visited_bins)`` (or the union across walkers);
+  ``bins_known`` is ``len(_histogram)`` (or the union across
+  walkers).
+- ``WangLandauProgressPrinter`` reports ``bins (vis/known)`` (e.g.
+  ``14/15``) in place of the previous ``bins_visited`` column.
+
+### Changed
+
+- ``WangLandauReplica`` seeds the bin the walker is placed at
+  (``bin_init`` at construction, ``new_bin`` on ``set_occupations``
+  and ``restore_state``) into the underlying ensemble's
+  ``_histogram`` (count 0) and ``_entropy`` (value 0.0) via
+  ``setdefault``. Placed bins appear in ``_histogram`` and
+  contribute to the Wang-Landau flatness gate.
+- ``_summed_histogram_flat_from_snapshots`` and
+  ``WangLandauReplica.is_flat`` return ``False`` when
+  ``mean(counts) <= 0``, so an all-zero histogram is not flat.
+
 ## [0.9.0] - 2026-05-19
 
 ### Added

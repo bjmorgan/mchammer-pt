@@ -227,18 +227,18 @@ class WangLandauWindowGroup:
         """Per-window convergence metrics.
 
         Returns:
-            ``fill_factor`` and ``halvings`` from replica 0 (all in sync
-            after advance); ``histogram`` is the sum across all walkers;
-            ``bins_visited`` is the number of bins the union of walkers
-            has ever been at since window entry (``len(union of
-            _visited_bins))``); monotone within a run and survives
-            halvings. ``bins_known`` is the size of the union of bins
-            across walkers (i.e. ``len(combined_hist)``).
-            ``converged`` requires every walker to be converged;
-            ``per_walker_flat_min`` is min over walkers of
-            ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
-            yet built a histogram. ``flatness_mode`` is not included
-            here; the pool injects it (pool-level policy).
+            ``fill_factor`` and ``halvings`` from replica 0 (all in
+            sync after advance); ``histogram`` is the sum across all
+            walkers; ``bins_visited`` is the size of the union of
+            walker ``_visited_bins`` (bins any walker has reached
+            via MC since window entry); ``bins_known`` is the size
+            of the union of ``_histogram`` keys across walkers (i.e.
+            ``len(combined_hist)``). ``converged`` requires every
+            walker to be converged; ``per_walker_flat_min`` is min
+            over walkers of ``min(H_k) / mean(H_k)``, or ``None`` if
+            any walker has not yet built a histogram.
+            ``flatness_mode`` is not included here; the pool injects
+            it (pool-level policy).
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}
