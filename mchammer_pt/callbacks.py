@@ -322,7 +322,7 @@ class WangLandauProgressPrinter:
 
         col_hdr = (
             f"  {'win':>3s}  {'fill_factor':>11s}  "
-            f"{'halvings':>8s}  {'bins_visited':>12s}  "
+            f"{'halvings':>8s}  {'bins (vis/known)':>17s}  "
             f"{'flat_min':>8s}  {'converged':>9s}"
         )
         rows: list[str] = []
@@ -331,7 +331,9 @@ class WangLandauProgressPrinter:
             halvings_str = str(s["halvings"])
 
             hist = s["histogram"]
-            bins_visited_str = str(len(hist)) if hist else "0"
+            visited = s.get("bins_visited", 0)
+            known = s.get("bins_known", 0)
+            bins_str = f"{visited}/{known}"
 
             # flat_min reports the quantity the halve gate is actually
             # checking. Under flatness_mode='per_walker' the gate uses
@@ -352,7 +354,7 @@ class WangLandauProgressPrinter:
             conv_str = "yes" if s["converged"] else "no"
             rows.append(
                 f"  {i:>3d}  {ff_str:>11s}  {halvings_str:>8s}  "
-                f"{bins_visited_str:>12s}  {flat_str:>8s}  {conv_str:>9s}"
+                f"{bins_str:>17s}  {flat_str:>8s}  {conv_str:>9s}"
             )
 
         print(

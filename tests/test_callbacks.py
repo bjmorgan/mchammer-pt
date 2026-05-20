@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import io
+
 import numpy as np
 
 from mchammer_pt.callbacks import (
     ExchangeCallback,
     ExchangePrinter,
     SwapRateTracker,
+    WangLandauProgressPrinter,
 )
+from mchammer_pt.history import ExchangeHistory
 
 
 def test_exchange_callback_is_a_protocol_that_accepts_any_matching_class():
@@ -78,3 +82,39 @@ def test_exchange_printer_interval_zero_disables_output(capsys):
         )
     out = capsys.readouterr().out
     assert out == ""
+
+
+def test_wl_progress_printer_shows_bins_visited_over_known():
+    """The WL progress printer's bins column displays 'visited/known'."""
+
+    class _FakePool:
+        def per_window_stats(self):
+            return [
+                {
+                    "fill_factor": 1.0,
+                    "halvings": 0,
+                    "histogram": {0: 0, 1: 5, 2: 0},
+                    "bins_visited": 1,
+                    "bins_known": 3,
+                    "converged": False,
+                }
+            ]
+
+    out = io.StringIO()
+    printer = WangLandauProgressPrinter(
+        _FakePool(), interval=1, show_swap_rates=False, file=out,
+    )
+    history = ExchangeHistory(
+        energies_per_cycle=np.zeros((1, 1)),
+        replica_labels_per_cycle=np.zeros((1, 1), dtype=int),
+        swap_attempted=np.zeros(0, dtype=int),
+        swap_accepted=np.zeros(0, dtype=int),
+    )
+    # Cycle 0 starts the timer; cycle 0 with n_cycles=1 also emits.
+    printer.on_cycle_end(0, 1, history)
+    output = out.getvalue()
+
+    # Header reflects the new column name.
+    assert "bins (vis/known)" in output
+    # The row uses the slash format with the fake pool's values.
+    assert "1/3" in output
