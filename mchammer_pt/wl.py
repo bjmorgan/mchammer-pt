@@ -315,8 +315,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def merge_events(self) -> tuple[MergeEvent, ...]:
         """Merged-entropy events recorded by the underlying pool.
 
-        Delegates to ``pool.merge_events``. See
-        :class:`mchammer_pt.wl_merge_diagnostics.MergeEvent`.
+        See :class:`mchammer_pt.wl_merge_diagnostics.MergeEvent`.
         """
         return self._pool.merge_events
 

@@ -147,22 +147,31 @@ class TestSerialPoolMergeEvents:
 
         assert pool.merge_events == ()
 
-    def test_events_per_slot_use_correct_slot_index(self) -> None:
+    def test_events_per_slot_carry_correct_slot_index_and_content(
+        self,
+    ) -> None:
+        from mchammer_pt.wl_coordinator import merge_entropies
+
+        entropies_a = [{0: 1.0, 1: 2.0}, {0: 1.5, 1: 2.5}]
+        entropies_b = [{0: 3.0, 1: 4.0}, {0: 3.5, 1: 4.5}]
         slot_a = _StubWLSlot(walker_states=[
-            _flat_walker(step=100, entropy={0: 1.0, 1: 2.0}),
-            _flat_walker(step=100, entropy={0: 1.5, 1: 2.5}),
+            _flat_walker(step=100, entropy=entropies_a[0]),
+            _flat_walker(step=100, entropy=entropies_a[1]),
         ])
         slot_b = _StubWLSlot(walker_states=[
-            _flat_walker(step=100, entropy={0: 3.0, 1: 4.0}),
-            _flat_walker(step=100, entropy={0: 3.5, 1: 4.5}),
+            _flat_walker(step=100, entropy=entropies_b[0]),
+            _flat_walker(step=100, entropy=entropies_b[1]),
         ])
         pool = self._make_pool([slot_a, slot_b])
 
         pool.advance_all(0)
 
-        assert sorted(e.slot_index for e in pool.merge_events) == [0, 1]
+        by_slot = {e.slot_index: e.merged_entropy for e in pool.merge_events}
+        assert by_slot.keys() == {0, 1}
+        assert by_slot[0] == merge_entropies(entropies_a)
+        assert by_slot[1] == merge_entropies(entropies_b)
 
-    def test_merge_events_returns_tuple_copy(self) -> None:
+    def test_merge_events_property_returns_immutable_snapshot(self) -> None:
         walkers = [
             _flat_walker(step=100, entropy={0: 1.0, 1: 2.0}),
             _flat_walker(step=100, entropy={0: 1.5, 1: 2.5}),
@@ -172,9 +181,15 @@ class TestSerialPoolMergeEvents:
 
         pool.advance_all(0)
 
-        events = pool.merge_events
-        assert isinstance(events, tuple)
-        assert len(pool.merge_events) == 1
+        snapshot = pool.merge_events
+        assert isinstance(snapshot, tuple)
+        # The snapshot must not observe later mutations of the pool's
+        # internal list.
+        pool._merge_events.append(
+            snapshot[0]  # any MergeEvent; identity doesn't matter
+        )
+        assert len(snapshot) == 1
+        assert len(pool.merge_events) == 2
 
 
 class TestProcessPoolMergeEventsSurface:
@@ -195,6 +210,46 @@ class TestProcessPoolMergeEventsSurface:
             n_walkers_per_window=2,
         ) as pool:
             assert pool.merge_events == ()
+
+    def test_advance_all_records_merge_events_on_halving(self, tmp_path) -> None:
+        """Drives the process pool's master-side RECORD block via an
+        in-process W=2 setup. The RECORD block in
+        ``ProcessWangLandauPool.advance_all`` is structurally identical
+        to the serial pool's, but exercised through a different code
+        path; this test catches drift between the two (wrong walker
+        index for step, missing dict copy, wrong list to append to)."""
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        with make_in_process_wl_pool(
+            tmp_path,
+            windows=[(e0 - 5.0, e0 + 5.0)],
+            seeds=[0],
+            n_walkers_per_window=2,
+        ) as pool:
+            for _ in range(30):
+                pool.advance_all(200)
+
+            assert pool.merge_events, (
+                "test setup no longer triggers a halving merge"
+            )
+            for event in pool.merge_events:
+                assert event.slot_index == 0
+                assert event.merged_entropy
+                # merge_entropies min-shifts to icet convention.
+                assert min(event.merged_entropy.values()) == 0.0
+                # Step alignment with walker history (mirrors the
+                # contract pinned in TestStepKeyAlignment for the
+                # serial pool).
+                for _, conn in pool._slots[0].workers:
+                    replica = conn._worker._replica
+                    assert event.step in replica._ensemble._fill_factor_history
 
 
 class TestProtocolSurface:
@@ -262,10 +317,10 @@ class TestStepKeyAlignment:
         )
         pt.run(n_cycles=30)
 
-        if not pt.merge_events:
-            pytest.skip(
-                "no halving merge fired in 30 cycles; bump block_size/cycles"
-            )
+        assert pt.merge_events, (
+            "test setup no longer triggers a halving merge; "
+            "bump block_size/n_cycles"
+        )
 
         for event in pt.merge_events:
             slot = pt._pool._replicas[event.slot_index]
@@ -279,10 +334,9 @@ class TestOrchestratorSmoke:
     def test_pt_merge_events_count_consistent_with_per_window_halvings(
         self, tmp_path
     ) -> None:
-        """End-to-end: total event count per slot is bounded above by
-        the halvings reported by ``per_window_stats()`` for that slot
-        (events fire only on multi-walker slots with merge_cadence
-        ``at_halve``, and only at halvings)."""
+        """End-to-end: under the default ``merge_cadence="at_halve"`` on
+        a multi-walker slot, the event count per slot equals the
+        halvings reported by ``per_window_stats()`` for that slot."""
         from mchammer.calculators import ClusterExpansionCalculator
 
         from mchammer_pt.wl import WangLandauParallelTempering
@@ -305,19 +359,16 @@ class TestOrchestratorSmoke:
         )
         pt.run(n_cycles=30)
 
-        if not pt.merge_events:
-            pytest.skip(
-                "no halving merge fired in 30 cycles; bump block_size/cycles"
-            )
+        assert pt.merge_events, (
+            "test setup no longer triggers a halving merge; "
+            "bump block_size/n_cycles"
+        )
 
         stats = pt._pool.per_window_stats()
         for slot_index, slot_stats in enumerate(stats):
             events_for_slot = [
                 e for e in pt.merge_events if e.slot_index == slot_index
             ]
-            # merge_cadence="at_halve" is the default, so on multi-walker
-            # slots every halving should produce an event. Allow equality
-            # because the recording loop runs immediately after DECIDE.
             assert len(events_for_slot) == slot_stats["halvings"]
 
 

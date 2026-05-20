@@ -25,9 +25,9 @@ class MergeEvent:
         slot_index: index of the slot (window) within the pool.
         step: master MC step at the halving; matches the key in each
             walker's ``_fill_factor_history`` and ``_entropy_history``.
-        merged_entropy: the dict the coordinator wrote into every
-            walker's ``_entropy`` after this halving. A defensive copy
-            taken at recording time.
+        merged_entropy: maps energy-bin index to merged log-density of
+            states, normalised so the minimum value is zero (the icet
+            ``WangLandauEnsemble`` convention).
     """
 
     slot_index: int
