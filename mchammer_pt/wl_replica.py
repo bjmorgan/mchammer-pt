@@ -653,6 +653,15 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
+        # Seed the restored bin so the flatness gate sees it from
+        # restore-time onward. The saved _last_state may already
+        # contain this bin (with a real count, restored via
+        # _restart_ensemble); setdefault preserves that. The seed
+        # matters when the saved histogram is empty (pre-step
+        # checkpoint) or when the restored bin was never visited in
+        # the saved run.
+        e._histogram.setdefault(new_bin, 0)
+        e._entropy.setdefault(new_bin, 0.0)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 

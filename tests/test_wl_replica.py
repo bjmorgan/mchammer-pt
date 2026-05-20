@@ -636,3 +636,32 @@ def test_set_occupations_preserves_existing_count_for_known_bin():
 
     assert e._histogram[bin_init] == 1000
     assert e._entropy[bin_init] == 7.5
+
+
+def test_restore_state_seeds_restored_bin_when_last_state_histogram_is_empty():
+    """If the saved _last_state has an empty histogram, restore_state
+    still records the restored bin via the seed.
+
+    Covers the case where a checkpoint was written before any
+    _update_entropy call (zero-step restart) — without the seed the
+    restored bin would be invisible to the flatness gate.
+    """
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    # Force the saved state to look like a pre-step checkpoint:
+    # occupations recorded but no entropy/histogram visits yet.
+    container._last_state["histogram"] = {}
+    container._last_state["entropy"] = {}
+
+    dst = _make_wl_replica()
+    dst.ensemble._histogram.clear()
+    dst.ensemble._entropy.clear()
+
+    dst.restore_state(container)
+
+    restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
+    assert restored_bin in dst.ensemble._histogram
+    assert dst.ensemble._histogram[restored_bin] == 0
+    assert restored_bin in dst.ensemble._entropy
+    assert dst.ensemble._entropy[restored_bin] == 0.0
