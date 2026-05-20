@@ -29,6 +29,8 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from ..wl_merge_diagnostics import MergeEvent
+
 
 @runtime_checkable
 class ReplicaPool(Protocol):
@@ -196,6 +198,18 @@ class WangLandauPool(ReplicaPool, Protocol):
           halving, so ``len(histogram)`` counts bins visited since
           the last halving, not over the full run.
         * ``"converged"`` (bool): whether this window has converged.
+        """
+        ...
+
+    @property
+    def merge_events(self) -> tuple[MergeEvent, ...]:
+        """Per-halving merged-entropy series produced by the coordinator.
+
+        See :class:`mchammer_pt.wl_merge_diagnostics.MergeEvent`. Empty
+        for runs with no multi-walker slots, ``merge_cadence="never"``,
+        or runs that have not yet triggered a halving merge. Resumed
+        runs start with an empty list (the series is not persisted in
+        checkpoints).
         """
         ...
 

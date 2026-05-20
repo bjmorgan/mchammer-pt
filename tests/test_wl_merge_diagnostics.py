@@ -195,3 +195,22 @@ class TestProcessPoolMergeEventsSurface:
             n_walkers_per_window=2,
         ) as pool:
             assert pool.merge_events == ()
+
+
+class TestProtocolSurface:
+    def test_serial_pool_satisfies_runtime_protocol(self) -> None:
+        from mchammer_pt.parallel.backend import WangLandauPool
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+        # SerialWangLandauPool is the concrete type the orchestrator uses;
+        # it must satisfy the runtime-checkable protocol after the new
+        # member is added.
+        walkers = [
+            _flat_walker(step=0, entropy={0: 0.0, 1: 0.0}),
+            _flat_walker(step=0, entropy={0: 0.0, 1: 0.0}),
+        ]
+        slot = _StubWLSlot(walker_states=walkers)
+        pool = SerialWangLandauPool([slot], energy_spacing=1.0)
+        assert isinstance(pool, WangLandauPool)
+        # The property is the new contract point.
+        assert hasattr(pool, "merge_events")
