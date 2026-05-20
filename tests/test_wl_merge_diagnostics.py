@@ -319,3 +319,15 @@ class TestOrchestratorSmoke:
             # slots every halving should produce an event. Allow equality
             # because the recording loop runs immediately after DECIDE.
             assert len(events_for_slot) == slot_stats["halvings"]
+
+
+class TestPublicExport:
+    def test_merge_event_is_exported(self) -> None:
+        import mchammer_pt
+
+        assert hasattr(mchammer_pt, "MergeEvent")
+        assert "MergeEvent" in mchammer_pt.__all__
+        # Same identity as the source module.
+        from mchammer_pt.wl_merge_diagnostics import MergeEvent
+
+        assert mchammer_pt.MergeEvent is MergeEvent
