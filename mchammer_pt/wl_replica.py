@@ -261,6 +261,16 @@ class WangLandauReplica:
                 f"energy lies in its window."
             )
 
+        # Seed the starting bin into the histogram and entropy so the
+        # flatness gate is aware of it from construction. Without this,
+        # a walker whose first move leaves bin_init and never returns
+        # would have bin_init absent from the dict; the flatness check
+        # then operates on the saturated subset of bins actually visited
+        # and may halve prematurely. See
+        # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
+        e._histogram.setdefault(bin_init, 0)
+        e._entropy.setdefault(bin_init, 0.0)
+
         self.walker_states: tuple[WalkerPostBlockState, ...] = (
             WalkerPostBlockState(
                 is_flat=False,

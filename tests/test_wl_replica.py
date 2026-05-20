@@ -103,6 +103,24 @@ def test_wl_replica_rejects_out_of_window_initial_energy():
         )
 
 
+def test_init_seeds_starting_bin_into_histogram_and_entropy():
+    """The constructor records the starting bin in _histogram and _entropy.
+
+    With the seed, the flatness gate sees the starting bin from cycle 0,
+    so a walker that leaves it on step 0 and never returns cannot
+    silently saturate the histogram over a strict subset of the window
+    and trigger a premature halving.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+
+    assert bin_init in e._histogram
+    assert e._histogram[bin_init] == 0
+    assert bin_init in e._entropy
+    assert e._entropy[bin_init] == 0.0
+
+
 def test_wl_replica_log_g_returns_minus_inf_out_of_window():
     """log_g at an out-of-window energy returns -inf."""
     from mchammer_pt.wl_replica import WangLandauReplica
