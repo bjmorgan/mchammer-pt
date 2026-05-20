@@ -11,6 +11,7 @@ from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     SlotView,
     WalkerPostBlockState,
+    _summed_histogram_flat_from_snapshots,
     decide_block_actions,
 )
 
@@ -209,6 +210,29 @@ class TestBPSwitch:
         plan = decide_block_actions(view)
         assert plan.halve is True
         assert plan.switch_to_phase is None
+
+
+class TestSummedHistogramFlatZeroCount:
+    """Pin the production pooled-gate's zero-count semantics.
+
+    The seed-the-starting-bin policy (see WL known-bin-seed plan,
+    tasks 2-4) relies on the pooled flatness gate treating a present-
+    but-unvisited bin (count 0) as not-flat. Calling the production
+    function directly ensures a future refactor of the gate cannot
+    silently change this contract.
+    """
+
+    def test_zero_count_bin_blocks_flatness(self) -> None:
+        snapshot = _state(histogram={0: 0, 1: 1000})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.7
+        )
+
+    def test_no_zero_entry_is_flat(self) -> None:
+        snapshot = _state(histogram={1: 1000})
+        assert _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.7
+        )
 
 
 class TestWOneCollapsesModes:

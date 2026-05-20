@@ -83,32 +83,3 @@ def test_update_entropy_one_over_t_phase_tracks_inverse_t():
     e._update_entropy(0)
     # t = step - entry + 1 = 110 - 10 + 1 = 101
     assert e._fill_factor == pytest.approx(1.0 / 101)
-
-
-def test_zero_count_bin_blocks_flatness():
-    """A zero-count entry in _histogram blocks flatness.
-
-    Pins the gate semantics that the seed-the-starting-bin fix relies
-    on: with the existing flatness criterion, any bin in the dict with
-    count 0 forces ``min/mean = 0`` and the check returns False.
-    """
-    import numpy as np
-
-    e = _make_ensemble(flatness_check_interval=10)
-    e._reached_energy_window = True
-
-    # Simulated post-seed shape: bin 0 present-but-unvisited, bin 1 visited.
-    e._histogram = {0: 0, 1: 1000}
-    e._entropy = {0: 0.0, 1: 0.0}
-
-    histogram = np.array(list(e._histogram.values()), dtype=float)
-    limit = e._flatness_limit * np.average(histogram)
-    is_flat = bool(np.all(histogram >= limit))
-    assert not is_flat
-
-    # Without the zero entry the histogram would be trivially flat.
-    e._histogram = {1: 1000}
-    histogram = np.array(list(e._histogram.values()), dtype=float)
-    limit = e._flatness_limit * np.average(histogram)
-    is_flat = bool(np.all(histogram >= limit))
-    assert is_flat
