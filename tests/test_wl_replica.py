@@ -707,19 +707,11 @@ def test_window_stats_reports_bins_visited_and_bins_known():
 
 
 def test_init_leaves_visited_bins_empty():
-    """The constructor does not seed `_visited_bins`.
+    """`_visited_bins` is empty after construction.
 
-    `_visited_bins` tracks bins the walker has MC-travelled to since
-    window entry. At construction the walker has been *placed* at
-    `bin_init` but has not yet travelled there via any MC step, so
-    the set starts empty. The first `_update_entropy` call (if the
-    walker is rejected back to `bin_init`) or any subsequent
-    step that lands there will populate it. This is what makes
-    `bins_visited < bins_known` a meaningful trap signal: in a
-    trap scenario the walker is placed at the GS bin via construction
-    (so the GS bin appears in `_histogram` via the seed) but never
-    travels there via MC (so it's absent from `_visited_bins`),
-    giving the divergence.
+    `_visited_bins` records bins reached via `_update_entropy` since
+    window entry; construction places the walker at `bin_init` but
+    does not count as MC travel.
     """
     replica = _make_wl_replica()
     assert replica.ensemble._visited_bins == set()
