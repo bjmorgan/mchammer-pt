@@ -23,6 +23,7 @@ from ..wl_coordinator import (
     _validate_merge_cadence,
     decide_block_actions,
 )
+from ..wl_merge_diagnostics import MergeEvent
 from ..wl_replica import WangLandauReplica, WangLandauSlot
 from ._imports import _resolve_replicas
 
@@ -252,6 +253,7 @@ class SerialWangLandauPool:
         _validate_merge_cadence(merge_cadence)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._merge_events: list[MergeEvent] = []
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
                 raise ValueError(
@@ -303,9 +305,22 @@ class SerialWangLandauPool:
             slot.advance(n_steps)
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
-        plans = [
-            decide_block_actions(self._view_of(s)) for s in self._replicas
-        ]
+        views = [self._view_of(s) for s in self._replicas]
+        plans = [decide_block_actions(v) for v in views]
+
+        # RECORD: capture merged entropy per halving merge while the
+        # master-side plan still carries it. See wl_merge_diagnostics.
+        for slot_index, (view, plan) in enumerate(
+            zip(views, plans, strict=True)
+        ):
+            if plan.merged_entropy is not None:
+                self._merge_events.append(
+                    MergeEvent(
+                        slot_index=slot_index,
+                        step=view.walker_states[0].step,
+                        merged_entropy=dict(plan.merged_entropy),
+                    )
+                )
 
         # APPLY: per-slot mutation. No batching benefit in-process.
         for slot, plan in zip(self._replicas, plans, strict=True):
@@ -358,6 +373,11 @@ class SerialWangLandauPool:
         for d in stats:
             d["flatness_mode"] = self._flatness_mode
         return stats
+
+    @property
+    def merge_events(self) -> tuple[MergeEvent, ...]:
+        """Per-halving merged entropies; see :mod:`wl_merge_diagnostics`."""
+        return tuple(self._merge_events)
 
     def attach_observer(
         self,
