@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import pytest
+
+from mchammer_pt.wl_coordinator import (
+    CoordinatorPlan,
+    WalkerPostBlockState,
+)
+
+from tests._in_process_pool import make_in_process_wl_pool
+from tests._wl_fixtures import make_wl_ce, make_wl_atoms
 
 
 class TestMergeEventRecord:
@@ -26,14 +36,6 @@ class TestMergeEventRecord:
         event = MergeEvent(slot_index=0, step=0, merged_entropy={})
         with pytest.raises(FrozenInstanceError):
             event.slot_index = 99  # type: ignore[misc]
-
-
-from dataclasses import dataclass, field
-
-from mchammer_pt.wl_coordinator import (
-    CoordinatorPlan,
-    WalkerPostBlockState,
-)
 
 
 @dataclass
@@ -168,13 +170,7 @@ class TestSerialPoolMergeEvents:
 
         events = pool.merge_events
         assert isinstance(events, tuple)
-        # Mutating the returned tuple's underlying list (if it were one)
-        # must not affect the pool's record.
         assert len(pool.merge_events) == 1
-
-
-from tests._in_process_pool import make_in_process_wl_pool
-from tests._wl_fixtures import make_wl_ce, make_wl_atoms
 
 
 class TestProcessPoolMergeEventsSurface:
