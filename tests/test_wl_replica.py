@@ -432,13 +432,11 @@ def test_is_flat_returns_false_on_uneven_histogram():
 
 
 def test_is_flat_returns_false_on_all_zero_histogram():
-    """An all-zero histogram is not flat (mean=0 trip guard).
+    """``is_flat`` returns False when every histogram entry is zero.
 
-    The known-bin seed introduces ``_histogram = {bin_init: 0}`` at
-    construction and again transiently after ``force_halve`` /
-    ``set_occupations`` / ``restore_state``. Without the guard,
-    ``limit = flatness_limit * mean(counts) = 0`` and
-    ``all(counts >= 0)`` is vacuously true.
+    Without the ``mean <= 0`` short-circuit, ``limit =
+    flatness_limit * mean(counts) = 0`` and ``all(counts >= 0)``
+    would be vacuously true for an all-zero histogram.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
@@ -593,37 +591,47 @@ def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
 
 
 def test_set_occupations_seeds_new_bin_into_histogram_and_entropy():
-    """set_occupations records the new bin if it wasn't already tracked.
+    """``set_occupations`` records the new bin in ``_histogram`` and ``_entropy``.
 
     REWL exchanges and process-pool transports go through
-    set_occupations, so this seeding also covers exchange arrivals.
+    ``set_occupations``, so this seeding covers exchange arrivals.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
-
-    # Construct alternative occupations that produce a different energy
-    # (and therefore a different bin) but stay inside the window.
     occ = replica.current_occupations()
-    # Flip the species of the first two distinct sites to change energy.
-    species_a, species_b = int(occ[0]), None
-    for s in occ[1:]:
-        if int(s) != species_a:
-            species_b = int(s)
+    bin_init = e._get_bin_index(e._potential)
+
+    # Systematically scan species swaps until we find one whose
+    # resulting energy lands in an in-window bin distinct from
+    # bin_init. The toy fixture's energy landscape is rich enough
+    # that the first few swaps suffice; a hard assertion below
+    # exposes any future fixture change that breaks this.
+    new_occ = None
+    new_bin = None
+    for idx_a in range(len(occ)):
+        for idx_b in range(idx_a + 1, len(occ)):
+            if int(occ[idx_a]) == int(occ[idx_b]):
+                continue
+            candidate = occ.copy()
+            candidate[idx_a] = int(occ[idx_b])
+            candidate[idx_b] = int(occ[idx_a])
+            candidate_potential = float(
+                e.calculator.calculate_total(occupations=candidate)
+            )
+            candidate_bin = e._get_bin_index(candidate_potential)
+            if (
+                candidate_bin != bin_init
+                and e._inside_energy_window(candidate_bin)
+            ):
+                new_occ = candidate
+                new_bin = candidate_bin
+                break
+        if new_occ is not None:
             break
-    assert species_b is not None, "fixture should have two species"
-    new_occ = occ.copy()
-    # Find one site of each species and swap them.
-    idx_a = int(np.where(new_occ == species_a)[0][0])
-    idx_b = int(np.where(new_occ == species_b)[0][0])
-    new_occ[idx_a], new_occ[idx_b] = species_b, species_a
-
-    # Compute the bin this configuration lands in.
-    new_potential = float(e.calculator.calculate_total(occupations=new_occ))
-    new_bin = e._get_bin_index(new_potential)
-
-    # Sanity: make sure we're actually moving to a fresh bin.
-    if new_bin in e._histogram:
-        pytest.skip("swap didn't change bin; fixture-dependent")
+    assert new_occ is not None, (
+        "fixture has no two-site swap producing an in-window bin "
+        "distinct from bin_init"
+    )
 
     replica.set_occupations(new_occ)
 
@@ -744,3 +752,26 @@ def test_restore_state_round_trips_visited_bins():
     dst.restore_state(container)
 
     assert dst.ensemble._visited_bins == {src_bin_init, src_bin_init + 2}
+
+
+def test_restore_state_legacy_checkpoint_starts_with_empty_visited_bins():
+    """A checkpoint without ``visited_bins`` restores with an empty set.
+
+    Backwards-compatibility path for older checkpoints written before
+    ``_visited_bins`` was persisted. The seed for ``new_bin`` still
+    applies to ``_histogram`` and ``_entropy``.
+    """
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("visited_bins", None)
+
+    dst = _make_wl_replica()
+    dst.ensemble._visited_bins = {123, 456}  # to be replaced
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._visited_bins == set()
+    restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
+    assert restored_bin in dst.ensemble._histogram
+    assert restored_bin in dst.ensemble._entropy

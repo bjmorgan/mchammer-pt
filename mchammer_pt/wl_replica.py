@@ -679,9 +679,7 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
-        # `_visited_bins` is restored from the saved state when
-        # present; absent in checkpoints written before this field
-        # existed, in which case the set starts empty.
+        # Older checkpoints may not carry `visited_bins`; treat as empty.
         saved_visited = last_state.get("visited_bins")
         if saved_visited is not None:
             e._visited_bins = {int(b) for b in saved_visited}

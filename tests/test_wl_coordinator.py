@@ -215,11 +215,10 @@ class TestBPSwitch:
 class TestSummedHistogramFlatZeroCount:
     """Pin the production pooled-gate's zero-count semantics.
 
-    The seed-the-starting-bin policy (see WL known-bin-seed plan,
-    tasks 2-4) relies on the pooled flatness gate treating a present-
-    but-unvisited bin (count 0) as not-flat. Calling the production
-    function directly ensures a future refactor of the gate cannot
-    silently change this contract.
+    The pooled flatness gate treats a present-but-unvisited bin
+    (count 0) as not-flat. Tests call the production function
+    directly so a refactor of the gate cannot silently change this
+    contract.
     """
 
     def test_zero_count_bin_blocks_flatness(self) -> None:
@@ -238,11 +237,8 @@ class TestSummedHistogramFlatZeroCount:
 class TestSummedHistogramFlatAllZero:
     """An all-zero combined histogram does not pass the flatness gate.
 
-    Without the seed (Tasks 2-5), this case couldn't arise in the
-    coordinator path. With the seed, a freshly-constructed walker
-    has ``_histogram = {bin_init: 0}`` and no positive entries until
-    ``_update_entropy`` increments a bin; the gate must treat this
-    state as not-flat to avoid a vacuous halve.
+    Otherwise ``mean(counts) = 0`` would make ``limit = 0`` and
+    ``all(counts >= 0)`` would be vacuously true.
     """
 
     def test_single_zero_bin_does_not_flatten(self) -> None:
