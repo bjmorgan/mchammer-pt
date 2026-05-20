@@ -298,14 +298,14 @@ def test_window_group_snapshot_returns_per_walker_and_group_dicts():
     group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
     snap = group.snapshot_for_checkpoint()
 
-    assert set(snap.keys()) == {"per_walker", "group"}
+    assert set(snap.keys()) == {"per_walker", "group_state"}
     assert len(snap["per_walker"]) == 2
     for entry in snap["per_walker"]:
         assert "sites_by_species" in entry
-    assert set(snap["group"].keys()) == {"rng_state", "exchange_idx", "phase"}
-    assert isinstance(snap["group"]["rng_state"], str)
-    assert isinstance(snap["group"]["exchange_idx"], int)
-    assert snap["group"]["phase"] in {"halving", "1_over_t"}
+    assert set(snap["group_state"].keys()) == {"rng_state", "exchange_idx", "phase"}
+    assert isinstance(snap["group_state"]["rng_state"], str)
+    assert isinstance(snap["group_state"]["exchange_idx"], int)
+    assert snap["group_state"]["phase"] in {"halving", "1_over_t"}
 
 
 def test_attach_observer_factory_type_check():
@@ -733,7 +733,7 @@ def test_window_group_restore_state_round_trips_exchange_rng():
     group_b.restore_state(
         containers=[r.data_container() for r in group_a._replicas],
         per_walker_extras=snap["per_walker"],
-        group_state=snap["group"],
+        group_state=snap["group_state"],
     )
     # Both groups must now produce identical next exchange indices.
     group_a.reroll_exchange_idx()
@@ -751,5 +751,5 @@ def test_window_group_restore_state_rejects_wrong_length_containers():
         group.restore_state(
             containers=[],
             per_walker_extras=snap["per_walker"],
-            group_state=snap["group"],
+            group_state=snap["group_state"],
         )

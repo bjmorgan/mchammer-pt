@@ -115,7 +115,13 @@ def _compute_ensemble_kwargs_hash(
         # so callers passing the same kwargs in different insertion
         # orders get matching hashes.
         payload = pickle.dumps(sorted(canonical.items()))
-    except Exception:
+    except (pickle.PicklingError, TypeError, AttributeError):
+        # Common non-picklable cases: icet ClusterSpace/ClusterExpansion
+        # (TypeError on copy), instances of locally-defined classes
+        # (AttributeError on lookup), or unsupported objects
+        # (PicklingError). Let MemoryError, RecursionError, and
+        # KeyboardInterrupt propagate — they're real failures, not
+        # "kwargs aren't stably hashable".
         return ""
     return hashlib.sha256(payload).hexdigest()
 
@@ -286,7 +292,8 @@ def _read_window_groups(path: Path | str) -> list[dict[str, Any] | None]:
         ):
             raise KeyError(
                 f"{path}: missing /meta/walkers_per_window or "
-                f"/orchestrator; not a v4 checkpoint."
+                f"/orchestrator; not a WL checkpoint (canonical PT "
+                f"v4 checkpoints legitimately lack walkers_per_window)."
             )
         wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
         n_windows = len(wpw)
@@ -383,7 +390,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     each replica's `_last_state` is populated and the on-disk
     container round-trips through ``_restart_ensemble``.
 
-    The function packs these into the schema-``"3"`` HDF5 layout
+    The function packs these into the schema-``"4"`` HDF5 layout
     described in this module's docstring.
     """
     from .history import write_hdf5

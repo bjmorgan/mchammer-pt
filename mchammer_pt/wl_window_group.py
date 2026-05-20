@@ -278,7 +278,7 @@ class WangLandauWindowGroup:
                 "per_walker": list of W per-walker snapshot dicts (each
                     carries ``sites_by_species`` for the walker's
                     configuration cache).
-                "group": dict with ``rng_state`` (JSON str of the exchange
+                "group_state": dict with ``rng_state`` (JSON str of the exchange
                     RNG state), ``exchange_idx`` (current swap-walker
                     index), and ``phase`` (collective WL phase taken from
                     walker 0's ensemble).
@@ -287,7 +287,7 @@ class WangLandauWindowGroup:
 
         return {
             "per_walker": [r.snapshot_for_checkpoint() for r in self._replicas],
-            "group": {
+            "group_state": {
                 "rng_state": _serialise_rng_state(self._rng),
                 "exchange_idx": int(self._exchange_idx),
                 "phase": self._replicas[0].ensemble._phase,

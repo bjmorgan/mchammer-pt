@@ -304,7 +304,7 @@ class ProcessPool:
         freshly-spawned process pool to the saved state.
 
         Args:
-            containers: one container per slot, in window order.
+            containers: one container per replica, in replica order.
                 Length must equal `len(self)`.
             replica_extras: one per-replica extras dict per worker.
                 Each must carry a ``"sites_by_species"`` key.

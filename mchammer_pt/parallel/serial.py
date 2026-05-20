@@ -562,7 +562,7 @@ class SerialWangLandauPool:
             if isinstance(slot, WangLandauWindowGroup):
                 snap = slot.snapshot_for_checkpoint()
                 per_walker.extend(snap["per_walker"])
-                group_state.append(snap["group"])
+                group_state.append(snap["group_state"])
             else:
                 per_walker.append(slot.snapshot_for_checkpoint())
                 group_state.append(None)

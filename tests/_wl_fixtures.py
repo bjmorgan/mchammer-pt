@@ -86,8 +86,6 @@ def make_serial_wl_pool_mixed():
 
     Window 0 holds a bare WangLandauReplica (W=1); window 1 holds a
     WangLandauWindowGroup with two walkers (W=2). Total M=3 walkers.
-
-    data_container_file is None to satisfy the current W>1 guard.
     """
     from mchammer.calculators import ClusterExpansionCalculator
 

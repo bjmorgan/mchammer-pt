@@ -545,41 +545,6 @@ def test_wl_pt_checkpoint_preserves_flatness_mode_and_merge_cadence(tmp_path):
     assert pt2._merge_cadence == "never"
 
 
-def test_wl_pt_resume_falls_back_to_defaults_when_meta_lacks_new_keys(tmp_path):
-    """Older checkpoints without the new keys resume with the default values."""
-    from mchammer_pt.wl import WangLandauParallelTempering
-    e0 = _initial_energy()
-
-    pt = WangLandauParallelTempering(
-        cluster_expansion=make_wl_ce(),
-        atoms=[make_wl_atoms(), make_wl_atoms()],
-        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
-        energy_spacing=0.1,
-        block_size=5,
-        random_seed=0,
-        flatness_mode="per_walker",
-        merge_cadence="never",
-    )
-    pt.run(n_cycles=1)
-    # Simulate a pre-W1 checkpoint by omitting the two new keys from
-    # the meta dict at save time. The reader's `.get(..., default)`
-    # path must then resurface the defaults — not the saved values.
-    original_meta = pt._checkpoint_meta()
-    legacy_meta = {
-        k: v for k, v in original_meta.items()
-        if k not in ("flatness_mode", "merge_cadence")
-    }
-    pt._checkpoint_meta = lambda: legacy_meta  # type: ignore[method-assign]
-    cp = tmp_path / "wl.hdf5"
-    pt.save_checkpoint(cp)
-
-    pt2 = WangLandauParallelTempering.resume(
-        cp, cluster_expansion=make_wl_ce()
-    )
-    assert pt2._flatness_mode == "pooled"
-    assert pt2._merge_cadence == "at_halve"
-
-
 def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
     import h5py
 

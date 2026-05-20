@@ -87,9 +87,13 @@ def _spawn_wl_seeds(
 ) -> tuple[list[list[int]], list[int], int]:
     """Spawn deterministic per-walker / per-group / master seeds.
 
-    Reproduces the constructor's SeedSequence walk as a standalone
-    helper so both the constructor and the resume path derive seeds
-    identically, without duplicating the spawn logic.
+    Used by the in-process constructor and by `resume` / `resume_process_pool`
+    on the serial-pool path so both derive seeds identically without
+    duplicating the SeedSequence walk. `process_pool` and the
+    `resume_process_pool` worker-spawn path use mchammer-pt's worker
+    builder, which independently constructs its own SeedSequence; the
+    contract there is that both paths produce identical seed plans for
+    the same `random_seed` + `walkers_per_window`.
 
     Args:
         random_seed: top-level seed.
@@ -456,7 +460,18 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
 
     def save_checkpoint(self, path: Path | str) -> None:
-        """Write a full checkpoint of this orchestrator atomically."""
+        """Write a full checkpoint of this orchestrator atomically.
+
+        For windows with `n_walkers_per_window > 1`, the checkpoint
+        captures whatever entropy state the walkers hold at the time
+        of the call. If save_checkpoint is invoked **after** ``run()``
+        has returned, the saved per-walker entropies have already been
+        merged by ``finalise_for_reporting`` (run-end side-effect), so
+        the on-disk state cannot reconstruct the pre-merge trajectory
+        — resuming from such a file produces a structurally correct
+        but not bit-identical continuation. See `resume` and the
+        class docstring for the full W>1 contract.
+        """
         _write_checkpoint(self, path)
 
     @classmethod
@@ -477,6 +492,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
         mismatches raise. Bit-identical resume requires the original
         `_sites_by_species` cache, which is persisted in the
         checkpoint. Supports any mix of W=1 and W>1 windows.
+
+        For windows with ``n_walkers_per_window > 1`` the resumed
+        continuation is structurally correct but not bit-identical
+        to an uninterrupted run: ``save_checkpoint`` captures the
+        merged-entropy state left behind by ``finalise_for_reporting``
+        at the end of each ``run()``, and that merge is destructive.
+        A `UserWarning` is emitted at resume time naming the affected
+        windows. The relaxation does not apply to all-W=1
+        checkpoints, which retain the bit-identical contract.
         """
         import json
 
@@ -515,15 +539,19 @@ class WangLandauParallelTempering(BaseParallelTempering):
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
         walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
-        # Checkpoints written before ``flatness_mode`` and
-        # ``merge_cadence`` were persisted in meta resume with the
-        # values that were the defaults at the time of writing
-        # ("pooled" and "at_halve").
+        expected_m = sum(walkers_per_window)
+        if len(containers) != expected_m:
+            raise ValueError(
+                f"{path}: walker-count mismatch — "
+                f"sum(walkers_per_window) = {expected_m} but "
+                f"file contains {len(containers)} replica containers; "
+                f"checkpoint is corrupted or truncated."
+            )
         flatness_mode: FlatnessMode = str(
-            meta.get("flatness_mode", "pooled")
+            meta["flatness_mode"]
         )  # type: ignore[assignment]
         merge_cadence: MergeCadence = str(
-            meta.get("merge_cadence", "at_halve")
+            meta["merge_cadence"]
         )  # type: ignore[assignment]
 
         walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
@@ -634,7 +662,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         process or process-to-serial boundary; resume into the same pool
         kind that wrote the checkpoint for bit-identical continuation,
         or accept that cross-pool resume gives a statistically-valid
-        continuation only.
+        continuation only. The same W>1 entropy-merge relaxation
+        documented on `resume` applies here too; a `UserWarning` is
+        emitted for any window with ``walkers_per_window[g] > 1``.
 
         See `resume` for argument and error semantics.
         """
@@ -674,15 +704,19 @@ class WangLandauParallelTempering(BaseParallelTempering):
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
         walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
-        # Checkpoints written before ``flatness_mode`` and
-        # ``merge_cadence`` were persisted in meta resume with the
-        # values that were the defaults at the time of writing
-        # ("pooled" and "at_halve").
+        expected_m = sum(walkers_per_window)
+        if len(containers) != expected_m:
+            raise ValueError(
+                f"{path}: walker-count mismatch — "
+                f"sum(walkers_per_window) = {expected_m} but "
+                f"file contains {len(containers)} replica containers; "
+                f"checkpoint is corrupted or truncated."
+            )
         flatness_mode: FlatnessMode = str(
-            meta.get("flatness_mode", "pooled")
+            meta["flatness_mode"]
         )  # type: ignore[assignment]
         merge_cadence: MergeCadence = str(
-            meta.get("merge_cadence", "at_halve")
+            meta["merge_cadence"]
         )  # type: ignore[assignment]
 
         # One Atoms per window (not per walker) for the constructor path.
