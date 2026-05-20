@@ -476,16 +476,25 @@ class WangLandauReplica:
     def window_stats(self) -> dict[str, Any]:
         """Per-window convergence metrics.
 
-        Returns fill_factor, halvings, histogram, converged. For a
-        single-walker replica ``flatness_mode`` and ``per_walker_flat_min``
-        are omitted (the progress reporter falls through to the
-        pooled computation, which is exact for n_walkers == 1).
+        Returns fill_factor, halvings, histogram, bins_visited,
+        bins_known, converged. For a single-walker replica
+        ``flatness_mode`` and ``per_walker_flat_min`` are omitted
+        (the progress reporter falls through to the pooled
+        computation, which is exact for n_walkers == 1).
+
+        ``bins_visited`` is the count of bins whose current histogram
+        value is > 0 (the bins active in the current halving phase);
+        ``bins_known`` is ``len(_histogram)`` (all bins the flatness
+        gate considers, including seeded-but-unvisited entries).
         """
         e = self._ensemble
+        histogram = dict(e._histogram)
         return {
             "fill_factor": float(e._fill_factor),
             "halvings": max(0, len(e._fill_factor_history) - 1),
-            "histogram": dict(e._histogram),
+            "histogram": histogram,
+            "bins_visited": sum(1 for v in histogram.values() if v > 0),
+            "bins_known": len(histogram),
             "converged": self.converged,
         }
 
