@@ -1272,6 +1272,57 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
         assert wr.get_entropy() is not None
 
 
+def test_wl_pt_resume_emits_warning_for_multi_walker_windows(tmp_path):
+    """W>1 resume emits UserWarning naming the affected windows."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[1, 2],
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with pytest.warns(UserWarning, match=r"windows \[1\].*not bit-identical"):
+        WangLandauParallelTempering.resume(
+            path, cluster_expansion=make_wl_ce(),
+        )
+
+
+def test_wl_pt_resume_does_not_warn_for_all_w1(tmp_path):
+    """All-W=1 resume is bit-identical; no warning expected."""
+    import warnings as _warnings
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", UserWarning)
+        WangLandauParallelTempering.resume(
+            path, cluster_expansion=make_wl_ce(),
+        )
+
+
 def test_wl_pt_resume_process_pool_w2_round_trips(tmp_path):
     """W=2 process pool resume reconstructs structure and continues without errors.
 

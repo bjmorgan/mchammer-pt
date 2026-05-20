@@ -9,6 +9,7 @@ log-density-of-states ratio for acceptance.
 from __future__ import annotations
 
 import tempfile
+import warnings
 import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -79,6 +80,39 @@ def _array_to_windows(
         hi = None if np.isnan(row[1]) else float(row[1])
         result.append((lo, hi))
     return result
+
+
+def _warn_post_merge_resume_if_multi_walker(
+    walkers_per_window: Sequence[int],
+    caller: str,
+) -> None:
+    """Emit a `UserWarning` on resume when any window has W > 1.
+
+    The end-of-run `pool.finalise_for_reporting()` destructively merges
+    per-walker entropies, so any checkpoint written after `run()`
+    returned captures the post-merge state. A resumed run continues
+    from merged entropy rather than from per-walker entropy, which
+    means the trajectory will not be bit-identical to an
+    uninterrupted run. The warning fires unconditionally for any
+    W > 1 window because there is no on-disk marker distinguishing
+    pre-merge (mid-run save) from post-merge (post-run save)
+    checkpoints — the safe assumption is that the resumed trajectory
+    diverges. The warning does not fire for all-W=1 checkpoints,
+    which retain the bit-identical contract.
+    """
+    multi = [g for g, w in enumerate(walkers_per_window) if w > 1]
+    if not multi:
+        return
+    warnings.warn(
+        f"{caller}: windows {multi} have walkers_per_window > 1. "
+        f"The end-of-run entropy merge in pool.finalise_for_reporting() "
+        f"is destructive, so the resumed trajectory is not bit-identical "
+        f"to an uninterrupted run (only structurally correct). See "
+        f"WangLandauParallelTempering.resume docstring for the full "
+        f"contract.",
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _spawn_wl_seeds(
@@ -547,6 +581,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"file contains {len(containers)} replica containers; "
                 f"checkpoint is corrupted or truncated."
             )
+        _warn_post_merge_resume_if_multi_walker(walkers_per_window, "resume")
         flatness_mode: FlatnessMode = str(
             meta["flatness_mode"]
         )  # type: ignore[assignment]
@@ -712,6 +747,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"file contains {len(containers)} replica containers; "
                 f"checkpoint is corrupted or truncated."
             )
+        _warn_post_merge_resume_if_multi_walker(
+            walkers_per_window, "resume_process_pool"
+        )
         flatness_mode: FlatnessMode = str(
             meta["flatness_mode"]
         )  # type: ignore[assignment]
