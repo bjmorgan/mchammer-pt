@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
@@ -18,6 +18,18 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     1/t branch are all suppressed; ``WangLandauWindowGroup`` owns
     those decisions and applies them via ``WangLandauReplica``.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Per-walker set of bins the walker has been at since
+        # construction. Distinct from `_histogram` (which resets to
+        # zero values at every halving): this set monotonically
+        # grows and is the right denominator for trap diagnostics —
+        # "has the walker ever reached this bin?".
+        self._visited_bins: set[int] = set()
+        bin_init = self._get_bin_index(self._potential)
+        if bin_init is not None and self._inside_energy_window(bin_init):
+            self._visited_bins.add(bin_init)
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's
@@ -44,6 +56,9 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             self._entropy.get(bin_cur, 0) + self._fill_factor
         )
         self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
+
+        if self._reached_energy_window:
+            self._visited_bins.add(bin_cur)
 
         if (
             self.step > 0

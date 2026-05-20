@@ -83,3 +83,21 @@ def test_update_entropy_one_over_t_phase_tracks_inverse_t():
     e._update_entropy(0)
     # t = step - entry + 1 = 110 - 10 + 1 = 101
     assert e._fill_factor == pytest.approx(1.0 / 101)
+
+
+def test_update_entropy_adds_bin_to_visited_bins_when_in_window():
+    """`_update_entropy` adds the current bin to `_visited_bins` only
+    once the walker has reached the window. Pre-window transient bins
+    don't pollute the set.
+    """
+    e = _make_ensemble(flatness_check_interval=10)
+    # Pre-window: not added.
+    e._reached_energy_window = False
+    initial = set(e._visited_bins)
+    e._update_entropy(99)
+    assert e._visited_bins == initial
+
+    # In-window: added.
+    e._reached_energy_window = True
+    e._update_entropy(42)
+    assert 42 in e._visited_bins

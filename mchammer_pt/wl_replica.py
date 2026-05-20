@@ -355,6 +355,7 @@ class WangLandauReplica:
         # docs/superpowers/specs/2026-05-20-wl-known-bin-seed-design.md.
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
+        e._visited_bins.add(new_bin)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
@@ -671,6 +672,7 @@ class WangLandauReplica:
         # the saved run.
         e._histogram.setdefault(new_bin, 0)
         e._entropy.setdefault(new_bin, 0.0)
+        e._visited_bins.add(new_bin)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 
