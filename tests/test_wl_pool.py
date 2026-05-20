@@ -618,9 +618,7 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
             assert stats[0]["histogram"].get(bin_key, 0) == expected
 
 
-def test_process_wl_pool_multi_walker_per_window_stats_reports_bins_visited_and_bins_known(
-    tmp_path,
-):
+def test_process_wl_pool_multi_walker_stats_report_union_bin_counts(tmp_path):
     """For a multi-walker slot, per_window_stats reports bins_visited as
     the size of the union of MC-visited bins across walkers, and
     bins_known as the size of the union of histogram keys.
