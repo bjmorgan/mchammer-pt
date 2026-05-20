@@ -5,22 +5,33 @@ checkpoint format: identity hashes for the CE and ensemble kwargs,
 the `CheckpointWriter` `CycleCallback`, and the writer/reader
 helpers used by every `BaseParallelTempering` subclass that
 supports checkpoint and resume (`CanonicalParallelTempering` and
-`WangLandauParallelTempering` as of schema version ``"3"``).
+`WangLandauParallelTempering` as of schema version ``"4"``).
 
-The on-disk schema (version ``"3"``) is HDF5 with these top-level
+The on-disk schema (version ``"4"``) is HDF5 with these top-level
 groups: ``meta`` (run metadata as attrs; six shared keys —
 ``schema_version``, ``block_size``, ``random_seed``,
 ``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
 plus ladder-specific keys contributed by each orchestrator
 subclass via ``_checkpoint_meta()``: ``temperatures`` for canonical
-PT, ``windows`` + ``energy_spacing`` for REWL);
+PT, ``windows`` + ``energy_spacing`` + ``flatness_mode`` +
+``merge_cadence`` + ``walkers_per_window`` for REWL);
 ``exchanges`` (per-cycle history arrays); ``replicas`` (one opaque
-tarball per replica, the native mchammer ``BaseDataContainer``
-format); ``orchestrator`` (the exchange-proposal RNG state and the
-replica-label permutation); and ``sites_by_species`` (one JSON
-dataset per replica carrying the path-dependent
+tarball per walker, the native mchammer ``BaseDataContainer``
+format — flat in window-major / walker-minor order, length
+``sum(walkers_per_window)``); ``orchestrator`` (the exchange-proposal
+RNG state, the replica-label permutation, and — for REWL with
+``walkers_per_window[g] > 1`` — one ``/orchestrator/window_groups/<g>/``
+subgroup per multi-walker window carrying ``rng_state`` (group
+exchange-walker selection RNG), ``exchange_idx`` (current swap
+walker), and ``phase`` (collective WL phase); W=1 windows omit
+the subgroup entirely); and ``sites_by_species`` (one JSON dataset
+per walker carrying the path-dependent
 ``ConfigurationManager._sites_by_species`` cache that bit-identical
 resume requires alongside ``_last_state``).
+
+Schema v4 is a hard break from v3 — v3 checkpoints are refused by
+v4 readers with a message pointing at the last v3-capable release
+(0.9.0).
 """
 
 from __future__ import annotations

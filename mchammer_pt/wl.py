@@ -145,7 +145,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             exchange-proposal RNG are deterministically spawned.
         pool: optional `WangLandauPool` to use as backend.
         data_container_file: optional path; if given, `run` writes a
-            schema-3 checkpoint to it on completion.
+            schema-4 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
             ``CoordinatedWangLandauEnsemble``; must be a subclass of
             it. To use the 1/t schedule, pass
@@ -158,8 +158,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
             `WangLandauWindowGroup`; the coordinator runs a collective
             flatness gate and halves all walkers in lockstep. With
             count > 1 the group also merges entropies across walkers
-            (cadence controlled by ``merge_cadence``). Checkpointing
-            is not supported for any window with count > 1.
+            (cadence controlled by ``merge_cadence``). Same-pool resume
+            for windows with count > 1 is structurally correct but not
+            bit-identical: ``run()``'s end-of-run merge destroys the
+            pre-merge per-walker entropy state that bit-identity would
+            require.
         flatness_mode: ``"per_walker"`` (every walker independently
             flat; published Vogel et al. 2013) or ``"pooled"`` (default;
             summed histogram flat -- a single combined bin sees ``W x``
@@ -173,8 +176,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
         ValueError: on window validation or length-mismatch failures.
-        NotImplementedError: if any ``n_walkers_per_window`` value is
-            > 1 and ``data_container_file`` is not None.
     """
 
     _pool: WangLandauPool  # narrow from ReplicaPool
