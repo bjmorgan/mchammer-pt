@@ -663,6 +663,31 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
     assert stats["per_walker_flat_min"] is None
 
 
+def test_window_stats_reports_bins_visited_and_bins_known_combined():
+    """For a window group, bins_visited is the union of all walkers'
+    _visited_bins; bins_known is len(combined_histogram).
+    """
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    # Walker 0: has been at bins 0 and 1.
+    replicas[0].ensemble._visited_bins = {0, 1}
+    replicas[0].ensemble._histogram = {0: 0, 1: 100}
+    replicas[0].ensemble._reached_energy_window = True
+    # Walker 1: has been at bins 1 and 2.
+    replicas[1].ensemble._visited_bins = {1, 2}
+    replicas[1].ensemble._histogram = {1: 100, 2: 50}
+    replicas[1].ensemble._reached_energy_window = True
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    stats = group.window_stats()
+
+    # Union of _visited_bins across walkers: {0, 1, 2} → 3.
+    # Combined histogram keys: {0, 1, 2} → 3.
+    assert stats["bins_visited"] == 3
+    assert stats["bins_known"] == 3
+
+
 def test_finalise_for_reporting_idempotent():
     """Calling finalise twice produces the same state as calling it once."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup

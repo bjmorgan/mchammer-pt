@@ -308,7 +308,15 @@ class WangLandauWorker(BaseWorker):
         self._reply(self._replica.converged)
 
     def _handle_wl_stats(self, cmd: tuple[Any, ...]) -> None:
-        self._reply(self._replica.window_stats())
+        # The reply enriches `window_stats()` with the raw set of
+        # MC-visited bins (as a sorted list) so the master-side
+        # `_merge_per_window_stats` can compute the union across
+        # walkers. Stripped from the user-facing dict by that merge.
+        stats = dict(self._replica.window_stats())
+        stats["visited_bins"] = sorted(
+            self._replica.ensemble._visited_bins
+        )
+        self._reply(stats)
 
     def _handle_get_entropy(self, cmd: tuple[Any, ...]) -> None:
         self._reply(dict(self._replica.ensemble._entropy))

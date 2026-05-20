@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
@@ -18,6 +18,13 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     1/t branch are all suppressed; ``WangLandauWindowGroup`` owns
     those decisions and applies them via ``WangLandauReplica``.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Bins the walker has reached via `_update_entropy` since
+        # window entry. Populated only by that method (guarded on
+        # `_reached_energy_window`).
+        self._visited_bins: set[int] = set()
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's
@@ -44,6 +51,9 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             self._entropy.get(bin_cur, 0) + self._fill_factor
         )
         self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
+
+        if self._reached_energy_window:
+            self._visited_bins.add(bin_cur)
 
         if (
             self.step > 0

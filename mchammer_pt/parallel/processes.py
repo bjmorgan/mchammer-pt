@@ -631,16 +631,26 @@ def _merge_per_window_stats(
 ) -> dict[str, Any]:
     """Merge per-walker WL stats dicts for one window into a single dict.
 
-    Single-walker slots are returned as-is. Multi-walker slots get a
-    summed histogram, the per-walker flat-min, and the slot's
-    flatness mode attached. Pure function on the IPC payload.
+    For multi-walker slots, builds a summed histogram and a union of
+    MC-visited bins across walkers (from the ``visited_bins`` field
+    that the worker attaches to every WL_STATS reply), reports
+    ``bins_visited`` and ``bins_known`` from those unions, and adds
+    the per-walker flat-min plus the slot's flatness mode.
+    Single-walker slots are returned unchanged apart from stripping
+    the internal ``visited_bins`` field.
+
+    Pure function on the IPC payload.
     """
     if len(slot_stats) == 1:
-        return slot_stats[0]
+        merged = dict(slot_stats[0])
+        merged.pop("visited_bins", None)
+        return merged
     combined_hist: dict[int, int] = {}
+    visited_union: set[int] = set()
     for s in slot_stats:
         for k, v in s["histogram"].items():
             combined_hist[k] = combined_hist.get(k, 0) + v
+        visited_union.update(s.get("visited_bins", ()))
     per_walker_flat_min = _compute_per_walker_flat_min(
         [s["histogram"] for s in slot_stats]
     )
@@ -648,6 +658,8 @@ def _merge_per_window_stats(
         "fill_factor": slot_stats[0]["fill_factor"],
         "halvings": slot_stats[0]["halvings"],
         "histogram": combined_hist,
+        "bins_visited": len(visited_union),
+        "bins_known": len(combined_hist),
         "converged": all(s["converged"] for s in slot_stats),
         "flatness_mode": flatness_mode,
         "per_walker_flat_min": per_walker_flat_min,

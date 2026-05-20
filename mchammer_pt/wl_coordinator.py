@@ -143,7 +143,10 @@ def _summed_histogram_flat_from_snapshots(
     if not combined:
         return False
     counts = np.array(list(combined.values()))
-    limit = flatness_limit * float(np.average(counts))
+    mean_count = float(np.average(counts))
+    if mean_count <= 0:
+        return False
+    limit = flatness_limit * mean_count
     return bool(np.all(counts >= limit))
 
 

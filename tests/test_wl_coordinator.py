@@ -11,6 +11,7 @@ from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     SlotView,
     WalkerPostBlockState,
+    _summed_histogram_flat_from_snapshots,
     decide_block_actions,
 )
 
@@ -209,6 +210,50 @@ class TestBPSwitch:
         plan = decide_block_actions(view)
         assert plan.halve is True
         assert plan.switch_to_phase is None
+
+
+class TestSummedHistogramFlatZeroCount:
+    """Pin the production pooled-gate's zero-count semantics.
+
+    The pooled flatness gate treats a present-but-unvisited bin
+    (count 0) as not-flat. Tests call the production function
+    directly so a refactor of the gate cannot silently change this
+    contract.
+    """
+
+    def test_zero_count_bin_blocks_flatness(self) -> None:
+        snapshot = _state(histogram={0: 0, 1: 1000})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.7
+        )
+
+    def test_no_zero_entry_is_flat(self) -> None:
+        snapshot = _state(histogram={1: 1000})
+        assert _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.7
+        )
+
+
+class TestSummedHistogramFlatAllZero:
+    """An all-zero combined histogram does not pass the flatness gate.
+
+    Otherwise ``mean(counts) = 0`` would make ``limit = 0`` and
+    ``all(counts >= 0)`` would be vacuously true.
+    """
+
+    def test_single_zero_bin_does_not_flatten(self) -> None:
+        snapshot = _state(histogram={0: 0})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.8
+        )
+
+    def test_all_zero_histogram_with_multiple_bins_does_not_flatten(
+        self,
+    ) -> None:
+        snapshot = _state(histogram={0: 0, 1: 0, 2: 0})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.8
+        )
 
 
 class TestWOneCollapsesModes:

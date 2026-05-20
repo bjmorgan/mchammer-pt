@@ -103,6 +103,24 @@ def test_wl_replica_rejects_out_of_window_initial_energy():
         )
 
 
+def test_init_seeds_starting_bin_into_histogram_and_entropy():
+    """The constructor records the starting bin in _histogram and _entropy.
+
+    With the seed, the flatness gate sees the starting bin from cycle 0,
+    so a walker that leaves it on step 0 and never returns cannot
+    silently saturate the histogram over a strict subset of the window
+    and trigger a premature halving.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+
+    assert bin_init in e._histogram
+    assert e._histogram[bin_init] == 0
+    assert bin_init in e._entropy
+    assert e._entropy[bin_init] == 0.0
+
+
 def test_wl_replica_log_g_returns_minus_inf_out_of_window():
     """log_g at an out-of-window energy returns -inf."""
     from mchammer_pt.wl_replica import WangLandauReplica
@@ -413,6 +431,20 @@ def test_is_flat_returns_false_on_uneven_histogram():
     assert r.is_flat() is False
 
 
+def test_is_flat_returns_false_on_all_zero_histogram():
+    """``is_flat`` returns False when every histogram entry is zero.
+
+    Without the ``mean <= 0`` short-circuit, ``limit =
+    flatness_limit * mean(counts) = 0`` and ``all(counts >= 0)``
+    would be vacuously true for an all-zero histogram.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    assert replica.is_flat() is False
+
+
 def test_default_ensemble_cls_is_coordinated():
     """The default ensemble_cls is CoordinatedWangLandauEnsemble."""
     from mchammer.calculators import ClusterExpansionCalculator
@@ -556,3 +588,190 @@ def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
 
     replica = wl_replica_factory()
     assert isinstance(replica, WangLandauSlot)
+
+
+def test_set_occupations_seeds_new_bin_into_histogram_and_entropy():
+    """``set_occupations`` records the new bin in ``_histogram`` and ``_entropy``.
+
+    REWL exchanges and process-pool transports go through
+    ``set_occupations``, so this seeding covers exchange arrivals.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    occ = replica.current_occupations()
+    bin_init = e._get_bin_index(e._potential)
+
+    # Systematically scan species swaps until we find one whose
+    # resulting energy lands in an in-window bin distinct from
+    # bin_init. The toy fixture's energy landscape is rich enough
+    # that the first few swaps suffice; a hard assertion below
+    # exposes any future fixture change that breaks this.
+    new_occ = None
+    new_bin = None
+    for idx_a in range(len(occ)):
+        for idx_b in range(idx_a + 1, len(occ)):
+            if int(occ[idx_a]) == int(occ[idx_b]):
+                continue
+            candidate = occ.copy()
+            candidate[idx_a] = int(occ[idx_b])
+            candidate[idx_b] = int(occ[idx_a])
+            candidate_potential = float(
+                e.calculator.calculate_total(occupations=candidate)
+            )
+            candidate_bin = e._get_bin_index(candidate_potential)
+            if (
+                candidate_bin != bin_init
+                and e._inside_energy_window(candidate_bin)
+            ):
+                new_occ = candidate
+                new_bin = candidate_bin
+                break
+        if new_occ is not None:
+            break
+    assert new_occ is not None, (
+        "fixture has no two-site swap producing an in-window bin "
+        "distinct from bin_init"
+    )
+
+    replica.set_occupations(new_occ)
+
+    assert new_bin in e._histogram
+    assert e._histogram[new_bin] == 0
+    assert new_bin in e._entropy
+    assert e._entropy[new_bin] == 0.0
+
+
+def test_set_occupations_preserves_existing_count_for_known_bin():
+    """If the new bin is already in _histogram, its count is unchanged.
+
+    setdefault semantics: only initialise when missing.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+
+    # Pretend the starting bin has been visited a thousand times.
+    e._histogram[bin_init] = 1000
+    e._entropy[bin_init] = 7.5
+
+    # set_occupations with the SAME initial occupations: new_bin == bin_init.
+    occ = replica.current_occupations()
+    replica.set_occupations(occ)
+
+    assert e._histogram[bin_init] == 1000
+    assert e._entropy[bin_init] == 7.5
+
+
+def test_restore_state_seeds_restored_bin_when_last_state_histogram_is_empty():
+    """If the saved _last_state has an empty histogram, restore_state
+    still records the restored bin via the seed.
+
+    Covers the case where a checkpoint was written before any
+    _update_entropy call (zero-step restart) — without the seed the
+    restored bin would be invisible to the flatness gate.
+    """
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    # Force the saved state to look like a pre-step checkpoint:
+    # occupations recorded but no entropy/histogram visits yet.
+    container._last_state["histogram"] = {}
+    container._last_state["entropy"] = {}
+
+    dst = _make_wl_replica()
+    dst.ensemble._histogram.clear()
+    dst.ensemble._entropy.clear()
+
+    dst.restore_state(container)
+
+    restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
+    assert restored_bin in dst.ensemble._histogram
+    assert dst.ensemble._histogram[restored_bin] == 0
+    assert restored_bin in dst.ensemble._entropy
+    assert dst.ensemble._entropy[restored_bin] == 0.0
+
+
+def test_window_stats_reports_bins_visited_and_bins_known():
+    """window_stats exposes the gate-relevant bin counts.
+
+    - bins_visited: number of bins the walker has ever been at since
+      window entry (monotone, survives halvings).
+    - bins_known: len(_histogram) — all bins the flatness gate
+      considers, including seeded-but-unvisited bins.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+    # Walker has been at bin_init (from construction) and bin_init+1.
+    e._visited_bins = {bin_init, bin_init + 1}
+    # Histogram includes a seeded-but-never-visited bin (bin_init+2).
+    e._histogram = {bin_init: 5, bin_init + 1: 10, bin_init + 2: 0}
+    e._entropy = {bin_init: 0.5, bin_init + 1: 1.0, bin_init + 2: 0.0}
+
+    stats = replica.window_stats()
+
+    assert stats["bins_visited"] == 2  # bin_init + bin_init+1
+    assert stats["bins_known"] == 3
+
+
+def test_init_leaves_visited_bins_empty():
+    """`_visited_bins` is empty after construction.
+
+    `_visited_bins` records bins reached via `_update_entropy` since
+    window entry; construction places the walker at `bin_init` but
+    does not count as MC travel.
+    """
+    replica = _make_wl_replica()
+    assert replica.ensemble._visited_bins == set()
+
+
+def test_refresh_last_state_persists_visited_bins():
+    """refresh_last_state writes _visited_bins to _last_state as a sorted list."""
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    bin_init = e._get_bin_index(e._potential)
+    e._visited_bins = {bin_init, bin_init + 1, bin_init - 1}
+
+    replica.refresh_last_state()
+
+    saved = e._data_container._last_state["visited_bins"]
+    assert saved == sorted({bin_init - 1, bin_init, bin_init + 1})
+
+
+def test_restore_state_round_trips_visited_bins():
+    """A round-trip through refresh + restore preserves _visited_bins."""
+    src = _make_wl_replica()
+    src_bin_init = src.ensemble._get_bin_index(src.ensemble._potential)
+    src.ensemble._visited_bins = {src_bin_init, src_bin_init + 2}
+    src.refresh_last_state()
+    container = src.data_container()
+
+    dst = _make_wl_replica()
+    dst.ensemble._visited_bins.clear()
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._visited_bins == {src_bin_init, src_bin_init + 2}
+
+
+def test_restore_state_legacy_checkpoint_starts_with_empty_visited_bins():
+    """A checkpoint without ``visited_bins`` restores with an empty set.
+
+    Backwards-compatibility path for older checkpoints written before
+    ``_visited_bins`` was persisted. The seed for ``new_bin`` still
+    applies to ``_histogram`` and ``_entropy``.
+    """
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("visited_bins", None)
+
+    dst = _make_wl_replica()
+    dst.ensemble._visited_bins = {123, 456}  # to be replaced
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._visited_bins == set()
+    restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
+    assert restored_bin in dst.ensemble._histogram
+    assert restored_bin in dst.ensemble._entropy

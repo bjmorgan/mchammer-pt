@@ -355,7 +355,14 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
     class _StubPool:
         def per_window_stats(self):
             return [
-                {"fill_factor": 1.0, "halvings": 0, "histogram": {}, "converged": False}
+                {
+                    "fill_factor": 1.0,
+                    "halvings": 0,
+                    "histogram": {},
+                    "bins_visited": 0,
+                    "bins_known": 0,
+                    "converged": False,
+                }
                 for _ in range(len(pt.pool))
             ]
 
@@ -390,6 +397,8 @@ def test_wl_progress_printer_pooled_mode_reports_summed_flat_min():
                 "fill_factor": 1.0,
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
+                "bins_visited": 2,
+                "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "pooled",
                 "per_walker_flat_min": 0.5,  # pooled wins; this is ignored.
@@ -424,6 +433,8 @@ def test_wl_progress_printer_per_walker_mode_reports_walker_min():
                 "fill_factor": 1.0,
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
+                "bins_visited": 2,
+                "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "per_walker",
                 "per_walker_flat_min": 0.500,
@@ -457,6 +468,8 @@ def test_wl_progress_printer_back_compat_no_mode_field():
                 "fill_factor": 1.0,
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
+                "bins_visited": 2,
+                "bins_known": 2,
                 "converged": False,
             }]
 
@@ -497,6 +510,8 @@ def test_wl_progress_printer_per_walker_zero_flat_min_displays_as_zero():
                 "fill_factor": 1.0,
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
+                "bins_visited": 2,
+                "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "per_walker",
                 "per_walker_flat_min": 0.0,

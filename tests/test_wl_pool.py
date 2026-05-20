@@ -197,10 +197,15 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
 
     assert len(stats) == 2
     for s in stats:
-        assert set(s.keys()) == {"fill_factor", "halvings", "histogram", "converged"}
+        assert set(s.keys()) == {
+            "fill_factor", "halvings", "histogram",
+            "bins_visited", "bins_known", "converged",
+        }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
         assert isinstance(s["histogram"], dict)
+        assert isinstance(s["bins_visited"], int)
+        assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["fill_factor"] > 0.0
 
@@ -231,16 +236,30 @@ def test_process_wl_pool_propagates_flatness_limit_from_ensemble_kwargs(tmp_path
 
 
 def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
-    """Single-walker slot: the per-walker stats dict is returned as-is."""
+    """Single-walker slot: the per-walker stats dict is returned, with
+    the internal ``visited_bins`` field (added by the worker for
+    merge support) stripped from the output.
+    """
     s = {
         "fill_factor": 0.5,
         "halvings": 1,
         "histogram": {0: 10, 1: 20},
+        "bins_visited": 2,
+        "bins_known": 2,
         "converged": False,
+        "visited_bins": [0, 1],
     }
     out = _merge_per_window_stats([s], flatness_mode="pooled")
-    assert out is s
-    assert set(out.keys()) == {"fill_factor", "halvings", "histogram", "converged"}
+    assert set(out.keys()) == {
+        "fill_factor", "halvings", "histogram",
+        "bins_visited", "bins_known", "converged",
+    }
+    assert out["fill_factor"] == 0.5
+    assert out["halvings"] == 1
+    assert out["histogram"] == {0: 10, 1: 20}
+    assert out["bins_visited"] == 2
+    assert out["bins_known"] == 2
+    assert out["converged"] is False
 
 
 def test_serial_wl_pool_swap_configurations_refreshes_window_flag():
@@ -524,28 +543,43 @@ def test_process_wl_pool_multi_walker_converged_requires_all_walkers(tmp_path):
 
 
 def test_merge_per_window_stats_multi_walker_sums_histograms():
-    """Multi-walker slot: histogram is summed; fill_factor/halvings come
-    from walker 0; converged is the AND across walkers; flatness_mode and
-    per_walker_flat_min are attached."""
+    """Multi-walker slot: histogram is summed; bins_visited is the size
+    of the union of per-walker ``visited_bins`` lists; bins_known is
+    the size of the combined-histogram key set; fill_factor/halvings
+    come from walker 0; converged is the AND across walkers;
+    flatness_mode and per_walker_flat_min are attached.
+    """
     s0 = {
         "fill_factor": 0.5,
         "halvings": 2,
         "histogram": {0: 10, 1: 20, 2: 30},
+        "bins_visited": 3,
+        "bins_known": 3,
         "converged": False,
+        "visited_bins": [0, 1, 2],
     }
     s1 = {
         "fill_factor": 0.25,
         "halvings": 3,
         "histogram": {1: 5, 2: 15, 3: 25},
+        "bins_visited": 3,
+        "bins_known": 3,
         "converged": True,
+        "visited_bins": [1, 2, 3],
     }
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
     assert out["fill_factor"] == 0.5
     assert out["halvings"] == 2
     assert out["histogram"] == {0: 10, 1: 25, 2: 45, 3: 25}
+    # Union of visited_bins: {0, 1, 2, 3} → 4.
+    assert out["bins_visited"] == 4
+    # Union of histogram keys: {0, 1, 2, 3} → 4.
+    assert out["bins_known"] == 4
     assert out["converged"] is False
     assert out["flatness_mode"] == "pooled"
     assert "per_walker_flat_min" in out
+    # The internal field is stripped from the user-facing dict.
+    assert "visited_bins" not in out
 
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
@@ -582,6 +616,40 @@ def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_pat
         for bin_key in set(s0["histogram"]) | set(s1["histogram"]):
             expected = s0["histogram"].get(bin_key, 0) + s1["histogram"].get(bin_key, 0)
             assert stats[0]["histogram"].get(bin_key, 0) == expected
+
+
+def test_process_wl_pool_multi_walker_stats_report_union_bin_counts(tmp_path):
+    """For a multi-walker slot, per_window_stats reports bins_visited as
+    the size of the union of MC-visited bins across walkers, and
+    bins_known as the size of the union of histogram keys.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        _, conn0 = pool._slots[0].workers[0]
+        _, conn1 = pool._slots[0].workers[1]
+        conn0.send(("ADVANCE", 20))
+        conn1.send(("ADVANCE", 20))
+        recv_reply(conn0, "ADVANCE", "window 0 walker 0")
+        recv_reply(conn1, "ADVANCE", "window 0 walker 1")
+        s0 = request(conn0, ("WL_STATS",), 0)
+        s1 = request(conn1, ("WL_STATS",), 1)
+
+        stats = pool.per_window_stats()
+
+    assert len(stats) == 1
+    expected_known = len(set(s0["histogram"]) | set(s1["histogram"]))
+    expected_visited = len(set(s0["visited_bins"]) | set(s1["visited_bins"]))
+    assert stats[0]["bins_visited"] == expected_visited
+    assert stats[0]["bins_known"] == expected_known
+    # The internal field is stripped from the user-facing dict.
+    assert "visited_bins" not in stats[0]
 
 
 def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):

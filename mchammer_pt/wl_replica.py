@@ -155,6 +155,23 @@ class WangLandauReplica:
     relies on this invariant to short-circuit cleanly when only the
     "cross-bin" terms can be -inf.
 
+    Invariant: every bin the walker has been placed at — by
+    construction (``bin_init``), ``set_occupations`` (``new_bin``),
+    or ``restore_state`` (``new_bin``) — appears as a key in the
+    underlying ensemble's ``_histogram`` (count 0) and ``_entropy``
+    (value 0.0). Each of those sites uses ``setdefault`` so existing
+    entries from prior visits are not overwritten. The Wang-Landau
+    flatness gate iterates over the ``_histogram`` values, so a
+    zero-count seeded bin blocks the gate until the walker visits it.
+
+    Invariant: ``CoordinatedWangLandauEnsemble._visited_bins`` is the
+    set of bins the walker has reached via ``_update_entropy`` since
+    window entry. ``_update_entropy`` is the only site that inserts,
+    guarded on ``_reached_energy_window``. ``refresh_last_state``
+    writes the set to the data container and ``restore_state`` reads
+    it back, so membership survives checkpoint round-trips.
+    ``window_stats`` reports ``bins_visited`` from this set.
+
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
         atoms: starting structure. Its energy must lie inside the
@@ -261,6 +278,10 @@ class WangLandauReplica:
                 f"energy lies in its window."
             )
 
+        # Maintain the known-bin invariant (see class docstring).
+        e._histogram.setdefault(bin_init, 0)
+        e._entropy.setdefault(bin_init, 0.0)
+
         self.walker_states: tuple[WalkerPostBlockState, ...] = (
             WalkerPostBlockState(
                 is_flat=False,
@@ -340,6 +361,9 @@ class WangLandauReplica:
                 f"{proposed_potential} (bin {new_bin}), outside window "
                 f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
+        # Maintain the known-bin invariant (see class docstring).
+        e._histogram.setdefault(new_bin, 0)
+        e._entropy.setdefault(new_bin, 0.0)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
@@ -381,7 +405,10 @@ class WangLandauReplica:
         histogram = np.array(list(e._histogram.values()))
         if histogram.size == 0:
             return False
-        limit = e._flatness_limit * np.average(histogram)
+        mean_count = float(np.average(histogram))
+        if mean_count <= 0:
+            return False
+        limit = e._flatness_limit * mean_count
         return bool(np.all(histogram >= limit))
 
     def _snapshot(self) -> WalkerPostBlockState:
@@ -461,16 +488,27 @@ class WangLandauReplica:
     def window_stats(self) -> dict[str, Any]:
         """Per-window convergence metrics.
 
-        Returns fill_factor, halvings, histogram, converged. For a
-        single-walker replica ``flatness_mode`` and ``per_walker_flat_min``
-        are omitted (the progress reporter falls through to the
-        pooled computation, which is exact for n_walkers == 1).
+        Returns ``fill_factor``, ``halvings``, ``histogram``,
+        ``bins_visited``, ``bins_known``, ``converged``. For a
+        single-walker replica ``flatness_mode`` and
+        ``per_walker_flat_min`` are omitted (the progress reporter
+        falls through to the pooled computation, which is exact
+        for n_walkers == 1).
+
+        ``bins_visited`` is ``len(_visited_bins)`` — the count of
+        bins the walker has reached via MC since window entry.
+        Monotone within a run; survives halvings. ``bins_known``
+        is ``len(_histogram)`` and includes seeded-but-unvisited
+        bins.
         """
         e = self._ensemble
+        histogram = dict(e._histogram)
         return {
             "fill_factor": float(e._fill_factor),
             "halvings": max(0, len(e._fill_factor_history) - 1),
-            "histogram": dict(e._histogram),
+            "histogram": histogram,
+            "bins_visited": len(e._visited_bins),
+            "bins_known": len(histogram),
             "converged": self.converged,
         }
 
@@ -544,6 +582,9 @@ class WangLandauReplica:
         e._data_container._last_state["schedule"] = e._schedule
         e._data_container._last_state["phase"] = e._phase
         e._data_container._last_state["window_entry_step"] = e._window_entry_step
+        e._data_container._last_state["visited_bins"] = sorted(
+            e._visited_bins
+        )
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on
@@ -638,6 +679,15 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
+        # Older checkpoints may not carry `visited_bins`; treat as empty.
+        saved_visited = last_state.get("visited_bins")
+        if saved_visited is not None:
+            e._visited_bins = {int(b) for b in saved_visited}
+        else:
+            e._visited_bins = set()
+        # Maintain the known-bin invariant (see class docstring).
+        e._histogram.setdefault(new_bin, 0)
+        e._entropy.setdefault(new_bin, 0.0)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 
