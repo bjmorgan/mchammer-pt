@@ -235,6 +235,31 @@ class TestSummedHistogramFlatZeroCount:
         )
 
 
+class TestSummedHistogramFlatAllZero:
+    """An all-zero combined histogram does not pass the flatness gate.
+
+    Without the seed (Tasks 2-5), this case couldn't arise in the
+    coordinator path. With the seed, a freshly-constructed walker
+    has ``_histogram = {bin_init: 0}`` and no positive entries until
+    ``_update_entropy`` increments a bin; the gate must treat this
+    state as not-flat to avoid a vacuous halve.
+    """
+
+    def test_single_zero_bin_does_not_flatten(self) -> None:
+        snapshot = _state(histogram={0: 0})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.8
+        )
+
+    def test_all_zero_histogram_with_multiple_bins_does_not_flatten(
+        self,
+    ) -> None:
+        snapshot = _state(histogram={0: 0, 1: 0, 2: 0})
+        assert not _summed_histogram_flat_from_snapshots(
+            [snapshot], flatness_limit=0.8
+        )
+
+
 class TestWOneCollapsesModes:
     def test_pooled_and_per_walker_give_identical_plan_for_w1(self) -> None:
         state = _state(histogram={0: 100, 1: 100}, is_flat=True)

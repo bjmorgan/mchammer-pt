@@ -197,10 +197,15 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
 
     assert len(stats) == 2
     for s in stats:
-        assert set(s.keys()) == {"fill_factor", "halvings", "histogram", "converged"}
+        assert set(s.keys()) == {
+            "fill_factor", "halvings", "histogram",
+            "bins_visited", "bins_known", "converged",
+        }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
         assert isinstance(s["histogram"], dict)
+        assert isinstance(s["bins_visited"], int)
+        assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["fill_factor"] > 0.0
 

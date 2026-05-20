@@ -397,7 +397,10 @@ class WangLandauReplica:
         histogram = np.array(list(e._histogram.values()))
         if histogram.size == 0:
             return False
-        limit = e._flatness_limit * np.average(histogram)
+        mean_count = float(np.average(histogram))
+        if mean_count <= 0:
+            return False
+        limit = e._flatness_limit * mean_count
         return bool(np.all(histogram >= limit))
 
     def _snapshot(self) -> WalkerPostBlockState:

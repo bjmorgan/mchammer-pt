@@ -431,6 +431,22 @@ def test_is_flat_returns_false_on_uneven_histogram():
     assert r.is_flat() is False
 
 
+def test_is_flat_returns_false_on_all_zero_histogram():
+    """An all-zero histogram is not flat (mean=0 trip guard).
+
+    The known-bin seed introduces ``_histogram = {bin_init: 0}`` at
+    construction and again transiently after ``force_halve`` /
+    ``set_occupations`` / ``restore_state``. Without the guard,
+    ``limit = flatness_limit * mean(counts) = 0`` and
+    ``all(counts >= 0)`` is vacuously true.
+    """
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    assert replica.is_flat() is False
+
+
 def test_default_ensemble_cls_is_coordinated():
     """The default ensemble_cls is CoordinatedWangLandauEnsemble."""
     from mchammer.calculators import ClusterExpansionCalculator
