@@ -171,3 +171,27 @@ class TestSerialPoolMergeEvents:
         # Mutating the returned tuple's underlying list (if it were one)
         # must not affect the pool's record.
         assert len(pool.merge_events) == 1
+
+
+from tests._in_process_pool import make_in_process_wl_pool
+from tests._wl_fixtures import make_wl_ce, make_wl_atoms
+
+
+class TestProcessPoolMergeEventsSurface:
+    def test_merge_events_starts_empty_on_a_fresh_pool(self, tmp_path) -> None:
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        with make_in_process_wl_pool(
+            tmp_path,
+            windows=[(e0 - 50.0, e0 + 50.0)],
+            seeds=[0],
+            n_walkers_per_window=2,
+        ) as pool:
+            assert pool.merge_events == ()

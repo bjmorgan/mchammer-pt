@@ -44,6 +44,7 @@ from ..wl_coordinator import (
     decide_block_actions,
     merge_entropies,
 )
+from ..wl_merge_diagnostics import MergeEvent
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
@@ -721,6 +722,7 @@ class ProcessWangLandauPool:
         _validate_merge_cadence(merge_cadence)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._merge_events: list[MergeEvent] = []
         self._flatness_limit: float = float(
             (ensemble_kwargs or {}).get("flatness_limit", 0.8)
         )
@@ -914,7 +916,22 @@ class ProcessWangLandauPool:
                 slot.walker_states[w] = payload
 
             # DECIDE: per-slot coordinator decisions; no IPC.
-            plans = [decide_block_actions(_view_of(slot)) for slot in self._slots]
+            views = [_view_of(slot) for slot in self._slots]
+            plans = [decide_block_actions(v) for v in views]
+
+            # RECORD: capture merged entropy per halving merge while the
+            # master-side plan still carries it. See wl_merge_diagnostics.
+            for slot_index, (view, plan) in enumerate(
+                zip(views, plans, strict=True)
+            ):
+                if plan.merged_entropy is not None:
+                    self._merge_events.append(
+                        MergeEvent(
+                            slot_index=slot_index,
+                            step=view.walker_states[0].step,
+                            merged_entropy=dict(plan.merged_entropy),
+                        )
+                    )
 
             # EXECUTE step 1: batched FORCE_HALVE across halving slots.
             halve_targets = [
@@ -1112,6 +1129,11 @@ class ProcessWangLandauPool:
             offset += n_workers
             result.append(_merge_per_window_stats(slot_stats, slot._flatness_mode))
         return result
+
+    @property
+    def merge_events(self) -> tuple[MergeEvent, ...]:
+        """Per-halving merged entropies; see :mod:`wl_merge_diagnostics`."""
+        return tuple(self._merge_events)
 
     def per_window_data_containers(self) -> list[list[BaseDataContainer]]:
         """All data containers grouped by window slot.
