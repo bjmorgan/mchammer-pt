@@ -273,3 +273,49 @@ class TestStepKeyAlignment:
                 e = walker._ensemble
                 assert event.step in e._fill_factor_history
                 assert event.step in e._entropy_history
+
+
+class TestOrchestratorSmoke:
+    def test_pt_merge_events_count_consistent_with_per_window_halvings(
+        self, tmp_path
+    ) -> None:
+        """End-to-end: total event count per slot is bounded above by
+        the halvings reported by ``per_window_stats()`` for that slot
+        (events fire only on multi-walker slots with merge_cadence
+        ``at_halve``, and only at halvings)."""
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(e0 - 5.0, e0 + 5.0), (e0 - 5.0, e0 + 5.0)],
+            energy_spacing=0.5,
+            block_size=200,
+            random_seed=0,
+            n_walkers_per_window=2,
+        )
+        pt.run(n_cycles=30)
+
+        if not pt.merge_events:
+            pytest.skip(
+                "no halving merge fired in 30 cycles; bump block_size/cycles"
+            )
+
+        stats = pt._pool.per_window_stats()
+        for slot_index, slot_stats in enumerate(stats):
+            events_for_slot = [
+                e for e in pt.merge_events if e.slot_index == slot_index
+            ]
+            # merge_cadence="at_halve" is the default, so on multi-walker
+            # slots every halving should produce an event. Allow equality
+            # because the recording loop runs immediately after DECIDE.
+            assert len(events_for_slot) == slot_stats["halvings"]
