@@ -686,22 +686,23 @@ def test_restore_state_seeds_restored_bin_when_last_state_histogram_is_empty():
 def test_window_stats_reports_bins_visited_and_bins_known():
     """window_stats exposes the gate-relevant bin counts.
 
-    - bins_visited: count of bins with histogram value > 0 (active in
-      the current halving phase).
-    - bins_known: len(_histogram) (all bins the flatness gate considers,
-      including seeded but unvisited bins).
+    - bins_visited: number of bins the walker has ever been at since
+      window entry (monotone, survives halvings).
+    - bins_known: len(_histogram) — all bins the flatness gate
+      considers, including seeded-but-unvisited bins.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
-
-    # Manually populate the histogram to a known state.
     bin_init = e._get_bin_index(e._potential)
-    e._histogram = {bin_init: 0, bin_init + 1: 5, bin_init + 2: 10}
-    e._entropy = {bin_init: 0.0, bin_init + 1: 0.5, bin_init + 2: 1.0}
+    # Walker has been at bin_init (from construction) and bin_init+1.
+    e._visited_bins = {bin_init, bin_init + 1}
+    # Histogram includes a seeded-but-never-visited bin (bin_init+2).
+    e._histogram = {bin_init: 5, bin_init + 1: 10, bin_init + 2: 0}
+    e._entropy = {bin_init: 0.5, bin_init + 1: 1.0, bin_init + 2: 0.0}
 
     stats = replica.window_stats()
 
-    assert stats["bins_visited"] == 2  # bin_init has count 0
+    assert stats["bins_visited"] == 2  # bin_init + bin_init+1
     assert stats["bins_known"] == 3
 
 

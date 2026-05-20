@@ -229,9 +229,11 @@ class WangLandauWindowGroup:
         Returns:
             ``fill_factor`` and ``halvings`` from replica 0 (all in sync
             after advance); ``histogram`` is the sum across all walkers;
-            ``bins_visited`` is the count of bins whose combined
-            histogram value is > 0; ``bins_known`` is the size of the
-            union of bins across walkers (i.e. ``len(combined_hist)``).
+            ``bins_visited`` is the number of bins the union of walkers
+            has ever been at since window entry (``len(union of
+            _visited_bins))``); monotone within a run and survives
+            halvings. ``bins_known`` is the size of the union of bins
+            across walkers (i.e. ``len(combined_hist)``).
             ``converged`` requires every walker to be converged;
             ``per_walker_flat_min`` is min over walkers of
             ``min(H_k) / mean(H_k)``, or ``None`` if any walker has not
@@ -240,9 +242,11 @@ class WangLandauWindowGroup:
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}
+        visited_union: set[int] = set()
         for r in self._replicas:
             for k, v in r.ensemble._histogram.items():
                 combined_hist[k] = combined_hist.get(k, 0) + v
+            visited_union |= r.ensemble._visited_bins
         per_walker_flat_min = _compute_per_walker_flat_min(
             [r.ensemble._histogram for r in self._replicas]
         )
@@ -250,7 +254,7 @@ class WangLandauWindowGroup:
             "fill_factor": float(e0._fill_factor),
             "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
-            "bins_visited": sum(1 for v in combined_hist.values() if v > 0),
+            "bins_visited": len(visited_union),
             "bins_known": len(combined_hist),
             "converged": self.converged,
             "per_walker_flat_min": per_walker_flat_min,

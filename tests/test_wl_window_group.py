@@ -664,28 +664,27 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
 
 
 def test_window_stats_reports_bins_visited_and_bins_known_combined():
-    """For a window group, bins_visited and bins_known are computed
-    against the combined (summed) histogram across walkers.
+    """For a window group, bins_visited is the union of all walkers'
+    _visited_bins; bins_known is len(combined_histogram).
     """
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     replicas = _make_replicas(2)
-    # Walker 0: bin 0 unvisited (seeded), bin 1 visited.
+    # Walker 0: has been at bins 0 and 1.
+    replicas[0].ensemble._visited_bins = {0, 1}
     replicas[0].ensemble._histogram = {0: 0, 1: 100}
     replicas[0].ensemble._reached_energy_window = True
-    # Walker 1: bin 1 visited, bin 2 visited (so bin 2 only appears in
-    # walker 1, bin 1 appears in both — exercises the union).
+    # Walker 1: has been at bins 1 and 2.
+    replicas[1].ensemble._visited_bins = {1, 2}
     replicas[1].ensemble._histogram = {1: 100, 2: 50}
     replicas[1].ensemble._reached_energy_window = True
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
     stats = group.window_stats()
 
-    # Combined histogram: {0: 0+0=0, 1: 200, 2: 50}. (Note bin 0 is
-    # only in walker 0; walker 1 contributes 0 by absence.)
-    # bins_visited counts entries with combined value > 0 → bins 1, 2.
-    # bins_known is len(combined) → 3 (bins 0, 1, 2).
-    assert stats["bins_visited"] == 2
+    # Union of _visited_bins across walkers: {0, 1, 2} → 3.
+    # Combined histogram keys: {0, 1, 2} → 3.
+    assert stats["bins_visited"] == 3
     assert stats["bins_known"] == 3
 
 

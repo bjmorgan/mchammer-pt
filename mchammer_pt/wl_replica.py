@@ -486,10 +486,11 @@ class WangLandauReplica:
         (the progress reporter falls through to the pooled
         computation, which is exact for n_walkers == 1).
 
-        ``bins_visited`` is the count of bins whose current histogram
-        value is > 0 (the bins active in the current halving phase);
-        ``bins_known`` is ``len(_histogram)`` (all bins the flatness
-        gate considers, including seeded-but-unvisited entries).
+        ``bins_visited`` is the number of bins the walker has ever
+        been at since window entry (``len(_visited_bins)``). This is
+        monotone-increasing within a run and survives halvings — the
+        right denominator for trap diagnostics. ``bins_known`` is
+        ``len(_histogram)`` and includes seeded-but-unvisited bins.
         """
         e = self._ensemble
         histogram = dict(e._histogram)
@@ -497,7 +498,7 @@ class WangLandauReplica:
             "fill_factor": float(e._fill_factor),
             "halvings": max(0, len(e._fill_factor_history) - 1),
             "histogram": histogram,
-            "bins_visited": sum(1 for v in histogram.values() if v > 0),
+            "bins_visited": len(e._visited_bins),
             "bins_known": len(histogram),
             "converged": self.converged,
         }
