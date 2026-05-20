@@ -44,8 +44,8 @@ from ..wl_coordinator import (
     decide_block_actions,
     merge_entropies,
 )
-from ..wl_merge_diagnostics import MergeEvent
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
+from ..wl_merge_diagnostics import MergeEvent
 from ..wl_replica import WangLandauReplica
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request

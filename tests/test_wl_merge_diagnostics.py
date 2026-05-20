@@ -10,9 +10,8 @@ from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     WalkerPostBlockState,
 )
-
 from tests._in_process_pool import make_in_process_wl_pool
-from tests._wl_fixtures import make_wl_ce, make_wl_atoms
+from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
 class TestMergeEventRecord:
@@ -44,7 +43,11 @@ class _StubWLSlot:
 
     Stores pre-canned walker_states, records applied plans for
     inspection, and ignores advance(). Used to drive advance_all
-    deterministically without running real MC.
+    deterministically without running real MC. The ``ensemble``
+    placeholder is read by ``SerialWangLandauPool.ensemble_cls_fqn``,
+    whose property is evaluated during ``isinstance(pool,
+    WangLandauPool)`` on Python 3.11 (``hasattr`` semantics on
+    ``@runtime_checkable`` Protocol attributes).
     """
 
     walker_states: list[WalkerPostBlockState]
@@ -54,6 +57,7 @@ class _StubWLSlot:
     schedule: str = "halving"
     flatness_limit: float = 0.8
     applied_plans: list[CoordinatorPlan] = field(default_factory=list)
+    ensemble: object = field(default_factory=object)
 
     def advance(self, n_steps: int) -> None:
         pass

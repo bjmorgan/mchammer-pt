@@ -36,8 +36,8 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
 )
-from .wl_merge_diagnostics import MergeEvent
 from .wl_ensemble import CoordinatedWangLandauEnsemble
+from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
 
