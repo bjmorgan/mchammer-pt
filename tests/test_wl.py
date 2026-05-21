@@ -1443,7 +1443,7 @@ def test_wl_pt_resume_process_pool_w2_round_trips(tmp_path):
 
 
 def test_wl_pt_constructor_accepts_w2_with_data_container_file(tmp_path):
-    """The constructor no longer rejects W>1 + data_container_file."""
+    """The constructor accepts W>1 with data_container_file."""
     from mchammer_pt.wl import WangLandauParallelTempering
 
     e0 = _initial_energy()

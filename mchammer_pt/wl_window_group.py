@@ -302,9 +302,8 @@ class WangLandauWindowGroup:
     ) -> None:
         """Restore every walker's MC state and the group-level state.
 
-        Per-walker phase consistency is validated at read time in
-        ``checkpoint._read_window_groups``, not here — so this method does
-        not re-check.
+        Phase consistency is validated upstream in
+        ``checkpoint._read_window_groups``.
 
         Args:
             containers: one container per walker, in walker order.

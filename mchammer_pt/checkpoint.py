@@ -377,7 +377,8 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
       `_replica_labels`, `_rng`);
     - implements `_checkpoint_meta()` returning any ladder-specific
       keys (canonical PT contributes ``temperatures``; REWL
-      contributes ``windows`` and ``energy_spacing``).
+      contributes ``windows``, ``energy_spacing``, ``flatness_mode``,
+      ``merge_cadence``, and ``walkers_per_window``).
 
     Requires `run()` to have been called at least once, so that
     each replica's `_last_state` is populated and the on-disk
@@ -407,7 +408,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         "replica_labels": pt._replica_labels.copy(),  # type: ignore[attr-defined]
         "rng_state": _serialise_rng_state(pt._rng),  # type: ignore[attr-defined]
     }
-    # Refresh per-replica `_last_state` (populating the four fields
+    # Refresh per-replica `_last_state` (populating the fields
     # `_restart_ensemble` reads on resume) and capture the additional
     # state required for bit-identical continuation. The pool's
     # `snapshot_for_checkpoint()` is the cross-pool entry point — it
