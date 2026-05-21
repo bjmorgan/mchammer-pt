@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ``mchammer_pt.analysis.dos`` module with ``stitch_entropy``,
-  ``reweight_canonical_from_dos``, and the ``KB_EV`` constant for
-  generic Wang-Landau DOS post-processing. Both helpers are also
-  re-exported from the package root.
+- ``mchammer_pt.analysis.dos`` module with ``stitch_entropy`` and
+  ``reweight_canonical_from_dos`` for generic Wang-Landau DOS
+  post-processing. Both helpers are re-exported from the package
+  root.
 - ``mchammer-pt-reweight`` console script for canonical reweighting
   from a stitched DOS CSV, with optional ``--plot`` output (requires
   ``matplotlib``; install with the ``plot`` extra).

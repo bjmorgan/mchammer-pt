@@ -16,7 +16,7 @@ from .diagnostics import (
     round_trip_counts,
     swap_acceptance_rates,
 )
-from .analysis.dos import KB_EV, reweight_canonical_from_dos, stitch_entropy
+from .analysis.dos import reweight_canonical_from_dos, stitch_entropy
 from .history import ExchangeHistory, read_hdf5, write_hdf5
 from .parallel.backend import (
     CanonicalPool,
@@ -32,7 +32,7 @@ from .wl import WangLandauParallelTempering
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 
 __all__ = [
     "BaseParallelTempering",
@@ -43,7 +43,6 @@ __all__ = [
     "ExchangeCallback",
     "ExchangeHistory",
     "ExchangePrinter",
-    "KB_EV",
     "MergeEvent",
     "ObservablePool",
     "ProcessPool",

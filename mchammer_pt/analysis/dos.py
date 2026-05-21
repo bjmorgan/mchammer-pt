@@ -9,22 +9,16 @@ overlap-region alignment, working entirely in log space.
 from a stitched ``ln g(E)`` curve on a user-supplied temperature
 grid, also entirely in log space so large entropy ranges do not
 underflow ``float64``.
-
-Both functions are generic: they consume only the ``energy`` and
-``entropy`` columns and make no material-specific assumptions.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from scipy.constants import k as _kB_J
-
-KB_EV = _kB_J / 1.602176634e-19
+from ase.units import kB
 
 
 def stitch_entropy(
     per_window: list[pd.DataFrame],
-    _energy_spacing: float,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Stitch per-window entropy curves into a single density of states.
 
@@ -37,8 +31,6 @@ def stitch_entropy(
     Args:
         per_window: list of DataFrames each carrying ``energy`` and
             ``entropy`` columns. ``entropy`` is treated as ``ln g``.
-        _energy_spacing: accepted for API completeness but not used
-            directly — bin centres are matched by intersection.
 
     Returns:
         ``(stitched, overlap_errors)`` where ``stitched`` is a DataFrame
@@ -106,7 +98,7 @@ def reweight_canonical_from_dos(
 
     Operates entirely in log space so a large entropy range does not
     underflow ``float64``. The ``entropy`` column of ``dos`` is treated
-    as ``ln g``; no exp/log round-trip is performed.
+    as ``ln g``.
 
     Args:
         dos: DataFrame with ``energy`` (eV) and ``entropy`` (``ln g``)
@@ -129,7 +121,7 @@ def reweight_canonical_from_dos(
         )
     E = dos["energy"].to_numpy()
     log_g = dos["entropy"].to_numpy()
-    beta = 1.0 / (KB_EV * T_arr)                          # (n_T,)
+    beta = 1.0 / (kB * T_arr)                             # (n_T,)
     log_w = log_g[:, None] - beta[None, :] * E[:, None]   # (n_E, n_T)
     log_w -= log_w.max(axis=0, keepdims=True)
     w = np.exp(log_w)
@@ -137,7 +129,7 @@ def reweight_canonical_from_dos(
     E_mean = (w * E[:, None]).sum(axis=0) / Z
     E2_mean = (w * (E[:, None] ** 2)).sum(axis=0) / Z
     var_E = E2_mean - E_mean ** 2
-    Cv = var_E / (KB_EV * T_arr ** 2)
+    Cv = var_E / (kB * T_arr ** 2)
     return pd.DataFrame({
         "T_K": T_arr,
         "E_mean": E_mean,
