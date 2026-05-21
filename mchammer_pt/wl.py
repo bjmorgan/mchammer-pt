@@ -595,7 +595,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta["merge_cadence"]
         )  # type: ignore[assignment]
 
-        walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
+        # _master_seed unused: the orchestrator RNG is restored from
+        # orchestrator_state["rng_state"] further down.
+        walker_seeds, group_seeds, _master_seed = _spawn_wl_seeds(
             random_seed, walkers_per_window
         )
 
@@ -647,8 +649,19 @@ class WangLandauParallelTempering(BaseParallelTempering):
                     flat_replicas[offset : offset + nw],
                     random_seed=group_seeds[g],
                 )
+                # Per-walker MC state was restored inside restart_from
+                # above; restore_state would redo that work. Apply only
+                # the group-level fields here, validating exchange_idx
+                # the same way restore_state would.
+                exchange_idx = int(gs["exchange_idx"])
+                if not 0 <= exchange_idx < nw:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g}/exchange_idx "
+                        f"= {exchange_idx} is outside the valid range "
+                        f"[0, {nw}); corrupted checkpoint."
+                    )
                 group._rng.bit_generator.state = json.loads(gs["rng_state"])
-                group._exchange_idx = int(gs["exchange_idx"])
+                group._exchange_idx = exchange_idx
                 slots.append(group)
             offset += nw
 
