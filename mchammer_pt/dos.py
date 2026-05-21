@@ -102,26 +102,39 @@ def reweight_canonical_from_dos(
     underflow ``float64``. The ``entropy`` column of ``dos`` is treated
     as ``ln g``; no exp/log round-trip is performed.
 
-    Returns a DataFrame with columns ``T_K``, ``E_mean``, ``var_E``,
-    ``Cv`` (one row per temperature in ``temperatures``).
+    Args:
+        dos: DataFrame with ``energy`` (eV) and ``entropy`` (``ln g``)
+            columns.
+        temperatures: array-like of temperatures in Kelvin; must be
+            strictly positive.
+
+    Returns:
+        DataFrame with columns ``T_K``, ``E_mean`` (eV), ``var_E``
+        (eV^2), ``Cv`` (eV/K), one row per temperature.
+
+    Raises:
+        ValueError: if any element of ``temperatures`` is non-positive.
     """
+    T_arr = np.asarray(temperatures, dtype=float)
+    if np.any(T_arr <= 0.0):
+        raise ValueError(
+            f"temperatures must be strictly positive (K); "
+            f"got min={float(T_arr.min())}"
+        )
     E = dos["energy"].to_numpy()
     log_g = dos["entropy"].to_numpy()
-    rows = []
-    for T in temperatures:
-        beta = 1.0 / (KB_EV * T)
-        log_w = log_g - beta * E
-        log_w -= log_w.max()
-        w = np.exp(log_w)
-        Z = w.sum()
-        E_mean = float(np.sum(w * E) / Z)
-        E2_mean = float(np.sum(w * E * E) / Z)
-        var_E = E2_mean - E_mean ** 2
-        Cv = var_E / (KB_EV * T ** 2)
-        rows.append({
-            "T_K": float(T),
-            "E_mean": E_mean,
-            "var_E": var_E,
-            "Cv": Cv,
-        })
-    return pd.DataFrame(rows)
+    beta = 1.0 / (KB_EV * T_arr)                          # (n_T,)
+    log_w = log_g[:, None] - beta[None, :] * E[:, None]   # (n_E, n_T)
+    log_w -= log_w.max(axis=0, keepdims=True)
+    w = np.exp(log_w)
+    Z = w.sum(axis=0)
+    E_mean = (w * E[:, None]).sum(axis=0) / Z
+    E2_mean = (w * (E[:, None] ** 2)).sum(axis=0) / Z
+    var_E = E2_mean - E_mean ** 2
+    Cv = var_E / (KB_EV * T_arr ** 2)
+    return pd.DataFrame({
+        "T_K": T_arr,
+        "E_mean": E_mean,
+        "var_E": var_E,
+        "Cv": Cv,
+    })
