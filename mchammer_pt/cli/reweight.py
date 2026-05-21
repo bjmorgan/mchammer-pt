@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mchammer_pt.dos import reweight_canonical_from_dos
+from mchammer_pt.analysis.dos import reweight_canonical_from_dos
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mchammer_pt.dos import reweight_canonical_from_dos, stitch_entropy
+from mchammer_pt.analysis.dos import reweight_canonical_from_dos, stitch_entropy
 
 
 def test_stitch_entropy_two_windows_aligns_in_overlap():

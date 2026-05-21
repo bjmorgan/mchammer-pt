@@ -16,7 +16,7 @@ from .diagnostics import (
     round_trip_counts,
     swap_acceptance_rates,
 )
-from .dos import KB_EV, reweight_canonical_from_dos, stitch_entropy
+from .analysis.dos import KB_EV, reweight_canonical_from_dos, stitch_entropy
 from .history import ExchangeHistory, read_hdf5, write_hdf5
 from .parallel.backend import (
     CanonicalPool,

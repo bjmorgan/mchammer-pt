@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mchammer_pt.dos_cli import main
+from mchammer_pt.cli.reweight import main
 
 
 def _write_dos(path: Path) -> None:

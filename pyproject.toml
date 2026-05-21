@@ -45,7 +45,7 @@ dev = [
 plot = ["matplotlib"]
 
 [project.scripts]
-mchammer-pt-reweight = "mchammer_pt.dos_cli:main"
+mchammer-pt-reweight = "mchammer_pt.cli.reweight:main"
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]

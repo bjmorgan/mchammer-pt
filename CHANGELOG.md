@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ``mchammer_pt.dos`` module with ``stitch_entropy``,
+- ``mchammer_pt.analysis.dos`` module with ``stitch_entropy``,
   ``reweight_canonical_from_dos``, and the ``KB_EV`` constant for
   generic Wang-Landau DOS post-processing. Both helpers are also
   re-exported from the package root.
