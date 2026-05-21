@@ -41,7 +41,11 @@ dev = [
     "ruff",
     "pandas-stubs",
     "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
+    "matplotlib",
 ]
+
+[project.scripts]
+mchammer-pt-reweight = "mchammer_pt.dos_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]
