@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-21
+
+### Added
+
+- Checkpoint and resume support for REWL windows with
+  ``n_walkers_per_window > 1``. ``save_checkpoint``,
+  ``CheckpointWriter``, ``attach_checkpoint_writer``, ``resume``
+  and ``resume_process_pool`` all now work for multi-walker
+  windows on both ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool``.
+- ``WangLandauWindowGroup`` gains ``snapshot_for_checkpoint``
+  and ``restore_state`` methods plus a public ``exchange_idx``
+  property.
+- ``UserWarning`` emitted on resume of a checkpoint with any
+  window-group of ``W > 1`` walkers, documenting that the
+  resumed trajectory is structurally correct but not
+  bit-identical to an uninterrupted run because of the
+  destructive end-of-run entropy merge.
+- Phase-consistency check at read time: a corrupted checkpoint
+  whose ``/orchestrator/window_groups/<g>/phase`` disagrees
+  with any walker's ``_last_state["phase"]`` raises
+  ``ValueError`` before any pool state is restored.
+- Corruption-robustness guards on resume: explicit ``ValueError``
+  (rather than ``IndexError`` deep in reconstruction) when
+  ``walkers_per_window`` is inconsistent with ``windows``, when
+  the per-replica container count is inconsistent with
+  ``sum(walkers_per_window)``, or when a multi-walker
+  ``exchange_idx`` falls outside ``[0, n_walkers)``.
+
+### Changed
+
+- **Breaking: checkpoint on-disk schema bumped from v3 to v4.**
+  v4 readers refuse v3 files with a message pointing at
+  ``mchammer-pt`` 0.9.0 as the last v3-capable release. v4 adds
+  ``walkers_per_window`` to ``/meta`` and an
+  ``/orchestrator/window_groups/<g>/`` subgroup carrying
+  per-window-group exchange RNG, ``exchange_idx``, and ``phase``
+  for windows with ``walkers_per_window[g] > 1``. W = 1 windows
+  omit the subgroup, so an all-W=1 file is byte-equal to the v3
+  layout aside from the meta key and the schema version string.
+- WL pool ``snapshot_for_checkpoint`` returns a structured dict
+  ``{"per_walker": [...], "group_state": [...]}`` rather than a
+  flat list; ``restore_replica_state`` signature becomes
+  ``(containers, per_walker_extras, group_state)``. Canonical
+  PT pools are unchanged.
+- WL pool ``data_containers()`` now returns a flat per-walker
+  list of length ``M = sum(walkers_per_window)`` (was one entry
+  per slot).
+- Same-pool W = 1 resume retains the bit-identical contract;
+  same-pool W > 1 resume is structurally correct but not
+  bit-identical (see ``UserWarning`` above).
+
+### Removed
+
+- The ``n_walkers_per_window > 1`` + ``data_container_file``
+  rejection guard from ``WangLandauParallelTempering`` and the
+  ``process_pool`` classmethod.
+- The private ``_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED``
+  constant and the tests that pinned it.
+
 ## [0.10.1] - 2026-05-21
 
 ### Changed
