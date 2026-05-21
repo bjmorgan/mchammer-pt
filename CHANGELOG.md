@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-21
+
+### Changed
+
+- ``WangLandauReplica`` no longer seeds the placed bin into the
+  ensemble's ``_entropy`` dict at construction, ``set_occupations``,
+  or ``restore_state`` — only the matching ``_histogram`` seed
+  remains. This restores ``_update_entropy``'s min-shift floor to
+  the lowest *visited* bin (matching the upstream icet algorithm)
+  while keeping the flatness gate aware of placed bins via
+  ``_histogram``. The 0.10.0 side effect — newly-visited bins
+  deep-trapping the walker until their entropy caught up to the
+  un-shifted accumulated value of older bins — is gone.
+
+### Notes
+
+- Runs resumed from 0.10.0 checkpoints carry the
+  ``_entropy[bin_init] = 0.0`` entry forward; min-shift continues
+  to see bin_init at 0 for the remainder of the resumed run.
+  Fresh runs in 0.10.1 use the corrected semantics.
+
 ## [0.10.0] - 2026-05-20
 
 ### Added
