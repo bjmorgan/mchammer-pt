@@ -107,9 +107,7 @@ def test_init_seeds_starting_bin_into_histogram():
     """The constructor records the starting bin in ``_histogram``.
 
     The flatness gate iterates over ``_histogram``; a zero-count
-    entry blocks halving until the walker visits the bin. The
-    constructor does *not* touch ``_entropy`` — see the class
-    docstring for the invariant.
+    entry blocks halving until the walker visits the bin.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
@@ -593,8 +591,6 @@ def test_set_occupations_seeds_new_bin_into_histogram():
 
     REWL exchanges and process-pool transports go through
     ``set_occupations``, so this seeding covers exchange arrivals.
-    ``set_occupations`` does *not* touch ``_entropy``; see the class
-    docstring for the invariant.
     """
     replica = _make_wl_replica()
     e = replica.ensemble

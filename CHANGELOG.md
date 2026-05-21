@@ -20,13 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``_histogram``. The 0.10.0 side effect — newly-visited bins
   deep-trapping the walker until their entropy caught up to the
   un-shifted accumulated value of older bins — is gone.
+- ``merge_entropies`` now filters out walkers whose ``_entropy``
+  dict is empty (previously a placed-but-not-yet-stepped walker
+  carried a single zero-valued entry from the seed and survived
+  the filter). In practice ``merge_entropies`` only runs at
+  halving or end-of-run, by which point every walker has stepped,
+  so the change is observable only in tests that call it directly
+  on a freshly-constructed walker.
 
 ### Notes
 
-- Runs resumed from 0.10.0 checkpoints carry the
-  ``_entropy[bin_init] = 0.0`` entry forward; min-shift continues
-  to see bin_init at 0 for the remainder of the resumed run.
-  Fresh runs in 0.10.1 use the corrected semantics.
+- Runs resumed from 0.10.0 checkpoints carry an
+  ``_entropy``-at-the-starting-bin entry of 0.0 forward; the
+  min-shift continues to see that bin at 0 for the remainder of
+  the resumed run. Fresh runs in 0.10.1 use the corrected
+  semantics.
 
 ## [0.10.0] - 2026-05-20
 
