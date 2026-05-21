@@ -755,7 +755,7 @@ def test_restore_state_legacy_checkpoint_starts_with_empty_visited_bins():
 
     Backwards-compatibility path for older checkpoints written before
     ``_visited_bins`` was persisted. The seed for ``new_bin`` still
-    applies to ``_histogram`` and ``_entropy``.
+    applies to ``_histogram``.
     """
     src = _make_wl_replica()
     src.refresh_last_state()
@@ -770,4 +770,3 @@ def test_restore_state_legacy_checkpoint_starts_with_empty_visited_bins():
     assert dst.ensemble._visited_bins == set()
     restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
     assert restored_bin in dst.ensemble._histogram
-    assert restored_bin in dst.ensemble._entropy

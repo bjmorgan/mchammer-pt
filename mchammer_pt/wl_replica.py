@@ -280,7 +280,6 @@ class WangLandauReplica:
 
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(bin_init, 0)
-        e._entropy.setdefault(bin_init, 0.0)
 
         self.walker_states: tuple[WalkerPostBlockState, ...] = (
             WalkerPostBlockState(
@@ -363,7 +362,6 @@ class WangLandauReplica:
             )
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
-        e._entropy.setdefault(new_bin, 0.0)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
@@ -687,7 +685,6 @@ class WangLandauReplica:
             e._visited_bins = set()
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
-        e._entropy.setdefault(new_bin, 0.0)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 
