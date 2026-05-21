@@ -31,7 +31,7 @@ from .wl import WangLandauParallelTempering
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 __all__ = [
     "BaseParallelTempering",

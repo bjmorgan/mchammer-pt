@@ -158,11 +158,11 @@ class WangLandauReplica:
     Invariant: every bin the walker has been placed at — by
     construction (``bin_init``), ``set_occupations`` (``new_bin``),
     or ``restore_state`` (``new_bin``) — appears as a key in the
-    underlying ensemble's ``_histogram`` (count 0) and ``_entropy``
-    (value 0.0). Each of those sites uses ``setdefault`` so existing
-    entries from prior visits are not overwritten. The Wang-Landau
-    flatness gate iterates over the ``_histogram`` values, so a
-    zero-count seeded bin blocks the gate until the walker visits it.
+    underlying ensemble's ``_histogram`` with count 0. Each of those
+    sites uses ``setdefault`` so existing counts from prior visits
+    are not overwritten. The Wang-Landau flatness gate iterates over
+    the ``_histogram`` values, so a zero-count seeded bin blocks the
+    gate until the walker visits it.
 
     Invariant: ``CoordinatedWangLandauEnsemble._visited_bins`` is the
     set of bins the walker has reached via ``_update_entropy`` since
@@ -280,7 +280,6 @@ class WangLandauReplica:
 
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(bin_init, 0)
-        e._entropy.setdefault(bin_init, 0.0)
 
         self.walker_states: tuple[WalkerPostBlockState, ...] = (
             WalkerPostBlockState(
@@ -363,7 +362,6 @@ class WangLandauReplica:
             )
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
-        e._entropy.setdefault(new_bin, 0.0)
         e.update_occupations(sites=list(range(len(occ))), species=list(occ))
         e._potential = proposed_potential
         e._reached_energy_window = True
@@ -687,7 +685,6 @@ class WangLandauReplica:
             e._visited_bins = set()
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
-        e._entropy.setdefault(new_bin, 0.0)
         if sites_by_species is not None:
             self._ensemble.configuration._sites_by_species = sites_by_species
 
