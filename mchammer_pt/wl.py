@@ -9,6 +9,7 @@ log-density-of-states ratio for acceptance.
 from __future__ import annotations
 
 import tempfile
+import warnings
 import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -30,7 +31,6 @@ from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     FlatnessMode,
     MergeCadence,
     _validate_flatness_mode,
@@ -82,6 +82,89 @@ def _array_to_windows(
     return result
 
 
+def _warn_post_merge_resume_if_multi_walker(
+    walkers_per_window: Sequence[int],
+    caller: str,
+) -> None:
+    """Emit a `UserWarning` on resume when any window has W > 1.
+
+    The end-of-run `pool.finalise_for_reporting()` destructively merges
+    per-walker entropies, so any checkpoint written after `run()`
+    returned captures the post-merge state. A resumed run continues
+    from merged entropy rather than from per-walker entropy, which
+    means the trajectory will not be bit-identical to an
+    uninterrupted run. The warning fires unconditionally for any
+    W > 1 window because there is no on-disk marker distinguishing
+    pre-merge (mid-run save) from post-merge (post-run save)
+    checkpoints — the safe assumption is that the resumed trajectory
+    diverges. The warning does not fire for all-W=1 checkpoints,
+    which retain the bit-identical contract.
+    """
+    multi = [g for g, w in enumerate(walkers_per_window) if w > 1]
+    if not multi:
+        return
+    warnings.warn(
+        f"{caller}: windows {multi} have walkers_per_window > 1. "
+        f"The end-of-run entropy merge in pool.finalise_for_reporting() "
+        f"is destructive, so the resumed trajectory is not bit-identical "
+        f"to an uninterrupted run (only structurally correct). See "
+        f"WangLandauParallelTempering.resume docstring for the full "
+        f"contract.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _spawn_wl_seeds(
+    random_seed: int,
+    walkers_per_window: Sequence[int],
+) -> tuple[list[list[int]], list[int], int]:
+    """Spawn deterministic per-walker / per-group / master seeds.
+
+    Used by the in-process constructor and by `resume` / `resume_process_pool`
+    on the serial-pool path so both derive seeds identically without
+    duplicating the SeedSequence walk. `process_pool` and the
+    `resume_process_pool` worker-spawn path use mchammer-pt's worker
+    builder, which independently constructs its own SeedSequence; the
+    contract there is that both paths produce identical seed plans for
+    the same `random_seed` + `walkers_per_window`.
+
+    Args:
+        random_seed: top-level seed.
+        walkers_per_window: walker count per window.
+
+    Returns:
+        Tuple ``(walker_seeds, group_seeds, master_seed)`` where
+        ``walker_seeds[g][w]`` is walker w's seed in window g,
+        ``group_seeds[g]`` is the per-window-group exchange-RNG seed,
+        and ``master_seed`` seeds the orchestrator's swap-pair RNG.
+    """
+    n_windows = len(walkers_per_window)
+    seed_sequence = np.random.SeedSequence(int(random_seed))
+    total_walker_seeds = sum(walkers_per_window)
+    child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
+    offsets: list[int] = []
+    off = 0
+    for ww in walkers_per_window:
+        offsets.append(off)
+        off += ww
+    walker_seeds = [
+        [
+            int(child_seeds[offsets[w] + j].generate_state(1)[0])
+            for j in range(walkers_per_window[w])
+        ]
+        for w in range(n_windows)
+    ]
+    group_seeds = [
+        int(child_seeds[total_walker_seeds + g].generate_state(1)[0])
+        for g in range(n_windows)
+    ]
+    master_seed = int(
+        child_seeds[total_walker_seeds + n_windows].generate_state(1)[0]
+    )
+    return walker_seeds, group_seeds, master_seed
+
+
 class WangLandauParallelTempering(BaseParallelTempering):
     """REWL orchestrator across a sequence of energy windows.
 
@@ -100,7 +183,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             exchange-proposal RNG are deterministically spawned.
         pool: optional `WangLandauPool` to use as backend.
         data_container_file: optional path; if given, `run` writes a
-            schema-3 checkpoint to it on completion.
+            schema-4 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
             ``CoordinatedWangLandauEnsemble``; must be a subclass of
             it. To use the 1/t schedule, pass
@@ -113,8 +196,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
             `WangLandauWindowGroup`; the coordinator runs a collective
             flatness gate and halves all walkers in lockstep. With
             count > 1 the group also merges entropies across walkers
-            (cadence controlled by ``merge_cadence``). Checkpointing
-            is not supported for any window with count > 1.
+            (cadence controlled by ``merge_cadence``). Same-pool resume
+            for windows with count > 1 is structurally correct but not
+            bit-identical: ``run()``'s end-of-run merge destroys the
+            pre-merge per-walker entropy state that bit-identity would
+            require.
         flatness_mode: ``"per_walker"`` (every walker independently
             flat; published Vogel et al. 2013) or ``"pooled"`` (default;
             summed histogram flat -- a single combined bin sees ``W x``
@@ -128,8 +214,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
         ValueError: on window validation or length-mismatch failures.
-        NotImplementedError: if any ``n_walkers_per_window`` value is
-            > 1 and ``data_container_file`` is not None.
     """
 
     _pool: WangLandauPool  # narrow from ReplicaPool
@@ -189,31 +273,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"all n_walkers_per_window values must be >= 1; "
                 f"got {walkers_per_window}"
             )
-        if any(w > 1 for w in walkers_per_window) and data_container_file is not None:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-
-        seed_sequence = np.random.SeedSequence(int(random_seed))
-        # Walker seeds are packed contiguously in window order, followed
-        # by one group seed per window, then one master seed.
-        total_walker_seeds = sum(walkers_per_window)
-        child_seeds = seed_sequence.spawn(total_walker_seeds + n_windows + 1)
-        offsets: list[int] = []
-        offset = 0
-        for ww in walkers_per_window:
-            offsets.append(offset)
-            offset += ww
-        walker_seeds = [
-            [
-                int(child_seeds[offsets[w] + j].generate_state(1)[0])
-                for j in range(walkers_per_window[w])
-            ]
-            for w in range(n_windows)
-        ]
-        group_seeds = [
-            int(child_seeds[total_walker_seeds + w].generate_state(1)[0])
-            for w in range(n_windows)
-        ]
-        master_seed = int(child_seeds[-1].generate_state(1)[0])
+        walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
+            random_seed, walkers_per_window
+        )
 
         if pool is not None and (
             ensemble_cls is not CoordinatedWangLandauEnsemble or ensemble_kwargs
@@ -288,6 +350,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         self._energy_spacing = float(energy_spacing)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
         self._ce_identity = _compute_ce_identity(cluster_expansion)
@@ -349,14 +412,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
         """Return the WL-specific checkpoint metadata.
 
-        Contains the window edges, energy spacing, flatness mode, and
-        merge cadence.
+        Contains the window edges, energy spacing, flatness mode,
+        merge cadence, and walkers-per-window boundary array.
         """
         return {
             "windows": _windows_to_array(self._windows),
             "energy_spacing": float(self._energy_spacing),
             "flatness_mode": self._flatness_mode,
             "merge_cadence": self._merge_cadence,
+            "walkers_per_window": np.asarray(
+                self._walkers_per_window, dtype=np.int32
+            ),
         }
 
     def run(self, n_cycles: int) -> ExchangeHistory:
@@ -428,7 +494,18 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ]
 
     def save_checkpoint(self, path: Path | str) -> None:
-        """Write a full checkpoint of this orchestrator atomically."""
+        """Write a full checkpoint of this orchestrator atomically.
+
+        For windows with `n_walkers_per_window > 1`, the checkpoint
+        captures whatever entropy state the walkers hold at the time
+        of the call. If save_checkpoint is invoked **after** ``run()``
+        has returned, the saved per-walker entropies have already been
+        merged by ``finalise_for_reporting`` (run-end side-effect), so
+        the on-disk state cannot reconstruct the pre-merge trajectory
+        — resuming from such a file produces a structurally correct
+        but not bit-identical continuation. See `resume` and the
+        class docstring for the full W>1 contract.
+        """
         _write_checkpoint(self, path)
 
     @classmethod
@@ -444,27 +521,39 @@ class WangLandauParallelTempering(BaseParallelTempering):
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
 
-        Schema-3 only. CE identity, ensemble_cls FQN, and
+        Schema-4 only. CE identity, ensemble_cls FQN, and
         ensemble_kwargs hash validate against the checkpoint;
         mismatches raise. Bit-identical resume requires the original
         `_sites_by_species` cache, which is persisted in the
-        checkpoint.
+        checkpoint. Supports any mix of W=1 and W>1 windows.
+
+        For windows with ``n_walkers_per_window > 1`` the resumed
+        continuation is structurally correct but not bit-identical
+        to an uninterrupted run: ``save_checkpoint`` captures the
+        merged-entropy state left behind by ``finalise_for_reporting``
+        at the end of each ``run()``, and that merge is destructive.
+        A `UserWarning` is emitted at resume time naming the affected
+        windows. The relaxation does not apply to all-W=1
+        checkpoints, which retain the bit-identical contract.
         """
         import json
 
         from .checkpoint import (
             _read_orchestrator_state,
             _read_replica_extra,
+            _read_window_groups,
             _validate_kwargs_hash,
         )
         from .history import read_hdf5
+        from .wl_window_group import WangLandauWindowGroup
 
         _, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "3":
+        if schema_version != "4":
             raise ValueError(
-                f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '3' only."
+                f"{path}: unsupported schema_version {schema_version!r}; this "
+                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
+                f"with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -476,60 +565,123 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
         _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
 
-        orchestrator_state = _read_orchestrator_state(path)
-        replica_extras = _read_replica_extra(path)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
-        # Checkpoints written before ``flatness_mode`` and
-        # ``merge_cadence`` were persisted in meta resume with the
-        # values that were the defaults at the time of writing
-        # ("pooled" and "at_halve").
+        walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
+        if len(walkers_per_window) != len(windows):
+            raise ValueError(
+                f"{path}: walkers_per_window has "
+                f"{len(walkers_per_window)} entries but windows has "
+                f"{len(windows)}; checkpoint is corrupted."
+            )
+        expected_m = sum(walkers_per_window)
+        if len(containers) != expected_m:
+            raise ValueError(
+                f"{path}: walker-count mismatch — "
+                f"sum(walkers_per_window) = {expected_m} but "
+                f"file contains {len(containers)} replica containers; "
+                f"checkpoint is corrupted or truncated."
+            )
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path, containers)
+        _warn_post_merge_resume_if_multi_walker(walkers_per_window, "resume")
         flatness_mode: FlatnessMode = str(
-            meta.get("flatness_mode", "pooled")
+            meta["flatness_mode"]
         )  # type: ignore[assignment]
         merge_cadence: MergeCadence = str(
-            meta.get("merge_cadence", "at_halve")
+            meta["merge_cadence"]
         )  # type: ignore[assignment]
 
+        # _master_seed unused: the orchestrator RNG is restored from
+        # orchestrator_state["rng_state"] further down.
+        walker_seeds, group_seeds, _master_seed = _spawn_wl_seeds(
+            random_seed, walkers_per_window
+        )
+
         atoms_list = [container.structure.copy() for container in containers]
-        # Per-replica random_seed is overwritten by restart_from via
-        # restore_state before any MC step runs; the orchestrator's
-        # RNG is loaded from saved JSON below. Pass random_seed
-        # directly to every replica.
-        replicas = [
-            WangLandauReplica.restart_from(
-                container,
-                cluster_expansion=cluster_expansion,
-                atoms=atoms,
-                energy_spacing=energy_spacing,
-                energy_limit_left=lo,
-                energy_limit_right=hi,
-                random_seed=random_seed,
-                ensemble_cls=ensemble_cls,
-                ensemble_kwargs=ensemble_kwargs,
-                sites_by_species=extra["sites_by_species"],
-            )
-            for container, atoms, (lo, hi), extra in zip(
-                containers,
-                atoms_list,
-                windows,
-                replica_extras,
-                strict=True,
-            )
-        ]
-        # Resume is W=1-only today; bare replicas serve directly as slots.
-        slots: list[WangLandauSlot] = list(replicas)
+
+        # Build the flat list of replicas (one per walker across all windows).
+        # Per-replica RNG state is restored inside restart_from; the seed
+        # passed here is only used to initialise the ensemble before restore.
+        flat_replicas: list[WangLandauReplica] = []
+        flat_idx = 0
+        for g, (lo, hi) in enumerate(windows):
+            for w in range(walkers_per_window[g]):
+                flat_replicas.append(
+                    WangLandauReplica.restart_from(
+                        containers[flat_idx],
+                        cluster_expansion=cluster_expansion,
+                        atoms=atoms_list[flat_idx],
+                        energy_spacing=energy_spacing,
+                        energy_limit_left=lo,
+                        energy_limit_right=hi,
+                        random_seed=walker_seeds[g][w],
+                        ensemble_cls=ensemble_cls,
+                        ensemble_kwargs=ensemble_kwargs,
+                        sites_by_species=replica_extras[flat_idx]["sites_by_species"],
+                    )
+                )
+                flat_idx += 1
+
+        # Build slots: bare replica for W=1 windows, WindowGroup for W>1.
+        slots: list[WangLandauSlot] = []
+        offset = 0
+        for g in range(len(windows)):
+            nw = walkers_per_window[g]
+            if nw == 1:
+                if window_groups[g] is not None:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g} present despite "
+                        f"walkers_per_window[{g}] = 1; corrupted checkpoint."
+                    )
+                slots.append(flat_replicas[offset])
+            else:
+                gs = window_groups[g]
+                if gs is None:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g} missing despite "
+                        f"walkers_per_window[{g}] = {nw}; corrupted checkpoint."
+                    )
+                group = WangLandauWindowGroup(
+                    flat_replicas[offset : offset + nw],
+                    random_seed=group_seeds[g],
+                )
+                # Per-walker MC state was restored inside restart_from
+                # above; restore_state would redo that work. Apply only
+                # the group-level fields here, validating exchange_idx
+                # the same way restore_state would.
+                exchange_idx = int(gs["exchange_idx"])
+                if not 0 <= exchange_idx < nw:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g}/exchange_idx "
+                        f"= {exchange_idx} is outside the valid range "
+                        f"[0, {nw}); corrupted checkpoint."
+                    )
+                group._rng.bit_generator.state = json.loads(gs["rng_state"])
+                group._exchange_idx = exchange_idx
+                slots.append(group)
+            offset += nw
+
         pool = SerialWangLandauPool(
             slots,
             energy_spacing=energy_spacing,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
         )
+
+        # One Atoms per window (not per walker) for the constructor.
+        atoms_per_window: list[Atoms] = []
+        offset = 0
+        for g in range(len(windows)):
+            atoms_per_window.append(atoms_list[offset])
+            offset += walkers_per_window[g]
+
         pt = cls(
             cluster_expansion=cluster_expansion,
-            atoms=atoms_list,
+            atoms=atoms_per_window,
             windows=windows,
             energy_spacing=energy_spacing,
             block_size=block_size,
@@ -537,6 +689,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool=pool,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
         pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
@@ -568,7 +721,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         process or process-to-serial boundary; resume into the same pool
         kind that wrote the checkpoint for bit-identical continuation,
         or accept that cross-pool resume gives a statistically-valid
-        continuation only.
+        continuation only. The same W>1 entropy-merge relaxation
+        documented on `resume` applies here too; a `UserWarning` is
+        emitted for any window with ``walkers_per_window[g] > 1``.
 
         See `resume` for argument and error semantics.
         """
@@ -577,16 +732,18 @@ class WangLandauParallelTempering(BaseParallelTempering):
         from .checkpoint import (
             _read_orchestrator_state,
             _read_replica_extra,
+            _read_window_groups,
             _validate_kwargs_hash,
         )
         from .history import read_hdf5
 
         _, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "3":
+        if schema_version != "4":
             raise ValueError(
-                f"{path}: unknown schema_version {schema_version!r}; "
-                f"this version of mchammer-pt understands '3' only."
+                f"{path}: unsupported schema_version {schema_version!r}; this "
+                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
+                f"with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -598,40 +755,63 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
         _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume_process_pool")
 
-        orchestrator_state = _read_orchestrator_state(path)
-        replica_extras = _read_replica_extra(path)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
-        # Checkpoints written before ``flatness_mode`` and
-        # ``merge_cadence`` were persisted in meta resume with the
-        # values that were the defaults at the time of writing
-        # ("pooled" and "at_halve").
+        walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
+        if len(walkers_per_window) != len(windows):
+            raise ValueError(
+                f"{path}: walkers_per_window has "
+                f"{len(walkers_per_window)} entries but windows has "
+                f"{len(windows)}; checkpoint is corrupted."
+            )
+        expected_m = sum(walkers_per_window)
+        if len(containers) != expected_m:
+            raise ValueError(
+                f"{path}: walker-count mismatch — "
+                f"sum(walkers_per_window) = {expected_m} but "
+                f"file contains {len(containers)} replica containers; "
+                f"checkpoint is corrupted or truncated."
+            )
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path, containers)
+        _warn_post_merge_resume_if_multi_walker(
+            walkers_per_window, "resume_process_pool"
+        )
         flatness_mode: FlatnessMode = str(
-            meta.get("flatness_mode", "pooled")
+            meta["flatness_mode"]
         )  # type: ignore[assignment]
         merge_cadence: MergeCadence = str(
-            meta.get("merge_cadence", "at_halve")
+            meta["merge_cadence"]
         )  # type: ignore[assignment]
 
-        atoms_list = [container.structure.copy() for container in containers]
+        # One Atoms per window (not per walker) for the constructor path.
+        atoms_per_window: list[Atoms] = []
+        offset = 0
+        for g in range(len(windows)):
+            atoms_per_window.append(containers[offset].structure.copy())
+            offset += walkers_per_window[g]
 
         pt = cls.process_pool(
             cluster_expansion=cluster_expansion,
-            atoms=atoms_list,
+            atoms=atoms_per_window,
             windows=windows,
             energy_spacing=energy_spacing,
             block_size=block_size,
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            n_walkers_per_window=walkers_per_window,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
-                containers, replica_extras
+                containers=containers,
+                per_walker_extras=replica_extras,
+                group_state=window_groups,
             )
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
@@ -741,19 +921,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         cleaned when the returned orchestrator is garbage-collected.
         ``flatness_mode`` and ``merge_cadence`` have the same meaning
         as on :class:`WangLandauParallelTempering`.
-
-        Raises:
-            NotImplementedError: if any ``n_walkers_per_window`` value
-                is > 1 and ``data_container_file`` is not None.
         """
-        _w = n_walkers_per_window
-        multi = (
-            (isinstance(_w, int) and _w > 1)
-            or (not isinstance(_w, int) and any(int(w) > 1 for w in _w))
-        )
-        if multi and data_container_file is not None:
-            raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
-
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
         replica_seeds = [int(s.generate_state(1)[0]) for s in child_seeds[:-1]]

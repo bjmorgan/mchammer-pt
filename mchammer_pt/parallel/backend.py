@@ -89,23 +89,19 @@ class ReplicaPool(Protocol):
         """
         ...
 
-    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
+    def snapshot_for_checkpoint(self) -> list[dict[str, Any]] | dict[str, Any]:
         """Per-replica state snapshot for the checkpoint payload.
 
-        Each pool implementation calls ``Replica.snapshot_for_checkpoint``
-        on its replicas — for ``ProcessPool`` this is a worker-boundary
-        round trip — and returns the per-replica extras dicts in slot
-        order. As a side effect, each replica's ``BaseDataContainer``
-        has its ``_last_state`` refreshed (mchammer's
-        ``write_data_container`` does the same refresh inline; the
-        checkpoint write path serialises containers directly and so
-        must replicate it).
+        Refreshes each replica's ``BaseDataContainer._last_state`` as a
+        side effect. Call this before ``data_containers()`` — mchammer's
+        ``_restart_ensemble`` reads ``_last_state`` on resume and the
+        checkpoint write path depends on it being populated.
 
-        Used by ``CanonicalParallelTempering.save_checkpoint`` and
-        ``CheckpointWriter`` immediately before reading
-        ``data_containers()``. Call this *first*: ``data_containers()``
-        returns containers whose ``_last_state`` is empty unless this
-        method has populated it.
+        Canonical pools (``SerialPool``, ``ProcessPool``) return a flat
+        ``list[dict[str, Any]]``, one entry per replica. Wang-Landau pools
+        (``SerialWangLandauPool``, ``ProcessWangLandauPool``) return a
+        ``dict`` with ``"per_walker"`` and ``"group_state"`` keys.
+        ``_write_checkpoint`` dispatches on the return type.
         """
         ...
 

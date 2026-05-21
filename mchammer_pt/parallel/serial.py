@@ -501,7 +501,20 @@ class SerialWangLandauPool:
             ) from exc
 
     def data_containers(self) -> list[WangLandauDataContainer]:
-        return [r.data_container() for r in self._replicas]
+        """Flat per-walker containers in window-major / walker-minor order.
+
+        For W=1 slots this is the bare replica's single container;
+        for W>1 slots this expands to all walkers in the group.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        out: list[WangLandauDataContainer] = []
+        for slot in self._replicas:
+            if isinstance(slot, WangLandauWindowGroup):
+                out.extend(r.data_container() for r in slot._replicas)
+            else:
+                out.append(slot.data_container())
+        return out
 
     def per_window_data_containers(self) -> list[list[WangLandauDataContainer]]:
         """All data containers grouped by window slot.
@@ -528,8 +541,110 @@ class SerialWangLandauPool:
         for r in self._replicas:
             r.finalise_for_reporting()
 
-    def snapshot_for_checkpoint(self) -> list[dict[str, Any]]:
-        return [r.snapshot_for_checkpoint() for r in self._replicas]
+    def snapshot_for_checkpoint(self) -> dict[str, Any]:
+        """Snapshot per-walker and group-level checkpoint state.
+
+        Returns:
+            Dict with:
+                "per_walker": flat list of per-walker snapshot dicts in
+                    window-major / walker-minor order (length M = sum
+                    of walkers_per_window across slots).
+                "group_state": list of length N (one per window slot).
+                    Each entry is a dict with ``rng_state``,
+                    ``exchange_idx``, ``phase`` for W>1 slots, or
+                    ``None`` for bare-replica W=1 slots.
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        per_walker: list[dict[str, Any]] = []
+        group_state: list[dict[str, Any] | None] = []
+        for slot in self._replicas:
+            if isinstance(slot, WangLandauWindowGroup):
+                snap = slot.snapshot_for_checkpoint()
+                per_walker.extend(snap["per_walker"])
+                group_state.append(snap["group_state"])
+            else:
+                per_walker.append(slot.snapshot_for_checkpoint())
+                group_state.append(None)
+        return {"per_walker": per_walker, "group_state": group_state}
+
+    def restore_replica_state(
+        self,
+        containers: list[BaseDataContainer],
+        per_walker_extras: list[dict[str, Any]],
+        group_state: list[dict[str, Any] | None],
+    ) -> None:
+        """Push saved per-walker and group state into each slot.
+
+        Args:
+            containers: flat list of M containers in window-major /
+                walker-minor order. Length must equal the pool's total
+                walker count (sum over slots of ``len(slot._replicas)``
+                for ``WangLandauWindowGroup`` slots, or 1 for bare-replica
+                slots).
+            per_walker_extras: flat list of M per-walker extras dicts,
+                same order as ``containers``.
+            group_state: list of length N (one per slot). ``None`` for
+                bare-replica W=1 slots; a dict for
+                ``WangLandauWindowGroup`` slots.
+
+        Raises:
+            ValueError: any of the three inputs has a mismatched length,
+                or a W=1 slot receives a non-None group_state entry (or
+                vice versa).
+        """
+        from ..wl_window_group import WangLandauWindowGroup
+
+        expected_m = sum(
+            len(slot._replicas) if isinstance(slot, WangLandauWindowGroup) else 1
+            for slot in self._replicas
+        )
+        if len(containers) != expected_m:
+            raise ValueError(
+                f"restore_replica_state expects {expected_m} containers, "
+                f"got {len(containers)}"
+            )
+        if len(per_walker_extras) != expected_m:
+            raise ValueError(
+                f"restore_replica_state expects {expected_m} per_walker_extras, "
+                f"got {len(per_walker_extras)}"
+            )
+        if len(group_state) != len(self._replicas):
+            raise ValueError(
+                f"restore_replica_state expects {len(self._replicas)} "
+                f"group_state entries, got {len(group_state)}"
+            )
+
+        offset = 0
+        for slot, gs in zip(self._replicas, group_state, strict=True):
+            if isinstance(slot, WangLandauWindowGroup):
+                n = len(slot._replicas)
+                if gs is None:
+                    raise ValueError(
+                        "group_state entry is None for a multi-walker slot"
+                    )
+                slot.restore_state(
+                    containers=containers[offset:offset + n],
+                    per_walker_extras=per_walker_extras[offset:offset + n],
+                    group_state=gs,
+                )
+                offset += n
+            elif isinstance(slot, WangLandauReplica):
+                if gs is not None:
+                    raise ValueError(
+                        "group_state entry is non-None for a bare-replica slot"
+                    )
+                slot.restore_state(
+                    containers[offset],
+                    sites_by_species=per_walker_extras[offset]["sites_by_species"],
+                )
+                offset += 1
+            else:
+                raise TypeError(
+                    f"unexpected slot type {type(slot).__name__!r} in "
+                    f"restore_replica_state; expected WangLandauReplica or "
+                    f"WangLandauWindowGroup"
+                )
 
     def shutdown(self) -> None:
         return None

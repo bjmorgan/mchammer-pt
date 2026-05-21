@@ -10,7 +10,6 @@ import numpy as np
 from mchammer.observers.base_observer import BaseObserver
 
 from .wl_coordinator import (
-    _MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED,
     CoordinatorPlan,
     Phase,
     Schedule,
@@ -21,6 +20,7 @@ from .wl_coordinator import (
 from .wl_replica import WangLandauReplica
 
 if TYPE_CHECKING:
+    from mchammer.data_containers.base_data_container import BaseDataContainer
     from mchammer.data_containers.wang_landau_data_container import (
         WangLandauDataContainer,
     )
@@ -192,6 +192,11 @@ class WangLandauWindowGroup:
         return self._schedule
 
     @property
+    def exchange_idx(self) -> int:
+        """Index of the walker currently chosen as the exchange representative."""
+        return self._exchange_idx
+
+    @property
     def flatness_limit(self) -> float:
         return float(self._replicas[0].ensemble._flatness_limit)
 
@@ -266,7 +271,86 @@ class WangLandauWindowGroup:
             r.refresh_last_state()
 
     def snapshot_for_checkpoint(self) -> dict[str, Any]:
-        raise NotImplementedError(_MULTI_WALKER_CHECKPOINT_NOT_SUPPORTED)
+        """Refresh each walker's _last_state and return checkpoint extras.
+
+        Returns:
+            Dict with:
+                "per_walker": list of W per-walker snapshot dicts (each
+                    carries ``sites_by_species`` for the walker's
+                    configuration cache).
+                "group_state": dict with ``rng_state`` (JSON str of the exchange
+                    RNG state), ``exchange_idx`` (current swap-walker
+                    index), and ``phase`` (collective WL phase taken from
+                    walker 0's ensemble).
+        """
+        from .checkpoint import _serialise_rng_state
+
+        return {
+            "per_walker": [r.snapshot_for_checkpoint() for r in self._replicas],
+            "group_state": {
+                "rng_state": _serialise_rng_state(self._rng),
+                "exchange_idx": int(self._exchange_idx),
+                "phase": self._replicas[0].ensemble._phase,
+            },
+        }
+
+    def restore_state(
+        self,
+        containers: list[BaseDataContainer],
+        per_walker_extras: list[dict[str, Any]],
+        group_state: dict[str, Any],
+    ) -> None:
+        """Restore every walker's MC state and the group-level state.
+
+        Phase consistency is validated upstream in
+        ``checkpoint._read_window_groups``.
+
+        Args:
+            containers: one container per walker, in walker order.
+            per_walker_extras: one per-walker extras dict per walker.
+            group_state: dict with ``rng_state``, ``exchange_idx``, ``phase``.
+
+        Raises:
+            ValueError: lengths of ``containers`` and ``per_walker_extras``
+                do not both equal the walker count, ``group_state`` is
+                missing a required key, or ``exchange_idx`` falls outside
+                ``[0, len(self._replicas))`` (corruption signal).
+        """
+        import json
+
+        if len(containers) != len(self._replicas):
+            raise ValueError(
+                f"restore_state expects {len(self._replicas)} containers, "
+                f"got {len(containers)}"
+            )
+        if len(per_walker_extras) != len(self._replicas):
+            raise ValueError(
+                f"restore_state expects {len(self._replicas)} per_walker_extras, "
+                f"got {len(per_walker_extras)}"
+            )
+        required_keys = {"rng_state", "exchange_idx", "phase"}
+        missing = required_keys - group_state.keys()
+        if missing:
+            raise ValueError(
+                f"restore_state: group_state missing required keys "
+                f"{sorted(missing)}; corrupted checkpoint."
+            )
+        exchange_idx = int(group_state["exchange_idx"])
+        if not 0 <= exchange_idx < len(self._replicas):
+            raise ValueError(
+                f"restore_state: group_state['exchange_idx']={exchange_idx} "
+                f"is outside the valid range [0, {len(self._replicas)}); "
+                f"corrupted checkpoint."
+            )
+        for replica, container, extra in zip(
+            self._replicas, containers, per_walker_extras, strict=True
+        ):
+            replica.restore_state(
+                container,
+                sites_by_species=extra["sites_by_species"],
+            )
+        self._rng.bit_generator.state = json.loads(group_state["rng_state"])
+        self._exchange_idx = exchange_idx
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""

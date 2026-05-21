@@ -175,6 +175,7 @@ def write_hdf5(
     meta: dict[str, MetaValue],
     orchestrator_state: dict[str, np.ndarray | str] | None = None,
     replica_extra: list[dict[str, Any]] | None = None,
+    window_groups: list[dict[str, Any] | None] | None = None,
 ) -> None:
     """Write an `ExchangeHistory`, replica containers, and metadata.
 
@@ -198,6 +199,13 @@ def write_hdf5(
     path-dependent per-sublattice species → site-list cache that
     bit-identical canonical-ensemble resume requires alongside the
     container's `_last_state`.
+
+    When ``window_groups`` is supplied, ``orchestrator_state`` must also
+    be supplied (the ``/orchestrator`` group must exist). Each non-``None``
+    element at index ``g`` is stored under
+    ``/orchestrator/window_groups/<g>/`` with datasets ``rng_state``
+    (JSON string), ``exchange_idx`` (int32), and ``phase`` (string).
+    ``None`` entries are skipped, leaving no subgroup for that index.
 
     Writes are atomic: the file is first written to a sibling ``.tmp``
     path and renamed on success via ``os.replace``. A partial or failed
@@ -259,6 +267,31 @@ def write_hdf5(
                     sites_group.create_dataset(
                         str(i), data=json.dumps(extra["sites_by_species"])
                     )
+
+            if window_groups is not None:
+                if orchestrator_state is None:
+                    raise ValueError(
+                        "window_groups requires orchestrator_state to be supplied; "
+                        "the /orchestrator group must exist to host the subgroup."
+                    )
+                # Omit /orchestrator/window_groups/ entirely when every
+                # entry is None (the all-W=1 case). The reader relies on
+                # subgroup absence to mean "this is a single-walker
+                # window"; an empty-but-present parent group leaks an
+                # internal detail of the writer.
+                if any(entry is not None for entry in window_groups):
+                    wg_parent = f["orchestrator"].create_group("window_groups")
+                    for g, entry in enumerate(window_groups):
+                        if entry is None:
+                            continue
+                        sub = wg_parent.create_group(str(g))
+                        sub.create_dataset(
+                            "rng_state", data=str(entry["rng_state"])
+                        )
+                        sub.create_dataset(
+                            "exchange_idx", data=np.int32(entry["exchange_idx"])
+                        )
+                        sub.create_dataset("phase", data=str(entry["phase"]))
         os.replace(tmp_target, path)
     except BaseException:
         # Clean the partial .tmp on any failure; leave the target path

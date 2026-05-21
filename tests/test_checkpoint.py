@@ -258,7 +258,7 @@ def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_pa
     pt.save_checkpoint(path)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert meta["block_size"] == 10
     assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
     assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
@@ -289,7 +289,7 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     pt.run(n_cycles=3)
 
     _, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
 
@@ -361,7 +361,7 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
 
     # And the final file is a valid resumable checkpoint.
     history, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
 
@@ -424,7 +424,25 @@ def test_resume_rejects_unknown_schema_version(toy_ce, toy_atoms, tmp_path):
     with h5py.File(path, "r+") as f:
         f["meta"].attrs["schema_version"] = "999"
 
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(ValueError, match="0.9.0"):
+        CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
+
+
+def test_resume_rejects_v3_schema(toy_ce, toy_atoms, tmp_path):
+    """v4 readers refuse v3 files with a message pointing at 0.9.0."""
+    import h5py
+
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=3)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r+") as f:
+        f["meta"].attrs["schema_version"] = "3"
+
+    with pytest.raises(ValueError, match="0.9.0"):
         CanonicalParallelTempering.resume(path, cluster_expansion=toy_ce)
 
 
@@ -449,7 +467,7 @@ def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path
         pt.run(n_cycles=3)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "3"
+    assert meta["schema_version"] == "4"
     assert len(containers) == 3
     _read_orchestrator_state(path)
 
@@ -579,3 +597,149 @@ def test_resume_rejects_mismatched_ensemble_kwargs_hash(toy_ce, toy_atoms, tmp_p
             cluster_expansion=toy_ce,
             ensemble_kwargs={"user_tag": "second"},
         )
+
+
+def test_read_window_groups_returns_one_entry_per_window(tmp_path):
+    """Returns list[dict|None] of length N; None for windows whose
+    subgroup is absent (W=1 by convention)."""
+    import h5py
+
+    from mchammer_pt.checkpoint import _read_window_groups
+
+    path = tmp_path / "t.h5"
+    with h5py.File(path, "w") as f:
+        meta = f.create_group("meta")
+        meta.attrs["walkers_per_window"] = np.array([1, 2, 1], dtype=np.int32)
+        wg = f.create_group("orchestrator/window_groups")
+        sub = wg.create_group("1")
+        sub.create_dataset("rng_state", data='{"bit_generator": "PCG64"}')
+        sub.create_dataset("exchange_idx", data=np.int32(1))
+        sub.create_dataset("phase", data="1_over_t")
+
+    out = _read_window_groups(path)
+    assert out[0] is None
+    assert out[1] == {
+        "rng_state": '{"bit_generator": "PCG64"}',
+        "exchange_idx": 1,
+        "phase": "1_over_t",
+    }
+    assert out[2] is None
+
+
+def test_write_checkpoint_passes_window_groups_through_to_hdf5(tmp_path):
+    """A W=2 PT round-trips through save_checkpoint with
+    /orchestrator/window_groups/<g>/ on disk."""
+    import h5py
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+    with h5py.File(path, "r") as f:
+        assert "orchestrator/window_groups/0" in f
+        assert "orchestrator/window_groups/1" in f
+        assert "exchange_idx" in f["orchestrator/window_groups/0"]
+
+
+def test_read_window_groups_raises_on_phase_mismatch(tmp_path):
+    """_read_window_groups raises ValueError when the on-disk group phase
+    disagrees with any of its walkers' _last_state['phase']."""
+    import h5py
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.checkpoint import _read_window_groups
+    from mchammer_pt.history import read_hdf5
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    def _initial_energy():
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        return float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    # Corrupt: flip the group phase on window 0 to a value that
+    # disagrees with the walkers' _last_state['phase'].
+    with h5py.File(path, "r+") as f:
+        del f["orchestrator/window_groups/0/phase"]
+        f["orchestrator/window_groups/0"].create_dataset(
+            "phase", data="__corrupted__",
+        )
+
+    _, containers, _ = read_hdf5(path)
+    with pytest.raises(ValueError, match="phase consistency"):
+        _read_window_groups(path, containers)
+
+
+def test_w1_only_checkpoint_omits_window_groups_subgroup(tmp_path):
+    """An all-W=1 v4 checkpoint omits /orchestrator/window_groups/ entirely;
+    _read_window_groups returns all Nones."""
+    import h5py
+
+    from mchammer_pt.checkpoint import _read_window_groups
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    def _initial_energy():
+        from mchammer.calculators import ClusterExpansionCalculator
+        return float(
+            ClusterExpansionCalculator(make_wl_atoms(), make_wl_ce())
+            .calculate_total(occupations=make_wl_atoms().numbers)
+        )
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=2)
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    with h5py.File(path, "r") as f:
+        # The writer must omit the /orchestrator/window_groups/ subgroup
+        # entirely when every window has W=1 (not create-and-leave-empty).
+        assert "window_groups" not in f["orchestrator"]
+    assert _read_window_groups(path) == [None, None]

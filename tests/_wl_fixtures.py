@@ -8,6 +8,8 @@ deterministic.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 from ase import Atoms
 from ase.build import bulk
@@ -44,3 +46,71 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
         symbols[i] = "Au"
     atoms.set_chemical_symbols(symbols)
     return atoms
+
+
+def make_process_wl_pool_w2(tmp_path: Path):
+    """ProcessWangLandauPool (in-process workers) with 2 windows x W=2.
+
+    Both windows share the same energy range; W=2 walkers per window
+    gives M=4 total walkers. ``data_container_file`` is not used for
+    in-process pools, so the W>1 + file guard in ``process_pool`` is
+    irrelevant here.
+
+    Args:
+        tmp_path: pytest-managed temp directory. The caller must pass
+            its own ``tmp_path`` (or a sub-directory thereof) so the
+            CE artefacts the in-process pool writes are cleaned up
+            after the test.
+
+    Returns a :class:`ProcessWangLandauPool` backed by
+    :class:`InProcessWorkerConn` instances. Callers are responsible for
+    calling ``pool.shutdown()`` after use.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    return make_in_process_wl_pool(
+        tmp_path,
+        windows=[(lo, hi), (lo, hi)],
+        seeds=[0, 1],
+        n_walkers_per_window=2,
+    )
+
+
+def make_serial_wl_pool_mixed():
+    """SerialWangLandauPool with walkers_per_window=[1, 2].
+
+    Window 0 holds a bare WangLandauReplica (W=1); window 1 holds a
+    WangLandauWindowGroup with two walkers (W=2). Total M=3 walkers.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[1, 2],
+        data_container_file=None,
+    )
+    return pt._pool

@@ -261,3 +261,49 @@ def test_concatenate_replica_count_mismatch_raises():
 def test_concatenate_no_arguments_raises():
     with pytest.raises(ValueError, match="at least one"):
         ExchangeHistory.concatenate()
+
+
+def test_write_hdf5_writes_window_groups_subgroup(tmp_path: Path):
+    """When window_groups is non-empty, /orchestrator/window_groups/<g>/
+    carries rng_state, exchange_idx, phase. None entries are skipped."""
+    import h5py
+
+    h = _make_history(n_cycles=2, n_replicas=2)
+    write_hdf5(
+        tmp_path / "t.h5",
+        history=h,
+        replica_containers=[],
+        meta={"schema_version": "4"},
+        orchestrator_state={
+            "replica_labels": np.arange(2, dtype=np.int64),
+            "rng_state": '{"bit_generator": "PCG64", "state": {}}',
+        },
+        window_groups=[
+            None,
+            {"rng_state": '{"x": 1}', "exchange_idx": 3, "phase": "halving"},
+        ],
+    )
+    with h5py.File(tmp_path / "t.h5", "r") as f:
+        assert "orchestrator/window_groups/0" not in f
+        grp = f["orchestrator/window_groups/1"]
+        assert int(grp["exchange_idx"][()]) == 3
+        assert grp["rng_state"][()].decode() == '{"x": 1}'
+        assert grp["phase"][()].decode() == "halving"
+
+
+def test_write_hdf5_window_groups_without_orchestrator_state_raises(
+    tmp_path: Path,
+):
+    """window_groups requires orchestrator_state to be supplied."""
+    h = _make_history(n_cycles=2, n_replicas=2)
+    with pytest.raises(ValueError, match="orchestrator_state"):
+        write_hdf5(
+            tmp_path / "t.h5",
+            history=h,
+            replica_containers=[],
+            meta={"schema_version": "4"},
+            orchestrator_state=None,
+            window_groups=[
+                {"rng_state": "{}", "exchange_idx": 0, "phase": "halving"},
+            ],
+        )

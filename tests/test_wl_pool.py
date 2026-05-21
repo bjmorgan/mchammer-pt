@@ -699,24 +699,6 @@ def test_process_wl_pool_at_halve_cadence_skips_non_halve_merge(tmp_path):
         assert e0_dict != e1_dict
 
 
-def test_process_wl_pool_multi_walker_snapshot_raises(tmp_path):
-    """snapshot_for_checkpoint raises NotImplementedError for multi-walker slots."""
-    from tests._in_process_pool import make_in_process_wl_pool
-
-    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
-    pool = make_in_process_wl_pool(
-        tmp_path,
-        windows=[(e0 - 50.0, e0 + 50.0)],
-        seeds=[0],
-        n_walkers_per_window=2,
-    )
-    try:
-        with pytest.raises(NotImplementedError, match="checkpointing"):
-            pool.snapshot_for_checkpoint()
-    finally:
-        pool.shutdown()
-
-
 def test_wl_worker_advance_ack_carries_state(tmp_path):
     """ADVANCE ack returns a WalkerPostBlockState with typed fields."""
     from mchammer_pt.wl_coordinator import WalkerPostBlockState
@@ -866,6 +848,164 @@ def test_process_pool_finalise_for_reporting_merges_walker_entropies(tmp_path):
             for w, (_, conn) in enumerate(slot.workers):
                 got = request(conn, ("GET_ENTROPY",), f"window {i} walker {w}")
                 assert got == expected
+
+
+def test_serial_wl_pool_snapshot_returns_per_walker_and_group_state():
+    """For a pool with one W=1 slot and one W=2 slot, the snapshot
+    returns a dict with M=3 per_walker entries and N=2 group_state
+    entries (None for the W=1 slot)."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed  # [1, 2]
+
+    pool = make_serial_wl_pool_mixed()
+    snap = pool.snapshot_for_checkpoint()
+    assert set(snap.keys()) == {"per_walker", "group_state"}
+    assert len(snap["per_walker"]) == 3
+    assert len(snap["group_state"]) == 2
+    assert snap["group_state"][0] is None  # W=1 slot
+    assert isinstance(snap["group_state"][1], dict)
+    assert set(snap["group_state"][1].keys()) == {
+        "rng_state", "exchange_idx", "phase",
+    }
+
+
+def test_serial_wl_pool_restore_round_trips_via_snapshot():
+    """Restore takes the same dict snapshot_for_checkpoint produces."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool_a = make_serial_wl_pool_mixed()
+    snap = pool_a.snapshot_for_checkpoint()
+    containers = pool_a.data_containers()
+
+    pool_b = make_serial_wl_pool_mixed()  # fresh; same construction args
+    # Drift pool_b so its exchange RNG advances in the W=2 slot.
+    pool_b._replicas[1].reroll_exchange_idx()
+
+    pool_b.restore_replica_state(
+        containers=containers,
+        per_walker_extras=snap["per_walker"],
+        group_state=snap["group_state"],
+    )
+    # The W>1 slot must now match.
+    pool_a._replicas[1].reroll_exchange_idx()
+    pool_b._replicas[1].reroll_exchange_idx()
+    assert pool_a._replicas[1].exchange_idx == pool_b._replicas[1].exchange_idx
+
+
+def test_serial_wl_pool_restore_rejects_wrong_lengths():
+    """Wrong-length containers / per_walker_extras / group_state all raise."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    snap = pool.snapshot_for_checkpoint()
+    containers = pool.data_containers()
+
+    with pytest.raises(ValueError, match="expects 3 containers"):
+        pool.restore_replica_state(
+            containers=[], per_walker_extras=snap["per_walker"],
+            group_state=snap["group_state"],
+        )
+    with pytest.raises(ValueError, match="expects 3 per_walker_extras"):
+        pool.restore_replica_state(
+            containers=containers, per_walker_extras=[],
+            group_state=snap["group_state"],
+        )
+    with pytest.raises(ValueError, match="expects 2 group_state entries"):
+        pool.restore_replica_state(
+            containers=containers, per_walker_extras=snap["per_walker"],
+            group_state=[],
+        )
+
+
+def test_serial_wl_pool_restore_rejects_mismatched_group_state_kind():
+    """A W=1 slot must get None group_state; a W>1 slot must get a dict."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    snap = pool.snapshot_for_checkpoint()
+    containers = pool.data_containers()
+
+    # Swap the None and dict entries so each slot gets the wrong kind.
+    flipped = [snap["group_state"][1], None]
+    with pytest.raises(ValueError, match="multi-walker slot|bare-replica slot"):
+        pool.restore_replica_state(
+            containers=containers,
+            per_walker_extras=snap["per_walker"],
+            group_state=flipped,
+        )
+
+
+def test_process_wl_pool_snapshot_returns_structured_dict(tmp_path):
+    """ProcessWangLandauPool snapshot under W=2 returns per_walker
+    (length M) and group_state (length N, dicts for W>1 slots)."""
+    from tests._wl_fixtures import make_process_wl_pool_w2  # 2 windows x W=2
+
+    pool = make_process_wl_pool_w2(tmp_path)
+    try:
+        snap = pool.snapshot_for_checkpoint()
+        assert set(snap.keys()) == {"per_walker", "group_state"}
+        assert len(snap["per_walker"]) == 4
+        assert len(snap["group_state"]) == 2
+        for gs in snap["group_state"]:
+            assert set(gs.keys()) == {"rng_state", "exchange_idx", "phase"}
+    finally:
+        pool.shutdown()
+
+
+def test_process_wl_pool_restore_round_trips_w2(tmp_path):
+    """Snapshot a W=2 process pool, restore into a fresh one; group-level
+    state (exchange_idx, phase) matches the snapshot."""
+    from tests._wl_fixtures import make_process_wl_pool_w2
+
+    pool_a = make_process_wl_pool_w2(tmp_path / "a")
+    try:
+        snap = pool_a.snapshot_for_checkpoint()
+        containers = pool_a.data_containers()
+    finally:
+        pool_a.shutdown()
+
+    pool_b = make_process_wl_pool_w2(tmp_path / "b")
+    try:
+        pool_b.restore_replica_state(
+            containers=containers,
+            per_walker_extras=snap["per_walker"],
+            group_state=snap["group_state"],
+        )
+        for slot, gs in zip(pool_b._slots, snap["group_state"], strict=True):
+            if gs is not None:
+                assert slot.exchange_idx == gs["exchange_idx"]
+                assert slot.phase == gs["phase"]
+    finally:
+        pool_b.shutdown()
+
+
+def test_process_wl_pool_restore_rejects_mismatched_inputs(tmp_path):
+    """Wrong-length containers / extras / group_state all raise."""
+    from tests._wl_fixtures import make_process_wl_pool_w2
+
+    pool = make_process_wl_pool_w2(tmp_path)
+    try:
+        snap = pool.snapshot_for_checkpoint()
+        containers = pool.data_containers()
+        with pytest.raises(ValueError, match="expects 4 containers"):
+            pool.restore_replica_state(
+                containers=[],
+                per_walker_extras=snap["per_walker"],
+                group_state=snap["group_state"],
+            )
+        with pytest.raises(ValueError, match="expects 4 extras"):
+            pool.restore_replica_state(
+                containers=containers,
+                per_walker_extras=[],
+                group_state=snap["group_state"],
+            )
+        with pytest.raises(ValueError, match="expects 2 group_state"):
+            pool.restore_replica_state(
+                containers=containers,
+                per_walker_extras=snap["per_walker"],
+                group_state=[],
+            )
+    finally:
+        pool.shutdown()
 
 
 def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path):

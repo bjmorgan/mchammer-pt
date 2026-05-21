@@ -290,13 +290,22 @@ def test_mismatched_flatness_limits_raises():
         WangLandauWindowGroup([r0, r1], random_seed=0)
 
 
-def test_snapshot_for_checkpoint_raises():
-    """snapshot_for_checkpoint raises NotImplementedError."""
+def test_window_group_snapshot_returns_per_walker_and_group_dicts():
+    """snapshot_for_checkpoint returns a dict with per_walker
+    (list of len W) and group (dict with rng_state, exchange_idx, phase)."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
-    with pytest.raises(NotImplementedError, match="checkpointing"):
-        group.snapshot_for_checkpoint()
+    snap = group.snapshot_for_checkpoint()
+
+    assert set(snap.keys()) == {"per_walker", "group_state"}
+    assert len(snap["per_walker"]) == 2
+    for entry in snap["per_walker"]:
+        assert "sites_by_species" in entry
+    assert set(snap["group_state"].keys()) == {"rng_state", "exchange_idx", "phase"}
+    assert isinstance(snap["group_state"]["rng_state"], str)
+    assert isinstance(snap["group_state"]["exchange_idx"], int)
+    assert snap["group_state"]["phase"] in {"halving", "1_over_t"}
 
 
 def test_attach_observer_factory_type_check():
@@ -706,3 +715,41 @@ def test_finalise_for_reporting_idempotent():
     state_after_second = [dict(r.ensemble._entropy) for r in replicas]
 
     assert state_after_second == state_after_first
+
+
+def test_window_group_restore_state_round_trips_exchange_rng():
+    """After snapshot -> mutate -> restore, the next exchange index
+    selection produces the same draw as the unmutated group would."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    group_a = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+    group_b = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+
+    # Drift group_b's exchange RNG so it diverges from group_a.
+    for _ in range(5):
+        group_b.reroll_exchange_idx()
+
+    snap = group_a.snapshot_for_checkpoint()
+    group_b.restore_state(
+        containers=[r.data_container() for r in group_a._replicas],
+        per_walker_extras=snap["per_walker"],
+        group_state=snap["group_state"],
+    )
+    # Both groups must now produce identical next exchange indices.
+    group_a.reroll_exchange_idx()
+    group_b.reroll_exchange_idx()
+    assert group_a.exchange_idx == group_b.exchange_idx
+
+
+def test_window_group_restore_state_rejects_wrong_length_containers():
+    """restore_state validates containers length matches walker count."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+    snap = group.snapshot_for_checkpoint()
+    with pytest.raises(ValueError, match="restore_state expects 2 containers"):
+        group.restore_state(
+            containers=[],
+            per_walker_extras=snap["per_walker"],
+            group_state=snap["group_state"],
+        )

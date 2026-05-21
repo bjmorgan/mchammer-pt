@@ -5,22 +5,33 @@ checkpoint format: identity hashes for the CE and ensemble kwargs,
 the `CheckpointWriter` `CycleCallback`, and the writer/reader
 helpers used by every `BaseParallelTempering` subclass that
 supports checkpoint and resume (`CanonicalParallelTempering` and
-`WangLandauParallelTempering` as of schema version ``"3"``).
+`WangLandauParallelTempering` as of schema version ``"4"``).
 
-The on-disk schema (version ``"3"``) is HDF5 with these top-level
+The on-disk schema (version ``"4"``) is HDF5 with these top-level
 groups: ``meta`` (run metadata as attrs; six shared keys —
 ``schema_version``, ``block_size``, ``random_seed``,
 ``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
 plus ladder-specific keys contributed by each orchestrator
 subclass via ``_checkpoint_meta()``: ``temperatures`` for canonical
-PT, ``windows`` + ``energy_spacing`` for REWL);
+PT, ``windows`` + ``energy_spacing`` + ``flatness_mode`` +
+``merge_cadence`` + ``walkers_per_window`` for REWL);
 ``exchanges`` (per-cycle history arrays); ``replicas`` (one opaque
-tarball per replica, the native mchammer ``BaseDataContainer``
-format); ``orchestrator`` (the exchange-proposal RNG state and the
-replica-label permutation); and ``sites_by_species`` (one JSON
-dataset per replica carrying the path-dependent
+tarball per walker, the native mchammer ``BaseDataContainer``
+format — flat in window-major / walker-minor order, length
+``sum(walkers_per_window)``); ``orchestrator`` (the exchange-proposal
+RNG state, the replica-label permutation, and — for REWL with
+``walkers_per_window[g] > 1`` — one ``/orchestrator/window_groups/<g>/``
+subgroup per multi-walker window carrying ``rng_state`` (group
+exchange-walker selection RNG), ``exchange_idx`` (current swap
+walker), and ``phase`` (collective WL phase); W=1 windows omit
+the subgroup entirely); and ``sites_by_species`` (one JSON dataset
+per walker carrying the path-dependent
 ``ConfigurationManager._sites_by_species`` cache that bit-identical
 resume requires alongside ``_last_state``).
+
+Schema v4 is a hard break from v3 — v3 checkpoints are refused by
+v4 readers with a message pointing at the last v3-capable release
+(0.9.0).
 """
 
 from __future__ import annotations
@@ -29,7 +40,7 @@ import hashlib
 import json
 import pickle
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +115,13 @@ def _compute_ensemble_kwargs_hash(
         # so callers passing the same kwargs in different insertion
         # orders get matching hashes.
         payload = pickle.dumps(sorted(canonical.items()))
-    except Exception:
+    except (pickle.PicklingError, TypeError, AttributeError):
+        # Common non-picklable cases: icet ClusterSpace/ClusterExpansion
+        # (TypeError on copy), instances of locally-defined classes
+        # (AttributeError on lookup), or unsupported objects
+        # (PicklingError). Let MemoryError, RecursionError, and
+        # KeyboardInterrupt propagate — they're real failures, not
+        # "kwargs aren't stably hashable".
         return ""
     return hashlib.sha256(payload).hexdigest()
 
@@ -240,6 +257,109 @@ def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     return {"replica_labels": replica_labels, "rng_state": rng_state}
 
 
+def _read_window_groups(
+    path: Path | str,
+    containers: Sequence[Any] | None = None,
+) -> list[dict[str, Any] | None]:
+    """Read per-window group-level state from a v4 checkpoint.
+
+    Args:
+        path: HDF5 file written by `_write_checkpoint`.
+        containers: optional flat list of `BaseDataContainer` instances
+            already deserialised via `history.read_hdf5`, in window-major /
+            walker-minor order (length M = sum of walkers_per_window).
+            When supplied, the phase consistency check reads
+            ``_last_state["phase"]`` directly from these in-memory
+            containers, avoiding the cost of re-deserialising the
+            replica tarballs. When omitted, the phase check is skipped
+            (used by hand-crafted unit fixtures that have no
+            ``/replicas/`` payloads to validate against).
+
+    Returns:
+        One entry per window. Each entry is a dict with keys
+        ``rng_state`` (JSON str), ``exchange_idx`` (int), and
+        ``phase`` (str) when ``/orchestrator/window_groups/<g>/``
+        exists; ``None`` when the subgroup is absent (the W=1
+        convention).
+
+    Raises:
+        FileNotFoundError: if `path` does not exist.
+        KeyError: if ``/meta``, ``/meta/walkers_per_window``, or
+            ``/orchestrator`` is missing — sign of a pre-v4 file or
+            one that was not written as a checkpoint.
+        ValueError: if `containers` is supplied and the on-disk group
+            phase for any window disagrees with the
+            ``_last_state["phase"]`` of any of its walkers, indicating
+            a corrupted checkpoint file.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"no such file: {path}")
+    with h5py.File(path, "r") as f:
+        if (
+            "meta" not in f
+            or "walkers_per_window" not in f["meta"].attrs
+            or "orchestrator" not in f
+        ):
+            raise KeyError(
+                f"{path}: missing /meta/walkers_per_window or "
+                f"/orchestrator; not a WL checkpoint (canonical PT "
+                f"v4 checkpoints legitimately lack walkers_per_window)."
+            )
+        wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
+        n_windows = len(wpw)
+        wg_parent = f["orchestrator"].get("window_groups")
+        out: list[dict[str, Any] | None] = []
+        for g in range(n_windows):
+            if wg_parent is None or str(g) not in wg_parent:
+                out.append(None)
+                continue
+            sub = wg_parent[str(g)]
+            rng_raw = sub["rng_state"][()]
+            phase_raw = sub["phase"][()]
+            out.append({
+                "rng_state": (
+                    rng_raw.decode("utf-8")
+                    if isinstance(rng_raw, bytes)
+                    else str(rng_raw)
+                ),
+                "exchange_idx": int(sub["exchange_idx"][()]),
+                "phase": (
+                    phase_raw.decode("utf-8")
+                    if isinstance(phase_raw, bytes)
+                    else str(phase_raw)
+                ),
+            })
+
+    if containers is None:
+        return out
+    expected_m = int(sum(wpw))
+    if len(containers) != expected_m:
+        raise ValueError(
+            f"{path}: container-count mismatch — "
+            f"sum(walkers_per_window) = {expected_m} but caller passed "
+            f"{len(containers)} containers; cannot validate phase "
+            f"consistency."
+        )
+    flat = 0
+    for g, entry in enumerate(out):
+        nw = int(wpw[g])
+        if entry is not None:
+            group_phase = entry["phase"]
+            for w in range(nw):
+                walker_phase = containers[flat + w]._last_state.get("phase")
+                if walker_phase != group_phase:
+                    raise ValueError(
+                        f"{path}: phase consistency failure at "
+                        f"window {g} walker {w}: group phase "
+                        f"{group_phase!r} vs walker _last_state "
+                        f"phase {walker_phase!r}; checkpoint is "
+                        f"corrupted."
+                    )
+        flat += nw
+    return out
+
+
 def _serialise_rng_state(rng: np.random.Generator) -> str:
     """JSON-encode `rng.bit_generator.state` for HDF5 round-trip.
 
@@ -265,13 +385,14 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
       `_replica_labels`, `_rng`);
     - implements `_checkpoint_meta()` returning any ladder-specific
       keys (canonical PT contributes ``temperatures``; REWL
-      contributes ``windows`` and ``energy_spacing``).
+      contributes ``windows``, ``energy_spacing``, ``flatness_mode``,
+      ``merge_cadence``, and ``walkers_per_window``).
 
     Requires `run()` to have been called at least once, so that
     each replica's `_last_state` is populated and the on-disk
     container round-trips through ``_restart_ensemble``.
 
-    The function packs these into the schema-``"3"`` HDF5 layout
+    The function packs these into the schema-``"4"`` HDF5 layout
     described in this module's docstring.
     """
     from .history import write_hdf5
@@ -283,7 +404,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
             "a populated `_last_state` until a run completes."
         )
     meta: dict[str, MetaValue] = {
-        "schema_version": "3",
+        "schema_version": "4",
         "block_size": int(pt._block_size),  # type: ignore[attr-defined]
         "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
         "ce_identity": pt._ce_identity,  # type: ignore[attr-defined]
@@ -295,7 +416,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         "replica_labels": pt._replica_labels.copy(),  # type: ignore[attr-defined]
         "rng_state": _serialise_rng_state(pt._rng),  # type: ignore[attr-defined]
     }
-    # Refresh per-replica `_last_state` (populating the four fields
+    # Refresh per-replica `_last_state` (populating the fields
     # `_restart_ensemble` reads on resume) and capture the additional
     # state required for bit-identical continuation. The pool's
     # `snapshot_for_checkpoint()` is the cross-pool entry point — it
@@ -304,7 +425,15 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     # `data_containers()` because the snapshot side-effect populates
     # each container's `_last_state`, which mchammer's
     # `_restart_ensemble` reads on resume.
-    replica_extra = pt._pool.snapshot_for_checkpoint()  # type: ignore[attr-defined]
+    snapshot = pt._pool.snapshot_for_checkpoint()  # type: ignore[attr-defined]
+    if isinstance(snapshot, dict):
+        # WL pools (v4 shape): per_walker + group_state.
+        replica_extra = snapshot["per_walker"]
+        window_groups = snapshot["group_state"]
+    else:
+        # Canonical PT pools still return a flat list.
+        replica_extra = snapshot
+        window_groups = None
     write_hdf5(
         Path(path),
         history=pt._history,  # type: ignore[attr-defined]
@@ -312,6 +441,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         meta=meta,
         orchestrator_state=orchestrator_state,
         replica_extra=replica_extra,
+        window_groups=window_groups,
     )
 
 
