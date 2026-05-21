@@ -103,13 +103,13 @@ def test_wl_replica_rejects_out_of_window_initial_energy():
         )
 
 
-def test_init_seeds_starting_bin_into_histogram_and_entropy():
-    """The constructor records the starting bin in _histogram and _entropy.
+def test_init_seeds_starting_bin_into_histogram():
+    """The constructor records the starting bin in ``_histogram``.
 
-    With the seed, the flatness gate sees the starting bin from cycle 0,
-    so a walker that leaves it on step 0 and never returns cannot
-    silently saturate the histogram over a strict subset of the window
-    and trigger a premature halving.
+    The flatness gate iterates over ``_histogram``; a zero-count
+    entry blocks halving until the walker visits the bin. The
+    constructor does *not* touch ``_entropy`` — see the class
+    docstring for the invariant.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
@@ -117,8 +117,6 @@ def test_init_seeds_starting_bin_into_histogram_and_entropy():
 
     assert bin_init in e._histogram
     assert e._histogram[bin_init] == 0
-    assert bin_init in e._entropy
-    assert e._entropy[bin_init] == 0.0
 
 
 def test_wl_replica_log_g_returns_minus_inf_out_of_window():
@@ -590,11 +588,13 @@ def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
     assert isinstance(replica, WangLandauSlot)
 
 
-def test_set_occupations_seeds_new_bin_into_histogram_and_entropy():
-    """``set_occupations`` records the new bin in ``_histogram`` and ``_entropy``.
+def test_set_occupations_seeds_new_bin_into_histogram():
+    """``set_occupations`` records the new bin in ``_histogram``.
 
     REWL exchanges and process-pool transports go through
     ``set_occupations``, so this seeding covers exchange arrivals.
+    ``set_occupations`` does *not* touch ``_entropy``; see the class
+    docstring for the invariant.
     """
     replica = _make_wl_replica()
     e = replica.ensemble
@@ -637,8 +637,6 @@ def test_set_occupations_seeds_new_bin_into_histogram_and_entropy():
 
     assert new_bin in e._histogram
     assert e._histogram[new_bin] == 0
-    assert new_bin in e._entropy
-    assert e._entropy[new_bin] == 0.0
 
 
 def test_set_occupations_preserves_existing_count_for_known_bin():
@@ -687,8 +685,6 @@ def test_restore_state_seeds_restored_bin_when_last_state_histogram_is_empty():
     restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
     assert restored_bin in dst.ensemble._histogram
     assert dst.ensemble._histogram[restored_bin] == 0
-    assert restored_bin in dst.ensemble._entropy
-    assert dst.ensemble._entropy[restored_bin] == 0.0
 
 
 def test_window_stats_reports_bins_visited_and_bins_known():
