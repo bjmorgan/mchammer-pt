@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generic Wang-Landau DOS post-processing. Both helpers are also
   re-exported from the package root.
 - ``mchammer-pt-reweight`` console script for canonical reweighting
-  from a stitched DOS CSV, with optional ``--plot`` output.
+  from a stitched DOS CSV, with optional ``--plot`` output (requires
+  ``matplotlib``; install with the ``plot`` extra).
 
 ## [0.11.0] - 2026-05-21
 

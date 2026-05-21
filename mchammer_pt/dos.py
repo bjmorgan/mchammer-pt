@@ -28,23 +28,29 @@ def stitch_entropy(
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Stitch per-window entropy curves into a single density of states.
 
-    Each element of ``per_window`` is a DataFrame with ``energy`` and
-    ``entropy`` columns; the ``entropy`` column is treated as ``ln g``.
     Windows are sorted by minimum energy, shifted purely additively so
     that overlap regions align by mean entropy difference, and averaged
     where they overlap. The returned ``entropy`` column is globally
-    rebased so that its minimum is zero (a single additive constant —
-    ``ln g`` is only defined up to a constant).
+    rebased so that its minimum is zero (``ln g`` is only defined up to
+    a single additive constant).
 
-    Returns the stitched DataFrame (``energy``, ``entropy``) plus a dict
-    of overlap-region standard deviations keyed by ``"i-j"`` window-pair
-    labels in the original input order. ``_energy_spacing`` is accepted
-    for API completeness but not used directly (bin centres are matched
-    by intersection).
+    Args:
+        per_window: list of DataFrames each carrying ``energy`` and
+            ``entropy`` columns. ``entropy`` is treated as ``ln g``.
+        _energy_spacing: accepted for API completeness but not used
+            directly — bin centres are matched by intersection.
+
+    Returns:
+        ``(stitched, overlap_errors)`` where ``stitched`` is a DataFrame
+        with ``energy`` and ``entropy`` columns (rebased to ``min = 0``)
+        and ``overlap_errors`` is a dict of overlap-region entropy
+        standard deviations keyed by ``"i-j"`` window-pair labels in
+        the original input order.
 
     Raises:
         ValueError: if any pair of neighbouring windows in the sorted
-            order does not share at least one bin centre.
+            order has no overlapping energy range, or shares no bin
+            centres within the overlap.
     """
     ordered = sorted(
         enumerate(per_window),
