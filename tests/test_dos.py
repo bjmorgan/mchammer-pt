@@ -70,3 +70,31 @@ def test_stitch_entropy_raises_when_bin_centres_do_not_align():
     })
     with pytest.raises(ValueError, match="No shared bin centres"):
         stitch_entropy([df_a, df_b], 0.5)
+
+
+from mchammer_pt.dos import reweight_canonical_from_dos  # noqa: E402
+
+
+def test_reweight_canonical_two_level_system():
+    # Two energies, equal degeneracy: <E> -> midpoint as T -> infinity.
+    dos = pd.DataFrame({
+        "energy": np.array([-1.0, 0.0]),
+        "entropy": np.array([0.0, 0.0]),
+    })
+    df = reweight_canonical_from_dos(dos, np.array([1.0, 1e10]))
+    assert list(df.columns) == ["T_K", "E_mean", "var_E", "Cv"]
+    assert df["E_mean"].iloc[0] < -0.99
+    assert abs(df["E_mean"].iloc[1] - (-0.5)) < 1e-6
+    assert df["Cv"].iloc[0] >= 0.0
+    assert df["Cv"].iloc[1] < 1e-3
+
+
+def test_reweight_canonical_uses_log_space_no_underflow():
+    # Build a DOS whose ln g range exceeds log(realmax) so any naive
+    # exp(ln g) would underflow.
+    energies = np.linspace(-1000.0, 0.0, 101)
+    entropy = np.linspace(0.0, 800.0, 101)
+    dos = pd.DataFrame({"energy": energies, "entropy": entropy})
+    df = reweight_canonical_from_dos(dos, np.array([300.0]))
+    assert np.isfinite(df["E_mean"].iloc[0])
+    assert energies.min() <= df["E_mean"].iloc[0] <= energies.max()

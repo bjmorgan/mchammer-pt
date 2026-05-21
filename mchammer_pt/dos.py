@@ -90,3 +90,38 @@ def stitch_entropy(
     )
     merged["entropy"] = merged["entropy"] - merged["entropy"].min()
     return merged, errors
+
+
+def reweight_canonical_from_dos(
+    dos: pd.DataFrame,
+    temperatures: np.ndarray,
+) -> pd.DataFrame:
+    """Canonical reweighting from a stitched ``ln g(E)`` curve.
+
+    Operates entirely in log space so a large entropy range does not
+    underflow ``float64``. The ``entropy`` column of ``dos`` is treated
+    as ``ln g``; no exp/log round-trip is performed.
+
+    Returns a DataFrame with columns ``T_K``, ``E_mean``, ``var_E``,
+    ``Cv`` (one row per temperature in ``temperatures``).
+    """
+    E = dos["energy"].to_numpy()
+    log_g = dos["entropy"].to_numpy()
+    rows = []
+    for T in temperatures:
+        beta = 1.0 / (KB_EV * T)
+        log_w = log_g - beta * E
+        log_w -= log_w.max()
+        w = np.exp(log_w)
+        Z = w.sum()
+        E_mean = float(np.sum(w * E) / Z)
+        E2_mean = float(np.sum(w * E * E) / Z)
+        var_E = E2_mean - E_mean ** 2
+        Cv = var_E / (KB_EV * T ** 2)
+        rows.append({
+            "T_K": float(T),
+            "E_mean": E_mean,
+            "var_E": var_E,
+            "Cv": Cv,
+        })
+    return pd.DataFrame(rows)
