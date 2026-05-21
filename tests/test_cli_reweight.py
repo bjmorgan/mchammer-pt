@@ -1,4 +1,4 @@
-"""Smoke tests for mchammer_pt.dos_cli."""
+"""Smoke tests for mchammer_pt.cli.reweight."""
 from __future__ import annotations
 
 from pathlib import Path

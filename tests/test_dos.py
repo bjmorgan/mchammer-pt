@@ -1,4 +1,4 @@
-"""Unit tests for mchammer_pt.dos."""
+"""Unit tests for mchammer_pt.analysis.dos."""
 from __future__ import annotations
 
 import numpy as np
