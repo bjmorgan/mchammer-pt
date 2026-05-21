@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+from ase.units import kB
 from ase import Atoms
 from icet import ClusterExpansion, ClusterSpace
 from mchammer.ensembles import CanonicalEnsemble
@@ -47,7 +48,6 @@ accepting nested sequences can pass the constant directly. Example::
 
 _FIXTURE_N_SITES = 4
 _FIXTURE_TEMPERATURE = 1000.0
-_KB_EV_PER_K = 8.617333262145e-5
 _TARGET_GAP_KT = 3.0
 
 
@@ -85,7 +85,7 @@ def _build_chain_ce_and_atoms() -> tuple[ClusterExpansion, Atoms]:
         raise RuntimeError(
             "ECI probe produced a degenerate energy gap; check ClusterSpace"
         )
-    target_gap = _TARGET_GAP_KT * _KB_EV_PER_K * _FIXTURE_TEMPERATURE
+    target_gap = _TARGET_GAP_KT * kB * _FIXTURE_TEMPERATURE
     parameters[-1] = target_gap / gap_unit
     ce = ClusterExpansion(cluster_space=cs, parameters=parameters)
     atoms.set_chemical_symbols(["Cu", "Cu", "Au", "Au"])  # type: ignore[no-untyped-call]
@@ -131,7 +131,7 @@ def _analytic_class_probabilities(
     multiplicities: dict[float, int], temperature: float
 ) -> dict[float, float]:
     """Boltzmann probability per energy class, P(E) ∝ g(E) exp(-βE)."""
-    beta = 1.0 / (_KB_EV_PER_K * temperature)
+    beta = 1.0 / (kB * temperature)
     weights = {e: g * np.exp(-e * beta) for e, g in multiplicities.items()}
     Z = sum(weights.values())
     return {e: float(w / Z) for e, w in weights.items()}
