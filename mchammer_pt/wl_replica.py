@@ -158,11 +158,16 @@ class WangLandauReplica:
     Invariant: every bin the walker has been placed at — by
     construction (``bin_init``), ``set_occupations`` (``new_bin``),
     or ``restore_state`` (``new_bin``) — appears as a key in the
-    underlying ensemble's ``_histogram`` (count 0) and ``_entropy``
-    (value 0.0). Each of those sites uses ``setdefault`` so existing
-    entries from prior visits are not overwritten. The Wang-Landau
-    flatness gate iterates over the ``_histogram`` values, so a
-    zero-count seeded bin blocks the gate until the walker visits it.
+    underlying ensemble's ``_histogram`` with count 0. Each of those
+    sites uses ``setdefault`` so existing counts from prior visits
+    are not overwritten. The Wang-Landau flatness gate iterates over
+    the ``_histogram`` values, so a zero-count seeded bin blocks the
+    gate until the walker visits it. The seed deliberately does not
+    touch ``_entropy``; ``_entropy.get(bin, 0)`` returns 0 by default
+    for unvisited bins, which is sufficient for the WL acceptance
+    condition, and an explicit ``_entropy`` entry would anchor the
+    periodic min-shift floor at 0 and change the transient dynamics
+    for newly-visited bins.
 
     Invariant: ``CoordinatedWangLandauEnsemble._visited_bins`` is the
     set of bins the walker has reached via ``_update_entropy`` since
