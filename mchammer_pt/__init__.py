@@ -16,6 +16,7 @@ from .diagnostics import (
     round_trip_counts,
     swap_acceptance_rates,
 )
+from .dos import KB_EV, reweight_canonical_from_dos, stitch_entropy
 from .history import ExchangeHistory, read_hdf5, write_hdf5
 from .parallel.backend import (
     CanonicalPool,
@@ -42,6 +43,7 @@ __all__ = [
     "ExchangeCallback",
     "ExchangeHistory",
     "ExchangePrinter",
+    "KB_EV",
     "MergeEvent",
     "ObservablePool",
     "ProcessPool",
@@ -60,7 +62,9 @@ __all__ = [
     "__version__",
     "energy_autocorrelation_time",
     "read_hdf5",
+    "reweight_canonical_from_dos",
     "round_trip_counts",
+    "stitch_entropy",
     "swap_acceptance_rates",
     "write_hdf5",
 ]
