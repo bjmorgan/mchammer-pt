@@ -19,11 +19,28 @@ def test_stitch_entropy_two_windows_aligns_in_overlap():
     df_a = pd.DataFrame({"energy": energies_a, "entropy": entropy_a})
     df_b = pd.DataFrame({"energy": energies_b, "entropy": entropy_b})
 
-    stitched, errors = stitch_entropy([df_a, df_b], energy_spacing=0.5)
+    stitched, errors = stitch_entropy([df_a, df_b], 0.5)
 
     assert len(stitched) == 8
     assert stitched["entropy"].iloc[0] >= 0.0 - 1e-9
     assert errors["0-1"] < 1e-9
+
+    # Pin the alignment direction: in the overlap region, the stitched
+    # entropy must agree with df_a (the lower-energy reference) up to
+    # the global rebase to min=0. Equivalently: the stitched ln g at
+    # the lowest energy must equal entropy_a[0] - entropy_a[0] = 0
+    # (it is the floor of the rebased curve), and the stitched ln g
+    # at -8.0 (a shared bin) must equal entropy_a's value there, also
+    # rebased.
+    rebased_a = entropy_a - entropy_a.min()
+    at_lowest = stitched.loc[
+        np.isclose(stitched["energy"], -10.0), "entropy"
+    ].item()
+    at_overlap = stitched.loc[
+        np.isclose(stitched["energy"], -8.0), "entropy"
+    ].item()
+    assert np.isclose(at_lowest, rebased_a[0])
+    assert np.isclose(at_overlap, rebased_a[-1])
 
 
 def test_stitch_entropy_raises_when_no_overlap():
@@ -36,4 +53,20 @@ def test_stitch_entropy_raises_when_no_overlap():
         "entropy": np.zeros(5),
     })
     with pytest.raises(ValueError, match="No overlap"):
-        stitch_entropy([df_a, df_b], energy_spacing=0.5)
+        stitch_entropy([df_a, df_b], 0.5)
+
+
+def test_stitch_entropy_raises_when_bin_centres_do_not_align():
+    # Ranges overlap on [-8.5, -8.0] but the two windows are on disjoint
+    # bin grids — no shared bin centre. Must raise rather than silently
+    # produce NaN.
+    df_a = pd.DataFrame({
+        "energy": np.array([-10.0, -9.0, -8.0]),
+        "entropy": np.array([0.0, 0.5, 1.0]),
+    })
+    df_b = pd.DataFrame({
+        "energy": np.array([-8.5, -7.5, -6.5]),
+        "entropy": np.array([0.0, 0.3, 0.7]),
+    })
+    with pytest.raises(ValueError, match="No shared bin centres"):
+        stitch_entropy([df_a, df_b], 0.5)

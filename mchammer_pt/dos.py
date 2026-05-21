@@ -24,7 +24,7 @@ KB_EV = _kB_J / 1.602176634e-19
 
 def stitch_entropy(
     per_window: list[pd.DataFrame],
-    energy_spacing: float,
+    _energy_spacing: float,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Stitch per-window entropy curves into a single density of states.
 
@@ -32,11 +32,13 @@ def stitch_entropy(
     ``entropy`` columns; the ``entropy`` column is treated as ``ln g``.
     Windows are sorted by minimum energy, shifted purely additively so
     that overlap regions align by mean entropy difference, and averaged
-    where they overlap.
+    where they overlap. The returned ``entropy`` column is globally
+    rebased so that its minimum is zero (a single additive constant —
+    ``ln g`` is only defined up to a constant).
 
     Returns the stitched DataFrame (``energy``, ``entropy``) plus a dict
     of overlap-region standard deviations keyed by ``"i-j"`` window-pair
-    labels in the original input order. ``energy_spacing`` is accepted
+    labels in the original input order. ``_energy_spacing`` is accepted
     for API completeness but not used directly (bin centres are matched
     by intersection).
 
@@ -44,7 +46,6 @@ def stitch_entropy(
         ValueError: if any pair of neighbouring windows in the sorted
             order does not share at least one bin centre.
     """
-    del energy_spacing
     ordered = sorted(
         enumerate(per_window),
         key=lambda t: t[1]["energy"].iloc[0],
@@ -67,6 +68,12 @@ def stitch_entropy(
             ol_l["energy"].to_numpy(),
             ol_r["energy"].to_numpy(),
         )
+        if shared.size == 0:
+            raise ValueError(
+                f"No shared bin centres between windows {idx_l} and {idx_r}: "
+                f"ranges overlap on [{left_lim}, {right_lim}] but no bin centres "
+                f"coincide. Are the windows on the same energy grid?"
+            )
         s_l = ol_l.set_index("energy").loc[shared, "entropy"]
         s_r = ol_r.set_index("energy").loc[shared, "entropy"]
         offset = float((s_r - s_l).mean())
@@ -75,14 +82,11 @@ def stitch_entropy(
         df_r["entropy"] = df_r["entropy"] - offset
         ordered[k] = (idx_r, df_r)
 
-    combined: dict[float, list[float]] = {}
-    for _, df_w in ordered:
-        for _, row in df_w.iterrows():
-            combined.setdefault(
-                float(row["energy"]), []
-            ).append(float(row["entropy"]))
-    energies = np.array(sorted(combined.keys()))
-    entropies = np.array([np.mean(combined[e]) for e in energies])
-    entropies -= entropies.min()
-
-    return pd.DataFrame({"energy": energies, "entropy": entropies}), errors
+    stacked = pd.concat([df_w for _, df_w in ordered], ignore_index=True)
+    merged = (
+        stacked.groupby("energy", sort=True)["entropy"]
+        .mean()
+        .reset_index()
+    )
+    merged["entropy"] = merged["entropy"] - merged["entropy"].min()
+    return merged, errors
