@@ -66,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.T_min <= 0:
+        print(
+            f"error: T-min must be > 0 K, got {args.T_min}",
+            file=sys.stderr,
+        )
+        return 2
 
     dos = pd.read_csv(args.dos_csv)
     if not {"energy", "entropy"}.issubset(dos.columns):
@@ -74,7 +80,8 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    Ts = np.arange(args.T_min, args.T_max + 1e-6, args.T_step)
+    n_T = int(round((args.T_max - args.T_min) / args.T_step)) + 1
+    Ts = np.linspace(args.T_min, args.T_max, n_T)
     canonical = reweight_canonical_from_dos(dos, Ts)
     canonical.to_csv(args.output, index=False)
     iCv = int(np.argmax(canonical["Cv"].to_numpy()))
