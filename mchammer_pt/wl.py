@@ -565,14 +565,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
         _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
 
-        orchestrator_state = _read_orchestrator_state(path)
-        replica_extras = _read_replica_extra(path)
-        window_groups = _read_window_groups(path, containers)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
         walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
+        if len(walkers_per_window) != len(windows):
+            raise ValueError(
+                f"{path}: walkers_per_window has "
+                f"{len(walkers_per_window)} entries but windows has "
+                f"{len(windows)}; checkpoint is corrupted."
+            )
         expected_m = sum(walkers_per_window)
         if len(containers) != expected_m:
             raise ValueError(
@@ -581,6 +584,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"file contains {len(containers)} replica containers; "
                 f"checkpoint is corrupted or truncated."
             )
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path, containers)
         _warn_post_merge_resume_if_multi_walker(walkers_per_window, "resume")
         flatness_mode: FlatnessMode = str(
             meta["flatness_mode"]
@@ -624,6 +630,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
         for g in range(len(windows)):
             nw = walkers_per_window[g]
             if nw == 1:
+                if window_groups[g] is not None:
+                    raise ValueError(
+                        f"{path}: /orchestrator/window_groups/{g} present despite "
+                        f"walkers_per_window[{g}] = 1; corrupted checkpoint."
+                    )
                 slots.append(flat_replicas[offset])
             else:
                 gs = window_groups[g]
@@ -731,14 +742,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
         _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume_process_pool")
 
-        orchestrator_state = _read_orchestrator_state(path)
-        replica_extras = _read_replica_extra(path)
-        window_groups = _read_window_groups(path, containers)
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
         block_size = int(meta["block_size"])
         random_seed = int(meta["random_seed"])
         walkers_per_window = [int(w) for w in np.asarray(meta["walkers_per_window"])]
+        if len(walkers_per_window) != len(windows):
+            raise ValueError(
+                f"{path}: walkers_per_window has "
+                f"{len(walkers_per_window)} entries but windows has "
+                f"{len(windows)}; checkpoint is corrupted."
+            )
         expected_m = sum(walkers_per_window)
         if len(containers) != expected_m:
             raise ValueError(
@@ -747,6 +761,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"file contains {len(containers)} replica containers; "
                 f"checkpoint is corrupted or truncated."
             )
+        orchestrator_state = _read_orchestrator_state(path)
+        replica_extras = _read_replica_extra(path)
+        window_groups = _read_window_groups(path, containers)
         _warn_post_merge_resume_if_multi_walker(
             walkers_per_window, "resume_process_pool"
         )

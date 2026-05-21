@@ -934,12 +934,12 @@ def test_serial_wl_pool_restore_rejects_mismatched_group_state_kind():
         )
 
 
-def test_process_wl_pool_snapshot_returns_structured_dict():
+def test_process_wl_pool_snapshot_returns_structured_dict(tmp_path):
     """ProcessWangLandauPool snapshot under W=2 returns per_walker
     (length M) and group_state (length N, dicts for W>1 slots)."""
     from tests._wl_fixtures import make_process_wl_pool_w2  # 2 windows x W=2
 
-    pool = make_process_wl_pool_w2()
+    pool = make_process_wl_pool_w2(tmp_path)
     try:
         snap = pool.snapshot_for_checkpoint()
         assert set(snap.keys()) == {"per_walker", "group_state"}
@@ -951,19 +951,19 @@ def test_process_wl_pool_snapshot_returns_structured_dict():
         pool.shutdown()
 
 
-def test_process_wl_pool_restore_round_trips_w2():
+def test_process_wl_pool_restore_round_trips_w2(tmp_path):
     """Snapshot a W=2 process pool, restore into a fresh one; group-level
     state (exchange_idx, phase) matches the snapshot."""
     from tests._wl_fixtures import make_process_wl_pool_w2
 
-    pool_a = make_process_wl_pool_w2()
+    pool_a = make_process_wl_pool_w2(tmp_path / "a")
     try:
         snap = pool_a.snapshot_for_checkpoint()
         containers = pool_a.data_containers()
     finally:
         pool_a.shutdown()
 
-    pool_b = make_process_wl_pool_w2()
+    pool_b = make_process_wl_pool_w2(tmp_path / "b")
     try:
         pool_b.restore_replica_state(
             containers=containers,
@@ -978,11 +978,11 @@ def test_process_wl_pool_restore_round_trips_w2():
         pool_b.shutdown()
 
 
-def test_process_wl_pool_restore_rejects_mismatched_inputs():
+def test_process_wl_pool_restore_rejects_mismatched_inputs(tmp_path):
     """Wrong-length containers / extras / group_state all raise."""
     from tests._wl_fixtures import make_process_wl_pool_w2
 
-    pool = make_process_wl_pool_w2()
+    pool = make_process_wl_pool_w2(tmp_path)
     try:
         snap = pool.snapshot_for_checkpoint()
         containers = pool.data_containers()

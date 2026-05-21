@@ -1270,7 +1270,10 @@ class ProcessWangLandauPool:
                 recv_reply(conn, "RESTORE_STATE", f"window {g} walker {w}")
 
         # Group-level state: assign directly to ProcessWangLandauWindow.
-        for slot, gs in zip(self._slots, group_state, strict=True):
+        required_keys = {"rng_state", "exchange_idx", "phase"}
+        for g, (slot, gs) in enumerate(
+            zip(self._slots, group_state, strict=True)
+        ):
             multi = len(slot.workers) > 1
             if gs is None:
                 if multi:
@@ -1282,8 +1285,21 @@ class ProcessWangLandauPool:
                 raise ValueError(
                     "group_state entry is non-None for a bare-replica slot"
                 )
+            missing = required_keys - gs.keys()
+            if missing:
+                raise ValueError(
+                    f"window {g}: group_state missing required keys "
+                    f"{sorted(missing)}; corrupted checkpoint."
+                )
+            exchange_idx = int(gs["exchange_idx"])
+            if not 0 <= exchange_idx < len(slot.workers):
+                raise ValueError(
+                    f"window {g}: group_state['exchange_idx']={exchange_idx} "
+                    f"is outside the valid range [0, {len(slot.workers)}); "
+                    f"corrupted checkpoint."
+                )
             slot.rng.bit_generator.state = json.loads(gs["rng_state"])
-            slot.exchange_idx = int(gs["exchange_idx"])
+            slot.exchange_idx = exchange_idx
             slot.phase = gs["phase"]
 
     def attach_observer(

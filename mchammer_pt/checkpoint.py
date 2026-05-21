@@ -333,6 +333,14 @@ def _read_window_groups(
 
     if containers is None:
         return out
+    expected_m = int(sum(wpw))
+    if len(containers) != expected_m:
+        raise ValueError(
+            f"{path}: container-count mismatch — "
+            f"sum(walkers_per_window) = {expected_m} but caller passed "
+            f"{len(containers)} containers; cannot validate phase "
+            f"consistency."
+        )
     flat = 0
     for g, entry in enumerate(out):
         nw = int(wpw[g])

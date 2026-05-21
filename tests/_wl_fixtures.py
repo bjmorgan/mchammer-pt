@@ -8,7 +8,6 @@ deterministic.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -49,13 +48,19 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
     return atoms
 
 
-def make_process_wl_pool_w2():
+def make_process_wl_pool_w2(tmp_path: Path):
     """ProcessWangLandauPool (in-process workers) with 2 windows x W=2.
 
     Both windows share the same energy range; W=2 walkers per window
     gives M=4 total walkers. ``data_container_file`` is not used for
     in-process pools, so the W>1 + file guard in ``process_pool`` is
     irrelevant here.
+
+    Args:
+        tmp_path: pytest-managed temp directory. The caller must pass
+            its own ``tmp_path`` (or a sub-directory thereof) so the
+            CE artefacts the in-process pool writes are cleaned up
+            after the test.
 
     Returns a :class:`ProcessWangLandauPool` backed by
     :class:`InProcessWorkerConn` instances. Callers are responsible for
@@ -72,9 +77,9 @@ def make_process_wl_pool_w2():
         )
     )
     lo, hi = e0 - 100.0, e0 + 100.0
-    tmp_dir = tempfile.mkdtemp()
+    tmp_path.mkdir(parents=True, exist_ok=True)
     return make_in_process_wl_pool(
-        Path(tmp_dir),
+        tmp_path,
         windows=[(lo, hi), (lo, hi)],
         seeds=[0, 1],
         n_walkers_per_window=2,

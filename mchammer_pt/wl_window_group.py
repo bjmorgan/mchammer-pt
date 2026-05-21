@@ -312,7 +312,9 @@ class WangLandauWindowGroup:
 
         Raises:
             ValueError: lengths of ``containers`` and ``per_walker_extras``
-                do not both equal the walker count.
+                do not both equal the walker count, ``group_state`` is
+                missing a required key, or ``exchange_idx`` falls outside
+                ``[0, len(self._replicas))`` (corruption signal).
         """
         import json
 
@@ -326,6 +328,20 @@ class WangLandauWindowGroup:
                 f"restore_state expects {len(self._replicas)} per_walker_extras, "
                 f"got {len(per_walker_extras)}"
             )
+        required_keys = {"rng_state", "exchange_idx", "phase"}
+        missing = required_keys - group_state.keys()
+        if missing:
+            raise ValueError(
+                f"restore_state: group_state missing required keys "
+                f"{sorted(missing)}; corrupted checkpoint."
+            )
+        exchange_idx = int(group_state["exchange_idx"])
+        if not 0 <= exchange_idx < len(self._replicas):
+            raise ValueError(
+                f"restore_state: group_state['exchange_idx']={exchange_idx} "
+                f"is outside the valid range [0, {len(self._replicas)}); "
+                f"corrupted checkpoint."
+            )
         for replica, container, extra in zip(
             self._replicas, containers, per_walker_extras, strict=True
         ):
@@ -334,7 +350,7 @@ class WangLandauWindowGroup:
                 sites_by_species=extra["sites_by_species"],
             )
         self._rng.bit_generator.state = json.loads(group_state["rng_state"])
-        self._exchange_idx = int(group_state["exchange_idx"])
+        self._exchange_idx = exchange_idx
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""
