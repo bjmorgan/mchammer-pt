@@ -161,7 +161,7 @@ def test_stitch_entropy_raises_when_window_off_grid():
         "entropy": np.array([0.0, 0.5, 1.0]),
     })
     df_b = pd.DataFrame({
-        # 0.05 K off the 0.5 grid — far beyond ULP tolerance.
+        # 0.05 eV off the 0.5 eV grid, far beyond ULP tolerance.
         "energy": np.array([-9.45, -8.95, -8.45]),
         "entropy": np.array([0.0, 0.3, 0.7]),
     })
