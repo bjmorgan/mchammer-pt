@@ -85,7 +85,7 @@ def test_stitch_entropy_three_windows_accumulates_offsets():
     assert all(v < 1e-9 for v in errors.values())
 
     # truth starts at 0, so rebasing is a no-op; stitched must equal truth.
-    for E, s_truth in zip(grid, truth):
+    for E, s_truth in zip(grid, truth, strict=True):
         row = stitched.loc[np.isclose(stitched["energy"], E)]
         assert len(row) == 1
         assert abs(row["entropy"].item() - s_truth) < 1e-9

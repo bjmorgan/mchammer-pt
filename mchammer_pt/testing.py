@@ -18,8 +18,8 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
-from ase.units import kB
 from ase import Atoms
+from ase.units import kB
 from icet import ClusterExpansion, ClusterSpace
 from mchammer.ensembles import CanonicalEnsemble
 
