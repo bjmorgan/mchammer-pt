@@ -1,5 +1,6 @@
 """mchammer-pt: parallel tempering for mchammer canonical Monte Carlo."""
 
+from .analysis.dos import reweight_canonical_from_dos, stitch_entropy
 from .base import BaseParallelTempering
 from .callbacks import (
     CycleCallback,
@@ -31,7 +32,7 @@ from .wl import WangLandauParallelTempering
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica
 
-__version__ = "0.10.1"
+__version__ = "0.12.0"
 
 __all__ = [
     "BaseParallelTempering",
@@ -60,7 +61,9 @@ __all__ = [
     "__version__",
     "energy_autocorrelation_time",
     "read_hdf5",
+    "reweight_canonical_from_dos",
     "round_trip_counts",
+    "stitch_entropy",
     "swap_acceptance_rates",
     "write_hdf5",
 ]

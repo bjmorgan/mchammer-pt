@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.11.0"
+version = "0.12.0"
 description = "Parallel tempering orchestrator for mchammer canonical Monte Carlo"
 readme = "README.md"
 authors = [
@@ -15,6 +15,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
+    "pandas",
     "ase",
     # The patched icet fork adds the WL `schedule` parameter, `_phase`,
     # and `_window_entry_step` that mchammer-pt's coordinator reads
@@ -42,6 +43,10 @@ dev = [
     "pandas-stubs",
     "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
 ]
+plot = ["matplotlib"]
+
+[project.scripts]
+mchammer-pt-reweight = "mchammer_pt.cli.reweight:main"
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]
