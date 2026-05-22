@@ -86,6 +86,19 @@ def test_dos_cli_rejects_missing_columns(tmp_path, capsys):
     assert "energy" in err and "entropy" in err
 
 
+def test_dos_cli_rejects_empty_dos(tmp_path, capsys):
+    empty_csv = tmp_path / "empty.csv"
+    pd.DataFrame({"energy": [], "entropy": []}).to_csv(empty_csv, index=False)
+    rc = main([
+        str(empty_csv),
+        "--T-min", "100", "--T-max", "200", "--T-step", "10",
+        "-o", str(tmp_path / "x.csv"),
+    ])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "no rows" in err
+
+
 def test_dos_cli_rejects_missing_file(tmp_path, capsys):
     rc = main([
         str(tmp_path / "does_not_exist.csv"),

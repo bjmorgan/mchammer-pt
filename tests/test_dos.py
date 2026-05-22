@@ -169,6 +169,30 @@ def test_stitch_entropy_raises_when_window_off_grid():
         stitch_entropy([df_a, df_b], 0.5)
 
 
+def test_stitch_entropy_raises_when_per_window_empty():
+    with pytest.raises(ValueError, match="per_window is empty"):
+        stitch_entropy([], 0.5)
+
+
+def test_stitch_entropy_raises_when_a_window_is_empty():
+    df_a = pd.DataFrame({
+        "energy": np.array([0.0, 0.5]), "entropy": np.array([0.0, 0.0]),
+    })
+    df_b = pd.DataFrame({
+        "energy": np.array([], dtype=float),
+        "entropy": np.array([], dtype=float),
+    })
+    with pytest.raises(ValueError, match="Window 1 has no rows"):
+        stitch_entropy([df_a, df_b], 0.5)
+
+
+def test_reweight_canonical_rejects_empty_dos():
+    with pytest.raises(ValueError, match="dos has no rows"):
+        reweight_canonical_from_dos(
+            pd.DataFrame({"energy": [], "entropy": []}), np.array([300.0])
+        )
+
+
 def test_stitch_entropy_raises_when_spacing_non_positive():
     df_a = pd.DataFrame({
         "energy": np.array([0.0, 1.0]),

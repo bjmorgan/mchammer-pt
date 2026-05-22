@@ -50,18 +50,23 @@ def stitch_entropy(
         ``0.0`` (the sample std is undefined for a single point).
 
     Raises:
-        ValueError: if ``energy_spacing`` is non-positive, if any
-            window's energies do not lie on the common grid, or if any
-            pair of neighbouring windows shares no bins.
+        ValueError: if ``per_window`` is empty, if any window is empty,
+            if ``energy_spacing`` is non-positive, if any window's
+            energies do not lie on the common grid, or if any pair of
+            neighbouring windows shares no bins.
     """
     if energy_spacing <= 0.0:
         raise ValueError(
             f"energy_spacing must be > 0; got {energy_spacing}"
         )
+    if not per_window:
+        raise ValueError("per_window is empty; need at least one window")
 
     grid_tol = energy_spacing * 1e-6
     indexed: list[tuple[int, pd.DataFrame]] = []
     for i, df in enumerate(per_window):
+        if df.empty:
+            raise ValueError(f"Window {i} has no rows")
         e = df["energy"].to_numpy()
         bins = np.round(e / energy_spacing).astype(np.int64)
         residual = float(np.max(np.abs(e - bins * energy_spacing)))
@@ -133,8 +138,11 @@ def reweight_canonical_from_dos(
         (eV^2), ``Cv`` (eV/K), one row per temperature.
 
     Raises:
-        ValueError: if any element of ``temperatures`` is non-positive.
+        ValueError: if ``dos`` has no rows, or if any element of
+            ``temperatures`` is non-positive.
     """
+    if dos.empty:
+        raise ValueError("dos has no rows; need at least one energy bin")
     T_arr = np.asarray(temperatures, dtype=float)
     if np.any(T_arr <= 0.0):
         raise ValueError(

@@ -97,10 +97,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     Ts = np.linspace(args.T_min, args.T_max, int(n_intervals_int) + 1)
-    canonical = reweight_canonical_from_dos(dos, Ts)
+    try:
+        canonical = reweight_canonical_from_dos(dos, Ts)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     canonical.to_csv(args.output, index=False)
-    iCv = int(np.argmax(canonical["Cv"].to_numpy()))
-    T_peak = float(canonical["T_K"].iloc[iCv])
+    i_cv_peak = int(np.argmax(canonical["Cv"].to_numpy()))
+    T_peak = float(canonical["T_K"].iloc[i_cv_peak])
     print(
         f"wrote {args.output} ({len(canonical)} rows); "
         f"Cv peak at {T_peak:.1f} K"
