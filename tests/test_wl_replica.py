@@ -766,3 +766,70 @@ def test_restore_state_legacy_checkpoint_starts_with_empty_visited_bins():
     assert dst.ensemble._visited_bins == set()
     restored_bin = dst.ensemble._get_bin_index(dst.ensemble._potential)
     assert restored_bin in dst.ensemble._histogram
+
+
+# --- Direct tests for `_coerce_wl_last_state_keys_to_int` --------------
+
+def test_coerce_wl_last_state_keys_to_int_round_trips_all_fields():
+    """All four `_WL_INT_KEY_FIELDS` get their dict keys re-integerised.
+
+    `BaseDataContainer.read` deserialises `_last_state` via JSON, which
+    stringifies any int keys. The helper undoes that for the WL-
+    specific fields. `entropy_history` and `fill_factor_history` are
+    nested: the outer keys (step indices) and, for entropy_history,
+    the inner keys (bin indices) both need restoring.
+    """
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state = {
+        "histogram": {"0": 1, "1": 2, "-3": 7},
+        "entropy": {"0": 0.0, "1": 0.5, "-3": 1.2},
+        "fill_factor_history": {"10": 0.5, "20": 0.25},
+        "entropy_history": {
+            "10": {"0": 0.0, "1": 0.5},
+            "20": {"0": 0.0, "1": 0.4, "-3": 1.1},
+        },
+        # Non-WL fields are untouched.
+        "occupations": [0, 1, 0, 1],
+    }
+    _coerce_wl_last_state_keys_to_int(last_state)
+
+    assert last_state["histogram"] == {0: 1, 1: 2, -3: 7}
+    assert last_state["entropy"] == {0: 0.0, 1: 0.5, -3: 1.2}
+    assert last_state["fill_factor_history"] == {10: 0.5, 20: 0.25}
+    assert last_state["entropy_history"] == {
+        10: {0: 0.0, 1: 0.5},
+        20: {0: 0.0, 1: 0.4, -3: 1.1},
+    }
+    assert last_state["occupations"] == [0, 1, 0, 1]
+
+
+def test_coerce_wl_last_state_keys_to_int_is_idempotent_on_int_keys():
+    """Already-int-keyed fields short-circuit, not re-process."""
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state = {
+        "histogram": {0: 1, 1: 2},
+        "entropy": {0: 0.0, 1: 0.5},
+    }
+    snapshot = {k: dict(v) for k, v in last_state.items()}
+    _coerce_wl_last_state_keys_to_int(last_state)
+    assert last_state == snapshot
+
+
+def test_coerce_wl_last_state_keys_to_int_raises_on_non_integer_key():
+    """A non-numeric string key in a WL field is a corruption signal."""
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state = {"histogram": {"oops": 1, "1": 2}}
+    with pytest.raises(ValueError, match="non-integer"):
+        _coerce_wl_last_state_keys_to_int(last_state)
+
+
+def test_coerce_wl_last_state_keys_to_int_skips_missing_fields():
+    """No `_WL_INT_KEY_FIELDS` present -> no-op, no errors."""
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state: dict[str, object] = {"occupations": [0, 1]}
+    _coerce_wl_last_state_keys_to_int(last_state)
+    assert last_state == {"occupations": [0, 1]}

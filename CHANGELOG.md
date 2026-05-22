@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-22
+
+### Added
+
+- ``mchammer-pt-stitch`` console script. By default reads one
+  mchammer-pt checkpoint HDF5 (the artefact written by
+  ``data_container_file=`` / ``save_checkpoint`` /
+  ``CheckpointWriter``); with ``--containers`` reads two or more
+  ``WangLandauDataContainer`` files directly. Containers are
+  grouped by window using each one's ``energy_limit_left`` /
+  ``energy_limit_right`` ensemble parameters, walker-merged within
+  each window via ``WindowResult.get_entropy()``, and stitched via
+  ``stitch_entropy``. Pairs with the existing
+  ``mchammer-pt-reweight`` script to give a two-step
+  DOS-to-canonical CLI pipeline that handles single- and multi-walker
+  REWL output through one code path.
+
+### Changed
+
+- ``mchammer_pt.read_hdf5`` now dispatches per-replica reads on
+  ``meta["ensemble_cls_fqn"]``: WL checkpoints route through
+  ``WangLandauDataContainer.read`` (which restores int bin keys in
+  ``_last_state`` and re-tuples ``_random_state``), while canonical
+  and other ensembles continue to use ``BaseDataContainer.read``.
+  Previously every consumer of a WL checkpoint had to re-apply
+  ``_coerce_wl_last_state_keys_to_int`` itself; now the conversion
+  happens at the source.
+- ``examples/09_dos_postprocessing.py``: end-to-end Python-API
+  pipeline (REWL run -> per-window walker-merge -> stitch -> canonical
+  reweight) showing the workflow the two CLIs wrap.
+
 ## [0.12.0] - 2026-05-21
 
 ### Added

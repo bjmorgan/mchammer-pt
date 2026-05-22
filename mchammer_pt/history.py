@@ -46,6 +46,9 @@ import numpy as np
 from mchammer.data_containers.base_data_container import (
     BaseDataContainer,
 )
+from mchammer.data_containers.wang_landau_data_container import (
+    WangLandauDataContainer,
+)
 
 # Types allowed in the `meta` dict. h5py group attrs accept scalars
 # (int, float, str, bool) and numpy arrays; nested dicts, None, and
@@ -350,6 +353,17 @@ def read_hdf5(
         meta: dict[str, MetaValue] = {}
         for key, value in f["meta"].attrs.items():
             meta[key] = _normalise_meta_value(value)
+        # WL containers carry WL-specific state (int-keyed bin dicts in
+        # `_last_state`, a re-tupled `_random_state`) that
+        # `BaseDataContainer.read` would not restore -- it deserialises
+        # via JSON and leaves bin keys as strings. Dispatch on the
+        # recorded ensemble class so each consumer sees a usable
+        # container without having to re-run the WL-specific coercion.
+        ensemble_fqn = str(meta.get("ensemble_cls_fqn", ""))
+        reader_cls: type[BaseDataContainer] = (
+            WangLandauDataContainer if "WangLandau" in ensemble_fqn
+            else BaseDataContainer
+        )
         containers: list[BaseDataContainer] = []
         replica_keys = sorted(f["replicas"].keys(), key=int)
         for key in replica_keys:
@@ -358,7 +372,7 @@ def read_hdf5(
                 tmp_path = Path(tmp.name)
             try:
                 tmp_path.write_bytes(payload)
-                containers.append(BaseDataContainer.read(str(tmp_path)))
+                containers.append(reader_cls.read(str(tmp_path)))
             finally:
                 tmp_path.unlink(missing_ok=True)
     return history, containers, meta

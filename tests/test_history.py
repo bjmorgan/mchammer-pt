@@ -133,6 +133,101 @@ def test_normalise_meta_value_decodes_np_bytes():
     assert type(_normalise_meta_value(b"plain")) is str
 
 
+def test_read_hdf5_dispatches_to_wl_reader_when_meta_indicates_wl(
+    tmp_path: Path, monkeypatch,
+):
+    """A WL checkpoint must route per-replica reads through
+    `WangLandauDataContainer.read`, not `BaseDataContainer.read`.
+
+    `BaseDataContainer.read` deserialises `_last_state` via JSON,
+    which stringifies int bin keys and turns the `random_state` tuple
+    into nested lists. `WangLandauDataContainer.read` is the only
+    reader that restores both. Every consumer of `read_hdf5` (CLI
+    stitching, WL resume) relies on this dispatch -- a regression
+    here pushes the same fix-up cost back onto each caller.
+    """
+    import h5py
+
+    pt_path = tmp_path / "wl.h5"
+    payload = b"dummy"
+    with h5py.File(pt_path, "w") as f:
+        ex = f.create_group("exchanges")
+        ex.create_dataset("energies_per_cycle", data=np.zeros((1, 1)))
+        ex.create_dataset(
+            "replica_labels_per_cycle", data=np.zeros((1, 1), dtype=np.int64),
+        )
+        ex.create_dataset("swap_attempted", data=np.zeros(0, dtype=np.int64))
+        ex.create_dataset("swap_accepted", data=np.zeros(0, dtype=np.int64))
+        meta = f.create_group("meta")
+        meta.attrs["ensemble_cls_fqn"] = (
+            "mchammer.ensembles.wang_landau_ensemble.WangLandauEnsemble"
+        )
+        replicas = f.create_group("replicas")
+        replicas.create_dataset(
+            "0", data=np.frombuffer(payload, dtype=np.uint8),
+        )
+
+    called: list[str] = []
+    sentinel_wl = object()
+    sentinel_base = object()
+
+    def fake_wl_read(_):
+        called.append("wl")
+        return sentinel_wl
+
+    def fake_base_read(_):
+        called.append("base")
+        return sentinel_base
+
+    monkeypatch.setattr(
+        "mchammer_pt.history.WangLandauDataContainer.read", fake_wl_read,
+    )
+    monkeypatch.setattr(
+        "mchammer_pt.history.BaseDataContainer.read", fake_base_read,
+    )
+
+    _, containers, _ = read_hdf5(pt_path)
+    assert called == ["wl"]
+    assert containers == [sentinel_wl]
+
+
+def test_read_hdf5_dispatches_to_base_reader_for_non_wl(
+    tmp_path: Path, monkeypatch,
+):
+    import h5py
+
+    pt_path = tmp_path / "canonical.h5"
+    with h5py.File(pt_path, "w") as f:
+        ex = f.create_group("exchanges")
+        ex.create_dataset("energies_per_cycle", data=np.zeros((1, 1)))
+        ex.create_dataset(
+            "replica_labels_per_cycle", data=np.zeros((1, 1), dtype=np.int64),
+        )
+        ex.create_dataset("swap_attempted", data=np.zeros(0, dtype=np.int64))
+        ex.create_dataset("swap_accepted", data=np.zeros(0, dtype=np.int64))
+        meta = f.create_group("meta")
+        meta.attrs["ensemble_cls_fqn"] = (
+            "mchammer.ensembles.canonical_ensemble.CanonicalEnsemble"
+        )
+        replicas = f.create_group("replicas")
+        replicas.create_dataset(
+            "0", data=np.frombuffer(b"x", dtype=np.uint8),
+        )
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        "mchammer_pt.history.WangLandauDataContainer.read",
+        lambda _: called.append("wl") or object(),
+    )
+    monkeypatch.setattr(
+        "mchammer_pt.history.BaseDataContainer.read",
+        lambda _: called.append("base") or object(),
+    )
+
+    read_hdf5(pt_path)
+    assert called == ["base"]
+
+
 def test_write_hdf5_overwrites_existing_file(tmp_path: Path):
     """A second write to the same path truncates and replaces."""
     path = tmp_path / "pt.h5"

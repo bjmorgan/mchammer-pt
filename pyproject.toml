@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.12.0"
+version = "0.13.0"
 description = "Parallel tempering orchestrator for mchammer canonical Monte Carlo"
 readme = "README.md"
 authors = [
@@ -47,6 +47,7 @@ plot = ["matplotlib"]
 
 [project.scripts]
 mchammer-pt-reweight = "mchammer_pt.cli.reweight:main"
+mchammer-pt-stitch = "mchammer_pt.cli.stitch:main"
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]
