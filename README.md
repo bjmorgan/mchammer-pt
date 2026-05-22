@@ -1,7 +1,10 @@
 # mchammer-pt
 
-Parallel-tempering orchestrator for [`mchammer`](https://icet.materialsmodeling.org/)
-canonical Monte Carlo simulations with `icet` cluster expansions.
+Replica-exchange orchestrators for [`mchammer`](https://icet.materialsmodeling.org/)
+Monte Carlo with `icet` cluster expansions: canonical-ensemble
+parallel tempering across a temperature ladder, and replica-exchange
+Wang-Landau (REWL) across an energy-window ladder, with optional
+multiple walkers per window.
 
 For an architecture overview, see [docs/architecture.md](docs/architecture.md).
 
@@ -15,29 +18,46 @@ periodically proposes configuration swaps between adjacent replicas,
 so a high-temperature chain can cross barriers and deliver escape
 paths to the colder chains.
 
+`mchammer`'s single-walker Wang-Landau samples a fixed energy window,
+but on rugged density-of-states landscapes the walker spends long
+stretches near the window edges and the fill-factor schedule stalls
+before the histogram is flat. REWL splits the target energy range
+into overlapping windows and proposes configuration swaps between
+adjacent windows weighted by their within-window density-of-states
+ratio, so each walker mixes faster inside its own window and the
+combined run converges in wall-clock time that scales with window
+width rather than total energy range. Each window optionally runs
+multiple walkers in lockstep that share the flatness gate and merge
+their entropy estimates, further reducing the random-walk variance
+that drives Wang-Landau's per-window convergence cost.
+
 ## Features
 
 - `CanonicalParallelTempering` — canonical-ensemble PT with an
   arbitrary temperature ladder.
-- `WangLandauParallelTempering` — single-walker replica-exchange
-  Wang-Landau (REWL) on top of icet's `WangLandauEnsemble`. To use
-  the Belardinelli-Pereyra 1/t schedule, pass
+- `WangLandauParallelTempering` — replica-exchange Wang-Landau
+  (REWL) on top of icet's `WangLandauEnsemble`. Each window owns a
+  fixed energy range; adjacent windows attempt configuration swaps
+  with a within-window density-of-states ratio for acceptance.
+  `n_walkers_per_window` (scalar or per-window sequence) runs
+  multiple WL walkers inside the same window, sharing the flatness
+  gate and merging entropies across the group — straightforward to
+  configure here, not exposed by raw icet. To use the
+  Belardinelli-Pereyra 1/t schedule, pass
   `ensemble_kwargs={'schedule': '1_over_t'}`; the default
   `schedule='halving'` gives the standard WL fill-factor scheme.
-  Each replica owns a fixed
-  energy window; adjacent windows attempt configuration swaps with
-  a within-window density-of-states ratio for acceptance. Serial
-  and process-parallel backends as for the canonical orchestrator;
-  checkpoint/resume into either pool kind.
-  An analytic-DOS integration test
-  (`tests/integration/test_rewl_2d_ising.py`, marked `slow`)
-  exercises REWL end-to-end on a 4x4 2D Ising fixture: the stitched
-  ln g(E) curve is compared against the exact density of states
-  obtained by brute-force enumeration of all 2^16 configurations,
-  with the residual constrained in standard deviation and maximum
-  deviation. A sign error or systematic bias in the swap formula
-  would push the recovered curve away from the analytic result and
-  the test would fail.
+  Serial and process-parallel backends as for the canonical
+  orchestrator; checkpoint/resume into either pool kind.
+- `mchammer_pt.analysis.dos.stitch_entropy` and
+  `reweight_canonical_from_dos` post-process REWL output: stitch the
+  per-window ln g(E) curves into a single density of states (working
+  in log space, with bin-index matching that survives ULP-level
+  energy drift between windows), then evaluate canonical
+  thermodynamic observables on a user-supplied temperature grid.
+- `mchammer-pt-stitch` and `mchammer-pt-reweight` console scripts
+  expose the same pipeline from the command line, reading either an
+  mchammer-pt checkpoint HDF5 or `WangLandauDataContainer` files
+  directly.
 - Serial and multiprocessing backends, swappable via a single
   constructor argument.
 - Custom Monte Carlo moves: pass any `mchammer.CanonicalEnsemble`
@@ -83,7 +103,14 @@ paths to the colder chains.
 
     pip install -e .
 
-Requires Python 3.11+, `icet`, and a working MC environment.
+Requires Python 3.11+. `pyproject.toml` pins `icet` to a patched
+fork (`git+https://gitlab.com/bjmorgan/icet.git@master`) that adds
+the WL `schedule` parameter and the `_phase` /
+`_window_entry_step` attributes the REWL coordinator reads. Plain
+PyPI `icet` will break at the first MC step — let the install pull
+the fork automatically rather than installing `icet` separately.
+The pin will be relaxed once the upstream MR lands.
+
 Optional dev tooling: `pip install -e '.[dev]'` adds `pytest`,
 `mypy`, `ruff`.
 
@@ -210,23 +237,28 @@ trajectory ends up in its `WangLandauDataContainer`, ready for
 icet's `get_average_observables_wl` against the stitched ln g(E).
 
 Stitch the per-window ln g(E) curves into a single density of
-states via icet's existing `get_density_of_states_wl`:
+states, then reweight onto a canonical temperature grid:
 
 ```python
-from mchammer.data_containers.wang_landau_data_container import (
-    get_density_of_states_wl,
+from mchammer_pt.analysis.dos import (
+    reweight_canonical_from_dos,
+    stitch_entropy,
 )
-dcs = dict(enumerate(pt.pool.data_containers()))
-df, errors = get_density_of_states_wl(dcs)
-# df.energy and df.entropy carry the stitched ln g(E).
+
+per_window = [r.get_entropy() for r in pt.results()]
+stitched, errors = stitch_entropy(per_window, energy_spacing=1.0)
+canonical = reweight_canonical_from_dos(
+    stitched, temperatures=[100, 200, 400, 800, 1600],
+)
 ```
 
-The `slow` integration test compares the stitched ln g(E) on a
-4x4 2D Ising fixture against the analytic DOS from brute-force
-enumeration; for production runs on a new system, plan to validate
-the recovered DOS against ground truth (e.g. by brute-force
-enumeration on a small case, or against an analytic result) before
-trusting downstream thermodynamic averages.
+The same pipeline is available from the command line via the
+`mchammer-pt-stitch` and `mchammer-pt-reweight` console scripts, which
+read either an mchammer-pt checkpoint HDF5 or
+`WangLandauDataContainer` files directly. For production runs on a
+new system, plan to validate the recovered DOS against ground truth
+(e.g. by brute-force enumeration on a small case, or against an
+analytic result) before trusting downstream thermodynamic averages.
 
 ## Examples
 
@@ -242,6 +274,9 @@ trusting downstream thermodynamic averages.
   bit-identical continuation.
 - `examples/08_rewl.py` — replica-exchange Wang-Landau on a 4x4
   2D Ising model, with per-window seeding and DOS stitching.
+- `examples/09_dos_postprocessing.py` — stitching REWL output into
+  a single ln g(E) and reweighting onto a canonical temperature
+  grid via `mchammer_pt.analysis.dos`.
 
 ## License
 
