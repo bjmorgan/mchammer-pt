@@ -1,5 +1,6 @@
 """mchammer-pt: parallel tempering for mchammer canonical Monte Carlo."""
 
+from .analysis.dos import reweight_canonical_from_dos, stitch_entropy
 from .base import BaseParallelTempering
 from .callbacks import (
     CycleCallback,
@@ -16,7 +17,6 @@ from .diagnostics import (
     round_trip_counts,
     swap_acceptance_rates,
 )
-from .analysis.dos import reweight_canonical_from_dos, stitch_entropy
 from .history import ExchangeHistory, read_hdf5, write_hdf5
 from .parallel.backend import (
     CanonicalPool,

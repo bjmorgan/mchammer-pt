@@ -19,8 +19,15 @@ from ase.units import kB
 
 def stitch_entropy(
     per_window: list[pd.DataFrame],
+    energy_spacing: float,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     """Stitch per-window entropy curves into a single density of states.
+
+    All windows must lie on a common ``n * energy_spacing`` grid. Bin
+    centres are matched by integer index after rounding
+    ``energy / energy_spacing``, so ULP-level drift between windows
+    computed by independent Wang-Landau processes does not silently
+    drop bins from the overlap region.
 
     Windows are sorted by minimum energy, shifted purely additively so
     that overlap regions align by mean entropy difference, and averaged
@@ -31,61 +38,76 @@ def stitch_entropy(
     Args:
         per_window: list of DataFrames each carrying ``energy`` and
             ``entropy`` columns. ``entropy`` is treated as ``ln g``.
+        energy_spacing: bin spacing. All ``energy`` values must lie
+            within numerical tolerance of an integer multiple.
 
     Returns:
         ``(stitched, overlap_errors)`` where ``stitched`` is a DataFrame
         with ``energy`` and ``entropy`` columns (rebased to ``min = 0``)
         and ``overlap_errors`` is a dict of overlap-region entropy
         standard deviations keyed by ``"i-j"`` window-pair labels in
-        the original input order.
+        the original input order. Pairs sharing only one bin report
+        ``0.0`` (the sample std is undefined for a single point).
 
     Raises:
-        ValueError: if any pair of neighbouring windows in the sorted
-            order has no overlapping energy range, or shares no bin
-            centres within the overlap.
+        ValueError: if ``energy_spacing`` is non-positive, if any
+            window's energies do not lie on the common grid, or if any
+            pair of neighbouring windows shares no bins.
     """
-    ordered = sorted(
-        enumerate(per_window),
-        key=lambda t: t[1]["energy"].iloc[0],
-    )
+    if energy_spacing <= 0.0:
+        raise ValueError(
+            f"energy_spacing must be > 0; got {energy_spacing}"
+        )
+
+    grid_tol = energy_spacing * 1e-6
+    indexed: list[tuple[int, pd.DataFrame]] = []
+    for i, df in enumerate(per_window):
+        e = df["energy"].to_numpy()
+        bins = np.round(e / energy_spacing).astype(np.int64)
+        residual = float(np.max(np.abs(e - bins * energy_spacing)))
+        if residual > grid_tol:
+            raise ValueError(
+                f"Window {i} has energies off the energy_spacing="
+                f"{energy_spacing} grid (max residual {residual:.3g} > "
+                f"tolerance {grid_tol:.3g}). All windows must lie on a "
+                f"common integer-multiple grid."
+            )
+        indexed.append((i, df.assign(_bin=bins)))
+
+    ordered = sorted(indexed, key=lambda t: t[1]["energy"].min())
 
     errors: dict[str, float] = {}
     for k in range(1, len(ordered)):
         idx_l, df_l = ordered[k - 1]
         idx_r, df_r = ordered[k]
-        left_lim = df_r["energy"].min()
-        right_lim = df_l["energy"].max()
-        if left_lim >= right_lim:
-            raise ValueError(
-                f"No overlap between windows {idx_l} and {idx_r}: "
-                f"right edge {right_lim} <= left edge {left_lim}"
-            )
-        ol_l = df_l[(df_l["energy"] >= left_lim) & (df_l["energy"] <= right_lim)]
-        ol_r = df_r[(df_r["energy"] >= left_lim) & (df_r["energy"] <= right_lim)]
         shared = np.intersect1d(
-            ol_l["energy"].to_numpy(),
-            ol_r["energy"].to_numpy(),
+            df_l["_bin"].to_numpy(), df_r["_bin"].to_numpy()
         )
         if shared.size == 0:
             raise ValueError(
-                f"No shared bin centres between windows {idx_l} and {idx_r}: "
-                f"ranges overlap on [{left_lim}, {right_lim}] but no bin centres "
-                f"coincide. Are the windows on the same energy grid?"
+                f"No overlapping bins between windows {idx_l} and "
+                f"{idx_r}. Adjacent windows must share at least one "
+                f"bin so they can be aligned."
             )
-        s_l = ol_l.set_index("energy").loc[shared, "entropy"]
-        s_r = ol_r.set_index("energy").loc[shared, "entropy"]
-        offset = float((s_r - s_l).mean())
-        errors[f"{idx_l}-{idx_r}"] = float((s_r - s_l).std())
+        s_l = df_l.set_index("_bin").loc[shared, "entropy"]
+        s_r = df_r.set_index("_bin").loc[shared, "entropy"]
+        diff = s_r - s_l
+        offset = float(diff.mean())
+        errors[f"{idx_l}-{idx_r}"] = (
+            0.0 if shared.size == 1 else float(diff.std())
+        )
         df_r = df_r.copy()
         df_r["entropy"] = df_r["entropy"] - offset
         ordered[k] = (idx_r, df_r)
 
     stacked = pd.concat([df_w for _, df_w in ordered], ignore_index=True)
     merged = (
-        stacked.groupby("energy", sort=True)["entropy"]
+        stacked.groupby("_bin", sort=True)["entropy"]
         .mean()
         .reset_index()
     )
+    merged["energy"] = merged["_bin"].to_numpy() * energy_spacing
+    merged = merged[["energy", "entropy"]]
     merged["entropy"] = merged["entropy"] - merged["entropy"].min()
     return merged, errors
 

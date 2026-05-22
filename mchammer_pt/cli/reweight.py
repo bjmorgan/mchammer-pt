@@ -73,15 +73,30 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    dos = pd.read_csv(args.dos_csv)
+    n_intervals = (args.T_max - args.T_min) / args.T_step
+    n_intervals_int = round(n_intervals)
+    if abs(n_intervals - n_intervals_int) > 1e-9:
+        print(
+            f"error: T-step={args.T_step} K does not divide "
+            f"[{args.T_min}, {args.T_max}] into an integer number of "
+            f"intervals (got {n_intervals:.6g}). Pick a step that "
+            f"divides the range evenly.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        dos = pd.read_csv(args.dos_csv)
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as e:
+        print(f"error: could not read {args.dos_csv}: {e}", file=sys.stderr)
+        return 2
     if not {"energy", "entropy"}.issubset(dos.columns):
         print(
             f"error: {args.dos_csv} must contain 'energy' and 'entropy' columns",
             file=sys.stderr,
         )
         return 2
-    n_T = int(round((args.T_max - args.T_min) / args.T_step)) + 1
-    Ts = np.linspace(args.T_min, args.T_max, n_T)
+    Ts = np.linspace(args.T_min, args.T_max, int(n_intervals_int) + 1)
     canonical = reweight_canonical_from_dos(dos, Ts)
     canonical.to_csv(args.output, index=False)
     iCv = int(np.argmax(canonical["Cv"].to_numpy()))

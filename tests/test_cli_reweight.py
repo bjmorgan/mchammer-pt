@@ -60,6 +60,43 @@ def test_dos_cli_rejects_non_positive_T_min(tmp_path):
     assert rc != 0
 
 
+def test_dos_cli_rejects_step_not_dividing_range(tmp_path, capsys):
+    dos_csv = tmp_path / "dos.csv"
+    _write_dos(dos_csv)
+    rc = main([
+        str(dos_csv),
+        "--T-min", "200", "--T-max", "801", "--T-step", "2",
+        "-o", str(tmp_path / "x.csv"),
+    ])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "does not divide" in err
+
+
+def test_dos_cli_rejects_missing_columns(tmp_path, capsys):
+    bad_csv = tmp_path / "bad.csv"
+    pd.DataFrame({"energy": [0.0, 1.0]}).to_csv(bad_csv, index=False)
+    rc = main([
+        str(bad_csv),
+        "--T-min", "100", "--T-max", "200", "--T-step", "10",
+        "-o", str(tmp_path / "x.csv"),
+    ])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "energy" in err and "entropy" in err
+
+
+def test_dos_cli_rejects_missing_file(tmp_path, capsys):
+    rc = main([
+        str(tmp_path / "does_not_exist.csv"),
+        "--T-min", "100", "--T-max", "200", "--T-step", "10",
+        "-o", str(tmp_path / "x.csv"),
+    ])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "could not read" in err
+
+
 @pytest.mark.slow
 def test_dos_cli_writes_plot(tmp_path):
     pytest.importorskip("matplotlib")
