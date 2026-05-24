@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ``WangLandauProgressPrinter`` now reports the current WL phase
+  (``halv`` while the flatness gate still drives halving, ``1/t``
+  once the Belardinelli-Pereyra switch has fired) as a new column in
+  the per-window table. A ``1_over_t`` window stops halving by
+  design and the ``fill_factor`` then decays continuously, making
+  the table previously hard to distinguish from a stalled halving
+  run; the phase column resolves the ambiguity.
+- ``WangLandauReplica.window_stats()``,
+  ``WangLandauWindowGroup.window_stats()``, and
+  ``WangLandauPool.per_window_stats()`` now include a ``phase`` key
+  (``"halving"`` or ``"1_over_t"``) carrying the same value the
+  printer consults.
+
 ## [0.13.0] - 2026-05-22
 
 ### Added

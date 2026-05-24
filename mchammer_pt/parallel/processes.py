@@ -663,6 +663,7 @@ def _merge_per_window_stats(
         "converged": all(s["converged"] for s in slot_stats),
         "flatness_mode": flatness_mode,
         "per_walker_flat_min": per_walker_flat_min,
+        "phase": slot_stats[0]["phase"],
     }
 
 

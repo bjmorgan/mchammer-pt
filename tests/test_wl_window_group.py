@@ -672,6 +672,22 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
     assert stats["per_walker_flat_min"] is None
 
 
+def test_window_stats_reports_phase():
+    """Multi-walker group exposes phase from the first replica.
+
+    All walkers in a group share the same phase (enforced by
+    apply_plan), so reading from replica 0 is canonical.
+    """
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    assert group.window_stats()["phase"] == "halving"
+    for r in replicas:
+        r.ensemble._phase = "1_over_t"
+    assert group.window_stats()["phase"] == "1_over_t"
+
+
 def test_window_stats_reports_bins_visited_and_bins_known_combined():
     """For a window group, bins_visited is the union of all walkers'
     _visited_bins; bins_known is len(combined_histogram).

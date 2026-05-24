@@ -683,6 +683,18 @@ def test_restore_state_seeds_restored_bin_when_last_state_histogram_is_empty():
     assert dst.ensemble._histogram[restored_bin] == 0
 
 
+def test_window_stats_reports_phase():
+    """window_stats exposes the WL phase so callers can distinguish
+    halving (gate still consults flat_min) from 1_over_t (BP switch
+    fired, fill_factor decays continuously)."""
+    replica = _make_wl_replica()
+    # Default schedule starts in the halving phase.
+    assert replica.window_stats()["phase"] == "halving"
+    # Flip the phase on the ensemble; window_stats should reflect it.
+    replica._ensemble._phase = "1_over_t"
+    assert replica.window_stats()["phase"] == "1_over_t"
+
+
 def test_window_stats_reports_bins_visited_and_bins_known():
     """window_stats exposes the gate-relevant bin counts.
 

@@ -263,6 +263,7 @@ class WangLandauWindowGroup:
             "bins_known": len(combined_hist),
             "converged": self.converged,
             "per_walker_flat_min": per_walker_flat_min,
+            "phase": self.phase,
         }
 
     def refresh_last_state(self) -> None:
