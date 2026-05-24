@@ -97,6 +97,7 @@ def test_wl_progress_printer_shows_bins_visited_over_known():
                     "bins_visited": 1,
                     "bins_known": 3,
                     "converged": False,
+                    "phase": "halving",
                 }
             ]
 

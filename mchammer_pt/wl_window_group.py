@@ -243,7 +243,9 @@ class WangLandauWindowGroup:
             over walkers of ``min(H_k) / mean(H_k)``, or ``None`` if
             any walker has not yet built a histogram.
             ``flatness_mode`` is not included here; the pool injects
-            it (pool-level policy).
+            it (pool-level policy). ``phase`` is the current WL phase
+            (``"halving"`` or ``"1_over_t"``), taken from the first
+            replica (all walkers in a group share the same phase).
         """
         e0 = self._replicas[0].ensemble
         combined_hist: dict[int, int] = {}

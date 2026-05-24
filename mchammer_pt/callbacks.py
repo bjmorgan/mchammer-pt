@@ -335,7 +335,7 @@ class WangLandauProgressPrinter:
             halvings_str = str(s["halvings"])
             # `1/t` (decaying continuously) vs `halv` (gate still
             # consulting flat_min); makes the BP-switch state visible.
-            phase_str = "1/t" if s.get("phase") == "1_over_t" else "halv"
+            phase_str = "1/t" if s["phase"] == "1_over_t" else "halv"
 
             hist = s["histogram"]
             bins_str = f"{s['bins_visited']}/{s['bins_known']}"

@@ -500,11 +500,7 @@ class WangLandauReplica:
         bins.
 
         ``phase`` is the current WL phase taken from the underlying
-        ensemble (``"halving"`` or ``"1_over_t"``). Reporting it
-        alongside the convergence metrics lets a UI distinguish
-        "halving phase, gate is still consulting flat_min" from
-        "BP switch has fired, fill_factor now decays as 1/t and
-        flat_min is no longer actionable".
+        ensemble (``"halving"`` or ``"1_over_t"``).
         """
         e = self._ensemble
         histogram = dict(e._histogram)
