@@ -372,3 +372,17 @@ def test_equal_area_temperature_rejects_bad_bracket():
         equal_area_temperature(dos, T_bracket=(1000.0, 100.0))  # T_lo >= T_hi
     with pytest.raises(ValueError, match="T_bracket"):
         equal_area_temperature(dos, T_bracket=(-10.0, 100.0))   # negative
+
+
+def test_public_surface_reexported_from_analysis():
+    import mchammer_pt.analysis as analysis
+
+    for name in (
+        "PhaseSplit",
+        "CoexistencePoint",
+        "find_phase_split",
+        "equal_area_temperature",
+        "NotBimodalError",
+        "NoBracketError",
+    ):
+        assert hasattr(analysis, name), f"missing re-export: {name}"
