@@ -453,28 +453,42 @@ def equal_area_temperature(
             f"extend T_bracket"
         )
 
+    # Exact root at an endpoint: skip the bisection. With the
+    # sign-product update inside the loop, a zero at the endpoint
+    # would otherwise be discarded — the (f_lo == 0) * f_mid product
+    # is 0, the loop's `< 0` test would be False, and T_lo would
+    # march away from the root.
     n_steps = 0
-    while True:
-        T_mid = 0.5 * (T_lo + T_hi)
-        try:
-            f_mid = imbalance(T_mid)
-        except NotBimodalError as exc:
-            raise NoBracketError(
-                f"shape analysis failed at mid-bracket T={T_mid}; the "
-                f"bracket extends outside the bimodal region: {exc}"
-            ) from exc
-        n_steps += 1
-        # Move the endpoint that shares a sign with f_mid. The
-        # sign-product test handles f_lo == 0 as a sign change.
-        if f_lo * f_mid < 0.0:
-            T_hi = T_mid
-            f_hi = f_mid
-        else:
-            T_lo = T_mid
-            f_lo = f_mid
-        if (T_hi - T_lo) < xtol * T_mid:
-            T_c = T_mid
-            break
+    if f_lo == 0.0:
+        T_c = T_lo
+        f_mid = f_lo
+    elif f_hi == 0.0:
+        T_c = T_hi
+        f_mid = f_hi
+    else:
+        while True:
+            T_mid = 0.5 * (T_lo + T_hi)
+            try:
+                f_mid = imbalance(T_mid)
+            except NotBimodalError as exc:
+                raise NoBracketError(
+                    f"shape analysis failed at mid-bracket T={T_mid}; "
+                    f"the bracket extends outside the bimodal region: "
+                    f"{exc}"
+                ) from exc
+            n_steps += 1
+            if f_mid == 0.0:
+                T_c = T_mid
+                break
+            if f_lo * f_mid < 0.0:
+                T_hi = T_mid
+                f_hi = f_mid
+            else:
+                T_lo = T_mid
+                f_lo = f_mid
+            if (T_hi - T_lo) < xtol * T_mid:
+                T_c = T_mid
+                break
 
     final_split = find_phase_split(
         dos, T_K=T_c, min_peak_separation=min_peak_separation,
