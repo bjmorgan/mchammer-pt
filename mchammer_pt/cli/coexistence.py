@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from mchammer_pt.analysis.coexistence import (
@@ -20,6 +21,10 @@ from mchammer_pt.analysis.coexistence import (
     NotBimodalError,
     equal_area_temperature,
 )
+
+# Relative tolerance on the uniform-grid check. Float-round bin
+# centres can differ by ~1e-12 of the bin spacing on real CSVs.
+_UNIFORM_GRID_RTOL = 1e-6
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -79,6 +84,43 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        dos = dos.astype({"energy": float, "entropy": float})
+    except (ValueError, TypeError) as e:
+        print(
+            f"error: 'energy' and 'entropy' columns in {args.dos_csv} "
+            f"must be numeric: {e}",
+            file=sys.stderr,
+        )
+        return 2
+
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    if energies.size < 2:
+        print(
+            f"error: {args.dos_csv} has fewer than two rows; need a "
+            f"grid",
+            file=sys.stderr,
+        )
+        return 2
+    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
+        print(
+            f"error: {args.dos_csv} contains non-finite (NaN/inf) "
+            f"values in 'energy' or 'entropy'",
+            file=sys.stderr,
+        )
+        return 2
+    diffs = np.diff(energies)
+    spacing = float(diffs[0])
+    if spacing <= 0.0 or not np.allclose(
+        diffs, spacing, rtol=_UNIFORM_GRID_RTOL, atol=0.0,
+    ):
+        print(
+            f"error: 'energy' column in {args.dos_csv} is not on a "
+            f"uniform ascending grid (first spacing = {spacing:.6g})",
+            file=sys.stderr,
+        )
+        return 2
 
     T_bracket = (
         (float(args.T_bracket[0]), float(args.T_bracket[1]))
@@ -106,10 +148,14 @@ def main(argv: list[str] | None = None) -> int:
         "n_bisection_steps": result.n_bisection_steps,
     }
 
-    if args.format == "json":
-        args.output.write_text(json.dumps(row, indent=2) + "\n")
-    else:
-        pd.DataFrame([row]).to_csv(args.output, index=False)
+    try:
+        if args.format == "json":
+            args.output.write_text(json.dumps(row, indent=2) + "\n")
+        else:
+            pd.DataFrame([row]).to_csv(args.output, index=False)
+    except OSError as e:
+        print(f"error: could not write {args.output}: {e}", file=sys.stderr)
+        return 2
     print(
         f"wrote {args.output}: T_c = {result.T_K:.3f} K, "
         f"latent heat = {result.latent_heat:.4g} eV, "
