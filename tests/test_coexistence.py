@@ -1,8 +1,6 @@
 """Unit tests for mchammer_pt.analysis.coexistence."""
 from __future__ import annotations
 
-import pytest
-
 from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
