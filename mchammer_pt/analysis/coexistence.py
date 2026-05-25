@@ -24,3 +24,32 @@ class NoBracketError(ValueError):
     the bracket endpoints (or mid-bracket — the bracket extends
     outside the bimodal region).
     """
+
+
+def _parabolic_vertex(
+    x_l: float, x_c: float, x_r: float,
+    y_l: float, y_c: float, y_r: float,
+) -> float:
+    """Return the x-coordinate of the parabola through three samples.
+
+    The three points are assumed to be roughly uniformly spaced and
+    bracket an extremum of the underlying smooth function. If the
+    three points are collinear (denominator vanishes) the centre
+    sample's x is returned.
+    """
+    denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
+    if denom == 0.0:
+        return x_c
+    a = (
+        x_r * (y_c - y_l)
+        + x_c * (y_l - y_r)
+        + x_l * (y_r - y_c)
+    ) / denom
+    b = (
+        x_r * x_r * (y_l - y_c)
+        + x_c * x_c * (y_r - y_l)
+        + x_l * x_l * (y_c - y_r)
+    ) / denom
+    if a == 0.0:
+        return x_c
+    return -b / (2.0 * a)
