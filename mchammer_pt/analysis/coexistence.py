@@ -400,32 +400,41 @@ def _auto_bracket(
 class CoexistencePoint:
     """First-order coexistence point obtained from a stitched DOS.
 
-    Returned by :func:`equal_area_temperature`. Bundles the
-    equal-area temperature and the diagnostics that only make sense
-    at coexistence (latent heat, barrier height).
+    Returned by :func:`equal_area_temperature`. Bundles the phase
+    split at coexistence with the diagnostics that only make sense
+    there (latent heat, barrier height).
 
     Attributes:
-        T_K: equal-area coexistence temperature, in Kelvin.
-        split: :class:`PhaseSplit` at ``T_K``; ``split.E_star`` is
-            ``E*(T_K)``.
-        latent_heat: ``<E>_high - <E>_low`` at ``T_K``, in eV. Positive
-            by construction.
-        barrier_height: free-energy barrier height at ``T_K``, in eV.
-            The negative log-ratio of the saddle ``P(E_star | T_K)``
-            to the larger of the two phase-peak heights, multiplied
-            by ``k_B * T_K``. Non-negative for a genuinely bimodal DOS.
-        weight_imbalance: ``|w_low - w_high|`` at the returned ``T_K``,
-            the bisection residual. Dimensionless (unnormalised
-            partition weights share a common scale).
+        split: :class:`PhaseSplit` at the coexistence temperature;
+            ``split.T_K`` is the equal-area temperature in Kelvin and
+            ``split.E_star`` is ``E*(split.T_K)``.
+        latent_heat: ``<E>_high - <E>_low`` at coexistence, in eV.
+            Positive by construction.
+        barrier_height: free-energy barrier height at coexistence,
+            in eV. The negative log-ratio of the saddle
+            ``P(E_star | T_c)`` to the larger of the two phase-peak
+            heights, multiplied by ``k_B * T_c``. Non-negative for a
+            genuinely bimodal DOS.
+        weight_imbalance: ``|w_low - w_high|`` at the returned
+            temperature, the bisection residual. Dimensionless
+            (unnormalised partition weights share a common scale).
         n_bisection_steps: number of bisection iterations executed.
+
+    The coexistence temperature is exposed as the read-only
+    ``T_K`` property, delegating to ``split.T_K`` to avoid two
+    sources of truth for the same value.
     """
 
-    T_K: float
     split: PhaseSplit
     latent_heat: float
     barrier_height: float
     weight_imbalance: float
     n_bisection_steps: int
+
+    @property
+    def T_K(self) -> float:
+        """The equal-area coexistence temperature, in Kelvin."""
+        return self.split.T_K
 
 
 def equal_area_temperature(
@@ -576,7 +585,6 @@ def equal_area_temperature(
     barrier_height = float(kB * T_c * (phi_at(final_split.E_star) - phi_peak_min))
 
     return CoexistencePoint(
-        T_K=float(T_c),
         split=final_split,
         latent_heat=float(latent_heat),
         barrier_height=barrier_height,

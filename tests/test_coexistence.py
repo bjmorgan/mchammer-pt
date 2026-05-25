@@ -312,11 +312,26 @@ def test_coexistence_point_is_frozen_dataclass():
         E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=500.0,
     )
     cp = CoexistencePoint(
-        T_K=500.0, split=split,
+        split=split,
         latent_heat=2.0, barrier_height=0.1,
         weight_imbalance=1e-9, n_bisection_steps=18,
     )
     with pytest.raises(FrozenInstanceError):
+        cp.latent_heat = 3.0  # type: ignore[misc]
+
+
+def test_coexistence_point_T_K_delegates_to_split():
+    split = PhaseSplit(
+        E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=500.0,
+    )
+    cp = CoexistencePoint(
+        split=split,
+        latent_heat=2.0, barrier_height=0.1,
+        weight_imbalance=1e-9, n_bisection_steps=18,
+    )
+    assert cp.T_K == 500.0
+    # T_K is a read-only property; no separate field to assign.
+    with pytest.raises(AttributeError):
         cp.T_K = 600.0  # type: ignore[misc]
 
 
