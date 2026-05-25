@@ -30,12 +30,22 @@ def _parabolic_vertex(
     x_l: float, x_c: float, x_r: float,
     y_l: float, y_c: float, y_r: float,
 ) -> float:
-    """Return the x-coordinate of the parabola through three samples.
+    """Return the x-coordinate of the parabolic vertex through three samples.
 
-    The three points are assumed to be roughly uniformly spaced and
-    bracket an extremum of the underlying smooth function. If the
-    three points are collinear (denominator vanishes) the centre
-    sample's x is returned.
+    Fits ``y = a x^2 + b x + c`` to the three points by Lagrange
+    interpolation and returns ``-b / (2 a)``. In typical use the three
+    points are the centre bin of an extremum of ``phi(E)`` and its two
+    neighbours on the DOS energy grid; the function returns a sub-bin
+    refined position of the extremum.
+
+    Falls back to ``x_c`` in two cases:
+
+    - ``denom == 0``: two of the three x-values coincide. Cannot arise
+      from distinct bin centres on a uniform grid; this branch is a
+      defensive guard.
+    - ``a == 0``: the three points are collinear (the local fit is
+      linear, no parabolic vertex exists). Returning the centre sample
+      is the natural no-op.
     """
     denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
     if denom == 0.0:

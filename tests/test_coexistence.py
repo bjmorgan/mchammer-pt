@@ -41,11 +41,16 @@ def test_parabolic_vertex_recovers_known_maximum():
     assert abs(x_vertex - 7.25) < 1e-12
 
 
-def test_parabolic_vertex_falls_back_to_centre_when_collinear():
-    # Three collinear points have no parabolic vertex; the helper
-    # must not divide by zero, and the natural fallback is the
-    # centre sample.
+def test_parabolic_vertex_falls_back_to_centre_when_linear():
+    # Three points with distinct x but collinear in y: the local fit
+    # is linear (a == 0), no parabolic vertex exists, fallback to x_c.
     xs = np.array([1.0, 2.0, 3.0])
     ys = np.array([10.0, 20.0, 30.0])
     x_vertex = _parabolic_vertex(xs[0], xs[1], xs[2], ys[0], ys[1], ys[2])
+    assert x_vertex == 2.0
+
+
+def test_parabolic_vertex_falls_back_to_centre_on_coincident_x():
+    # Two x-values coincide: denominator vanishes; fallback to x_c.
+    x_vertex = _parabolic_vertex(2.0, 2.0, 3.0, 1.0, 2.0, 5.0)
     assert x_vertex == 2.0
