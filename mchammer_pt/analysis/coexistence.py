@@ -12,12 +12,7 @@ import numpy as np
 import pandas as pd
 from ase.units import kB
 
-from mchammer_pt.analysis._partition import (
-    partition_means as _partition_means,
-)
-from mchammer_pt.analysis._partition import (
-    partition_sums as _partition_sums,
-)
+from mchammer_pt.analysis._partition import partition_means, partition_sums
 
 _AUTO_BRACKET_N_T = 60
 _AUTO_BRACKET_KT_LOW_FRAC = 0.05
@@ -298,7 +293,7 @@ def _auto_bracket(
             prev_T = None
             prev_f = None
             continue
-        w_low, w_high = _partition_sums(energies, ln_g, float(T), split.E_star)
+        w_low, w_high = partition_sums(energies, ln_g, float(T), split.E_star)
         f = w_low - w_high
         n_valid += 1
         if prev_f is not None and prev_T is not None:
@@ -443,7 +438,7 @@ def equal_area_temperature(
         split = find_phase_split(
             dos, T_K=T, min_peak_separation=min_peak_separation,
         )
-        w_low, w_high = _partition_sums(energies, ln_g, T, split.E_star)
+        w_low, w_high = partition_sums(energies, ln_g, T, split.E_star)
         return w_low - w_high
 
     try:
@@ -490,7 +485,7 @@ def equal_area_temperature(
     final_split = find_phase_split(
         dos, T_K=T_c, min_peak_separation=min_peak_separation,
     )
-    mean_low, mean_high = _partition_means(
+    mean_low, mean_high = partition_means(
         energies, ln_g, T_c, final_split.E_star,
     )
     latent_heat = mean_high - mean_low

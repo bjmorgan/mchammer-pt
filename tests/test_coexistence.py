@@ -9,6 +9,10 @@ import pytest
 from ase.units import kB
 
 import mchammer_pt.analysis.coexistence as _coexistence_mod
+from mchammer_pt.analysis._partition import (
+    partition_means as _partition_means,
+    partition_sums as _partition_sums,
+)
 from mchammer_pt.analysis.coexistence import (
     CoexistencePoint,
     NoBracketError,
@@ -16,8 +20,6 @@ from mchammer_pt.analysis.coexistence import (
     PhaseSplit,
     _auto_bracket,
     _parabolic_vertex,
-    _partition_means,
-    _partition_sums,
     equal_area_temperature,
     find_phase_split,
 )

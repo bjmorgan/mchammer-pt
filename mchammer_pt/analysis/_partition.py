@@ -41,18 +41,17 @@ def _boundary_fraction(
 
 def _log_weights(
     energies: np.ndarray, ln_g: np.ndarray, T_K: float,
-) -> tuple[np.ndarray, float]:
-    """Return ``(log_w_shifted, log_w_max)`` for stable summation.
+) -> np.ndarray:
+    """Return ``log_w = ln g - beta * E``, shifted to max 0 for stable exp.
 
-    ``log_w[i] = ln g[i] - beta * energies[i]``; the returned array
-    has had ``log_w_max`` subtracted off. Exponentiating and summing
-    gives an unnormalised partition function up to the overall
-    factor ``exp(log_w_max)``.
+    Exponentiating and summing the result gives an unnormalised
+    partition function. The overall scale (``exp(log_w_max)``) is
+    irrelevant for the ratios and differences computed by the
+    coexistence module.
     """
     beta = 1.0 / (kB * T_K)
     log_w = ln_g - beta * energies
-    log_w_max = float(log_w.max())
-    return log_w - log_w_max, log_w_max
+    return log_w - log_w.max()
 
 
 def partition_sums(
@@ -65,7 +64,7 @@ def partition_sums(
     ``E_star``; ``w_low + w_high`` equals the full sum.
     """
     energy_spacing = float(energies[1] - energies[0])
-    log_w, _ = _log_weights(energies, ln_g, T_K)
+    log_w = _log_weights(energies, ln_g, T_K)
     w = np.exp(log_w)
     i_b, f_low = _boundary_fraction(energies, E_star, energy_spacing)
     w_low = float(w[:i_b].sum()) + f_low * float(w[i_b])
@@ -85,7 +84,7 @@ def partition_means(
     the high side.
     """
     energy_spacing = float(energies[1] - energies[0])
-    log_w, _ = _log_weights(energies, ln_g, T_K)
+    log_w = _log_weights(energies, ln_g, T_K)
     w = np.exp(log_w)
     i_b, f_low = _boundary_fraction(energies, E_star, energy_spacing)
     w_low_full = float(w[:i_b].sum())
