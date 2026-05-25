@@ -5,12 +5,15 @@ from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
+from ase.units import kB
 
 from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
     PhaseSplit,
     _parabolic_vertex,
+    _partition_means,
+    _partition_sums,
     find_phase_split,
 )
 from tests._coexistence_fixtures import single_gaussian_dos, two_gaussian_dos
@@ -171,3 +174,60 @@ def test_find_phase_split_rejects_invalid_min_peak_separation():
     )
     with pytest.raises(ValueError, match="min_peak_separation must be >= 1"):
         find_phase_split(dos, T_K=300.0, min_peak_separation=0)
+
+
+def test_partition_sums_full_bins_only():
+    # Two-bin DOS at E=-1 and E=+1 with ln g = 0 (equal counts).
+    # With energy_spacing=2 and bin centres at -1 and +1, the bin
+    # containing E* = +0.5 is bin 1 (covering [0, 2)); the fraction
+    # from the left edge of that bin is f = (0.5 - 0) / 2 = 0.25,
+    # so 0.25 of bin 1 goes low and 0.75 high. At very high T, the
+    # Boltzmann factor exp(-beta E) is ~1 for both bins.
+    energies = np.array([-1.0, 1.0])
+    ln_g = np.array([0.0, 0.0])
+    w_low, w_high = _partition_sums(energies, ln_g, T_K=1e10, E_star=0.5)
+    # bin 0 weight ~ 1, bin 1 weight ~ 1 (after max-subtraction).
+    # w_low gets bin 0 entirely + f * bin 1.
+    # w_high gets (1 - f) * bin 1.
+    # Ratios: w_low / (w_low + w_high) should be (1 + 0.25) / 2.0 = 0.625.
+    total = w_low + w_high
+    assert abs(w_low / total - 0.625) < 1e-6
+
+
+def test_partition_sums_preserves_total():
+    # Property: w_low + w_high must equal the sum over all bins of
+    # g * exp(-beta E), for any E_star strictly inside the grid range.
+    energies = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
+    ln_g = np.array([0.0, 0.5, 1.0, 0.5, 0.0])
+    T_K = 500.0
+    beta = 1.0 / (kB * T_K)
+    log_w = ln_g - beta * energies
+    log_w -= log_w.max()
+    total = float(np.exp(log_w).sum())
+    for E_star in [-1.5, -0.3, 0.0, 0.7, 1.5]:
+        w_low, w_high = _partition_sums(
+            energies, ln_g, T_K=T_K, E_star=E_star,
+        )
+        assert abs((w_low + w_high) - total) / total < 1e-9
+
+
+def test_partition_means_symmetric_at_midpoint():
+    # Symmetric two-Gaussian DOS, E* at zero. T=1e4 K is chosen so that
+    # kB*T (~ 0.86 eV) >> sigma (0.1 eV), meaning the Boltzmann tilt
+    # within each peak is small (shift ~ beta * sigma^2 ~ 0.01 eV),
+    # so the conditional mean on each side is within 0.05 eV of the
+    # DOS peak centre. The two peaks are 2 eV apart with near-zero
+    # weight at E=0, so each side is dominated by its own peak.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=1.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    mean_low, mean_high = _partition_means(
+        energies, ln_g, T_K=1e4, E_star=0.0,
+    )
+    assert abs(mean_low - (-1.0)) < 0.05
+    assert abs(mean_high - 1.0) < 0.05
