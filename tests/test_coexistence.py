@@ -1,13 +1,19 @@
 """Unit tests for mchammer_pt.analysis.coexistence."""
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
+import pytest
 
 from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
+    PhaseSplit,
     _parabolic_vertex,
+    find_phase_split,
 )
+from tests._coexistence_fixtures import single_gaussian_dos, two_gaussian_dos
 
 
 def test_not_bimodal_error_is_value_error():
@@ -54,18 +60,6 @@ def test_parabolic_vertex_falls_back_to_centre_on_coincident_x():
     # Two x-values coincide: denominator vanishes; fallback to x_c.
     x_vertex = _parabolic_vertex(2.0, 2.0, 3.0, 1.0, 2.0, 5.0)
     assert x_vertex == 2.0
-
-
-from dataclasses import FrozenInstanceError
-
-import pytest
-
-from mchammer_pt.analysis.coexistence import (
-    NotBimodalError,
-    PhaseSplit,
-    find_phase_split,
-)
-from tests._coexistence_fixtures import single_gaussian_dos, two_gaussian_dos
 
 
 def test_phase_split_is_frozen_dataclass():
@@ -146,3 +140,34 @@ def test_find_phase_split_accepts_custom_min_peak_separation():
     )
     split = find_phase_split(dos, T_K=300.0, min_peak_separation=1)
     assert split.E_peak_low < split.E_peak_high
+
+
+def test_find_phase_split_rejects_non_positive_T_K():
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=1.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(ValueError, match="T_K must be > 0"):
+        find_phase_split(dos, T_K=0.0)
+    with pytest.raises(ValueError, match="T_K must be > 0"):
+        find_phase_split(dos, T_K=-100.0)
+
+
+def test_find_phase_split_rejects_empty_dos():
+    import pandas as pd
+
+    with pytest.raises(ValueError, match="dos has no rows"):
+        find_phase_split(pd.DataFrame({"energy": [], "entropy": []}), T_K=300.0)
+
+
+def test_find_phase_split_rejects_invalid_min_peak_separation():
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=1.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(ValueError, match="min_peak_separation must be >= 1"):
+        find_phase_split(dos, T_K=300.0, min_peak_separation=0)
