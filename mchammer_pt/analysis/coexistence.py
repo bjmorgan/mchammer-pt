@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 from ase.units import kB
 
+from mchammer_pt.analysis._partition import (
+    partition_means as _partition_means,
+    partition_sums as _partition_sums,
+)
+
 _AUTO_BRACKET_N_T = 60
 _AUTO_BRACKET_KT_LOW_FRAC = 0.05
 _AUTO_BRACKET_KT_HIGH_FRAC = 20.0
@@ -158,18 +163,13 @@ def find_phase_split(
     beta = 1.0 / (kB * T_K)
     phi = beta * energies - ln_g
 
-    # Local maxima of ln_g give the DOS phase peaks (interior bins only).
-    is_max = (ln_g[1:-1] > ln_g[:-2]) & (ln_g[1:-1] > ln_g[2:])
-    maxima_idx = np.flatnonzero(is_max) + 1
-    if maxima_idx.size < 2:
+    try:
+        peak_idx = _two_dominant_peak_indices(ln_g)
+    except NotBimodalError as exc:
         raise NotBimodalError(
-            f"find_phase_split: fewer than two local maxima of ln g at "
-            f"T={T_K} K (found {maxima_idx.size})"
-        )
-
-    # Two largest-ln_g maxima: the two dominant DOS peaks.
-    two_largest = maxima_idx[np.argsort(ln_g[maxima_idx])[-2:]]
-    i_left, i_right = sorted(int(x) for x in two_largest)
+            f"find_phase_split at T={T_K} K: {exc}"
+        ) from exc
+    i_left, i_right = int(peak_idx[0]), int(peak_idx[1])
     if i_right - i_left < min_peak_separation:
         raise NotBimodalError(
             f"find_phase_split: two largest DOS peaks at bin indices "
@@ -209,98 +209,25 @@ def find_phase_split(
     )
 
 
-def _boundary_fraction(
-    energies: np.ndarray, E_star: float, energy_spacing: float,
-) -> tuple[int, float]:
-    """Locate the boundary bin and compute its low-side fraction.
+def _two_dominant_peak_indices(ln_g: np.ndarray) -> np.ndarray:
+    """Return the bin indices of the two largest local maxima of ln_g.
 
-    Returns ``(i_boundary, f_low)`` where ``i_boundary`` is the index
-    of the bin whose half-open interval ``[E_i - dE/2, E_i + dE/2)``
-    contains ``E_star`` (clipped to the grid range), and ``f_low``
-    is the fraction of that bin lying on the low side of ``E_star``.
+    Local maxima are interior bins strictly higher than both
+    neighbours. The two with the largest ``ln_g`` values are returned
+    in ascending bin-index order.
 
-    Bins with index < ``i_boundary`` are wholly low; bins with
-    index > ``i_boundary`` are wholly high.
+    Raises:
+        NotBimodalError: if fewer than two local maxima exist.
     """
-    left_edge_0 = energies[0] - 0.5 * energy_spacing
-    pos = (E_star - left_edge_0) / energy_spacing  # in bin units
-    i_boundary = int(np.floor(pos))
-    i_boundary = max(0, min(i_boundary, len(energies) - 1))
-    bin_left_edge = energies[i_boundary] - 0.5 * energy_spacing
-    f_low = (E_star - bin_left_edge) / energy_spacing
-    f_low = max(0.0, min(1.0, f_low))
-    return i_boundary, f_low
-
-
-def _log_weights(
-    energies: np.ndarray, ln_g: np.ndarray, T_K: float,
-) -> tuple[np.ndarray, float]:
-    """Return ``(log_w_shifted, log_w_max)`` for stable summation.
-
-    ``log_w[i] = ln g[i] - beta * energies[i]``. The returned shifted
-    array has its maximum subtracted off; the caller exponentiates
-    and sums to recover an unnormalised partition function up to the
-    overall factor ``exp(log_w_max)`` (which cancels in any ratio).
-    """
-    beta = 1.0 / (kB * T_K)
-    log_w = ln_g - beta * energies
-    log_w_max = float(log_w.max())
-    return log_w - log_w_max, log_w_max
-
-
-def _partition_sums(
-    energies: np.ndarray, ln_g: np.ndarray, T_K: float, E_star: float,
-) -> tuple[float, float]:
-    """Count-weighted partition at ``E_star``: ``(w_low, w_high)``.
-
-    Uses linear apportionment of the boundary bin (fraction ``f_low``
-    goes to ``w_low``, ``1 - f_low`` to ``w_high``), so the partition
-    is exact at sub-bin ``E_star`` and ``w_low + w_high`` equals the
-    full sum exactly.
-
-    Outputs are unnormalised but share a common scale, so ratios and
-    differences are meaningful.
-    """
-    energy_spacing = float(energies[1] - energies[0])
-    log_w, _ = _log_weights(energies, ln_g, T_K)
-    w = np.exp(log_w)
-    i_b, f_low = _boundary_fraction(energies, E_star, energy_spacing)
-    w_low = float(w[:i_b].sum()) + f_low * float(w[i_b])
-    w_high = (1.0 - f_low) * float(w[i_b]) + float(w[i_b + 1:].sum())
-    return w_low, w_high
-
-
-def _partition_means(
-    energies: np.ndarray, ln_g: np.ndarray, T_K: float, E_star: float,
-) -> tuple[float, float]:
-    """Conditional means ``<E>_low``, ``<E>_high`` at ``E_star``.
-
-    Uses the same fractional bin apportionment as ``_partition_sums``
-    so the moments are consistent with the weights and the relation
-    ``<E> = (<E>_low * w_low + <E>_high * w_high) / Z`` holds exactly.
-
-    The boundary bin contributes its centre energy weighted by
-    ``f_low * w_bin`` to the low-side moment and
-    ``(1 - f_low) * w_bin`` to the high-side moment. This is the
-    same apportionment as for the count partition; the bin centre's
-    energy is used in both halves.
-    """
-    energy_spacing = float(energies[1] - energies[0])
-    log_w, _ = _log_weights(energies, ln_g, T_K)
-    w = np.exp(log_w)
-    i_b, f_low = _boundary_fraction(energies, E_star, energy_spacing)
-    w_low_full = float(w[:i_b].sum())
-    w_high_full = float(w[i_b + 1:].sum())
-    num_low = float((w[:i_b] * energies[:i_b]).sum()) + (
-        f_low * float(w[i_b]) * float(energies[i_b])
-    )
-    num_high = (
-        (1.0 - f_low) * float(w[i_b]) * float(energies[i_b])
-        + float((w[i_b + 1:] * energies[i_b + 1:]).sum())
-    )
-    w_low = w_low_full + f_low * float(w[i_b])
-    w_high = (1.0 - f_low) * float(w[i_b]) + w_high_full
-    return num_low / w_low, num_high / w_high
+    is_max = (ln_g[1:-1] > ln_g[:-2]) & (ln_g[1:-1] > ln_g[2:])
+    maxima_idx = np.flatnonzero(is_max) + 1
+    if maxima_idx.size < 2:
+        raise NotBimodalError(
+            f"fewer than two local maxima of ln g "
+            f"(found {maxima_idx.size})"
+        )
+    two_largest = maxima_idx[np.argsort(ln_g[maxima_idx])[-2:]]
+    return np.array(sorted(int(x) for x in two_largest), dtype=np.int64)
 
 
 def _auto_bracket(
@@ -334,16 +261,14 @@ def _auto_bracket(
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
 
-    # Locate the two dominant DOS peaks to derive kT_scale.
-    is_max = (ln_g[1:-1] > ln_g[:-2]) & (ln_g[1:-1] > ln_g[2:])
-    maxima_idx = np.flatnonzero(is_max) + 1
-    if maxima_idx.size < 2:
+    try:
+        peak_idx = _two_dominant_peak_indices(ln_g)
+    except NotBimodalError as exc:
         raise NotBimodalError(
-            "auto_bracket: fewer than two local maxima of ln g; cannot "
-            "derive a kT scale. Supply T_bracket explicitly."
-        )
-    two_largest = maxima_idx[np.argsort(ln_g[maxima_idx])[-2:]]
-    i_left, i_right = sorted(int(x) for x in two_largest)
+            f"auto_bracket: {exc}; cannot derive a kT scale. "
+            "Supply T_bracket explicitly."
+        ) from exc
+    i_left, i_right = int(peak_idx[0]), int(peak_idx[1])
     E_peak_sep = float(energies[i_right] - energies[i_left])
     ln_g_diff = abs(float(ln_g[i_right] - ln_g[i_left]))
     if ln_g_diff < 1e-10:
