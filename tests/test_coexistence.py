@@ -4,10 +4,12 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 
 import numpy as np
+import pandas as pd
 import pytest
 from ase.units import kB
 
 from mchammer_pt.analysis.coexistence import (
+    CoexistencePoint,
     NoBracketError,
     NotBimodalError,
     PhaseSplit,
@@ -15,6 +17,7 @@ from mchammer_pt.analysis.coexistence import (
     _parabolic_vertex,
     _partition_means,
     _partition_sums,
+    equal_area_temperature,
     find_phase_split,
 )
 from tests._coexistence_fixtures import single_gaussian_dos, two_gaussian_dos
@@ -160,8 +163,6 @@ def test_find_phase_split_rejects_non_positive_T_K():
 
 
 def test_find_phase_split_rejects_empty_dos():
-    import pandas as pd
-
     with pytest.raises(ValueError, match="dos has no rows"):
         find_phase_split(pd.DataFrame({"energy": [], "entropy": []}), T_K=300.0)
 
@@ -234,20 +235,140 @@ def test_partition_means_symmetric_at_midpoint():
     assert abs(mean_high - 1.0) < 0.05
 
 
-def test_auto_bracket_brackets_the_cv_peak():
-    # Two-Gaussian DOS with a clear first-order coexistence near
-    # T = 500 K (kT ~ 0.043 eV; peaks separated by 2 eV). The
-    # auto-bracket should return a (T_lo, T_hi) interval that
-    # contains the Cv peak.
+def test_auto_bracket_finds_sign_change():
+    # Two-Gaussian DOS with weight_high=2.0 has a genuine first-order
+    # coexistence near T_c ≈ 33 500 K where imbalance changes sign.
+    # _auto_bracket uses the peak energy separation and entropy
+    # difference to derive kT_scale, then scans imbalance(T) on a
+    # log-spaced grid and returns the first adjacent pair that
+    # straddles zero.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    T_lo, T_hi = _auto_bracket(dos)
+    assert T_lo > 0.0
+    assert T_hi > T_lo
+    # The bracket must straddle T_c ≈ 33 500 K.
+    T_c_analytic = 2.0 / (kB * np.log(2.0))
+    assert T_lo < T_c_analytic < T_hi
+
+
+def test_auto_bracket_raises_on_symmetric_dos():
+    # Symmetric DOS (equal weights) has T_c → ∞: imbalance never
+    # changes sign. _auto_bracket raises ValueError.
     dos = two_gaussian_dos(
         E_low=-1.0, E_high=1.0,
         sigma_low=0.1, sigma_high=0.1,
         weight_low=1.0, weight_high=1.0,
         E_min=-2.0, E_max=2.0, energy_spacing=0.01,
     )
-    T_lo, T_hi = _auto_bracket(dos)
-    assert T_lo > 0.0
-    assert T_hi > T_lo
-    # The bracket must span a sensible Kelvin range — not collapse
-    # to zero width.
-    assert (T_hi - T_lo) / T_lo > 0.1
+    with pytest.raises(ValueError, match="auto_bracket"):
+        _auto_bracket(dos)
+
+
+def test_coexistence_point_is_frozen_dataclass():
+    split = PhaseSplit(
+        E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=500.0,
+    )
+    cp = CoexistencePoint(
+        T_K=500.0, split=split,
+        latent_heat=2.0, barrier_height=0.1,
+        weight_imbalance=1e-9, n_bisection_steps=18,
+    )
+    with pytest.raises(FrozenInstanceError):
+        cp.T_K = 600.0  # type: ignore[misc]
+
+
+def test_equal_area_temperature_two_phase_dos():
+    # Two-phase DOS with the high-E peak having more entropy
+    # (weight_high=2.0). In the sharp-peak limit the equal-area
+    # condition is:
+    #   w_low * exp(beta * E_low) = w_high * exp(beta * E_high)
+    # => T_c = (E_high - E_low) / (k_B * ln(w_high / w_low))
+    #        = 2.0 / (k_B * ln 2) ≈ 33 500 K.
+    # At T_c the saddle E*(T_c) lies near the midpoint 0 eV and the
+    # latent heat equals the peak energy difference (2.0 eV).
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    T_c_analytic = 2.0 / (kB * np.log(2.0))
+    result = equal_area_temperature(
+        dos, T_bracket=(1000.0, 200_000.0),
+    )
+    assert isinstance(result, CoexistencePoint)
+    # weight_imbalance is the residual |f(T_mid)| at convergence. With
+    # the default xtol=1e-4 and df/dT ≈ 5e-4 /K at T_c ≈ 33 500 K,
+    # the achievable imbalance is of order xtol * T_c * |df/dT| ≈ 1.7e-3.
+    assert result.weight_imbalance < 0.01
+    assert abs(result.split.E_star) < 0.01
+    assert abs(result.latent_heat - 2.0) < 0.05
+    assert result.n_bisection_steps >= 1
+    # T_K must be within 5 % of the analytic value.
+    assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.05
+
+
+def test_equal_area_temperature_asymmetric_weights():
+    # Asymmetric weights: a heavier high-E phase (weight_high=3.0,
+    # weight_low=1.0). In the sharp-peak limit:
+    # T_c = 2.0 / (k_B * ln 3) ≈ 21 100 K.
+    # We only assert convergence and that T_K falls inside the bracket.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.05, sigma_high=0.05,
+        weight_low=1.0, weight_high=3.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    T_c_analytic = 2.0 / (kB * np.log(3.0))
+    result = equal_area_temperature(dos, T_bracket=(1000.0, 100_000.0))
+    # Same residual reasoning as the two-phase test: achievable
+    # weight_imbalance at xtol=1e-4 is O(1e-3) for this fixture.
+    assert result.weight_imbalance < 0.01
+    assert 1000.0 < result.T_K < 100_000.0
+    assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.05
+
+
+def test_equal_area_temperature_raises_on_unimodal():
+    dos = single_gaussian_dos(
+        E_centre=0.0, sigma=0.5,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(NoBracketError):
+        equal_area_temperature(dos, T_bracket=(100.0, 1000.0))
+
+
+def test_equal_area_temperature_auto_bracket():
+    # No T_bracket supplied: auto-bracket must locate the sign change
+    # in imbalance(T) and return a sensible result.
+    # Uses the same two-phase DOS as test_equal_area_temperature_two_phase_dos.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    result = equal_area_temperature(dos)
+    # auto-bracket returns a narrower starting bracket so the residual
+    # is smaller; still use a generous tolerance for robustness.
+    assert result.weight_imbalance < 0.01
+    assert abs(result.split.E_star) < 0.05
+    T_c_analytic = 2.0 / (kB * np.log(2.0))
+    assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.05
+
+
+def test_equal_area_temperature_rejects_bad_bracket():
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(ValueError, match="T_bracket"):
+        equal_area_temperature(dos, T_bracket=(1000.0, 100.0))  # T_lo >= T_hi
+    with pytest.raises(ValueError, match="T_bracket"):
+        equal_area_temperature(dos, T_bracket=(-10.0, 100.0))   # negative
