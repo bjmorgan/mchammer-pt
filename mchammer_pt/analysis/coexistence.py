@@ -12,6 +12,13 @@ import numpy as np
 import pandas as pd
 from ase.units import kB
 
+from mchammer_pt.analysis.dos import reweight_canonical_from_dos
+
+_AUTO_BRACKET_N_T = 50
+_AUTO_BRACKET_KT_LOW_FRAC = 0.3
+_AUTO_BRACKET_KT_HIGH_FRAC = 3.0
+_AUTO_BRACKET_PAD_FACTOR = 1.5
+
 
 class NotBimodalError(ValueError):
     """Raised when the DOS does not show two well-separated peaks.
@@ -273,3 +280,48 @@ def _partition_means(
     w_low = w_low_full + f_low * float(w[i_b])
     w_high = (1.0 - f_low) * float(w[i_b]) + w_high_full
     return num_low / w_low, num_high / w_high
+
+
+def _auto_bracket(dos: pd.DataFrame) -> tuple[float, float]:
+    """Build a T-bracket for the equal-area bisection.
+
+    Derives a kT-scale heuristic from the DOS energy and entropy
+    ranges, scans Cv on a 50-point grid spanning
+    ``[0.3, 3] * kT_scale / k_B``, then returns
+    ``(T_centre - pad * w, T_centre + pad * w)`` where ``T_centre``
+    is the parabolic-refined Cv peak and ``w`` is the half-max
+    width of Cv around it. ``pad = 1.5``.
+    """
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    E_range = float(energies.max() - energies.min())
+    ln_g_range = float(ln_g.max() - ln_g.min())
+    if ln_g_range == 0.0:
+        raise ValueError(
+            "auto_bracket: entropy range is zero; cannot derive a "
+            "kT scale. Supply T_bracket explicitly."
+        )
+    kT_scale = E_range / ln_g_range  # eV
+    T_lo_scan = _AUTO_BRACKET_KT_LOW_FRAC * kT_scale / kB
+    T_hi_scan = _AUTO_BRACKET_KT_HIGH_FRAC * kT_scale / kB
+    Ts = np.linspace(T_lo_scan, T_hi_scan, _AUTO_BRACKET_N_T)
+    canonical = reweight_canonical_from_dos(dos, Ts)
+    Cv = canonical["Cv"].to_numpy()
+    i_peak = int(np.argmax(Cv))
+    j = min(max(i_peak, 1), len(Cv) - 2)
+    T_centre = _parabolic_vertex(
+        Ts[j - 1], Ts[j], Ts[j + 1],
+        -Cv[j - 1], -Cv[j], -Cv[j + 1],  # vertex of -Cv = peak of Cv
+    )
+    half_max = 0.5 * float(Cv[i_peak])
+    above = np.flatnonzero(Cv >= half_max)
+    if above.size == 0:
+        # Degenerate: no resolvable peak. Fall back to the scan
+        # bounds, padded.
+        return T_lo_scan, T_hi_scan
+    width = float(Ts[above[-1]] - Ts[above[0]])
+    if width == 0.0:
+        # Single-point peak: pad by one grid spacing.
+        width = float(Ts[1] - Ts[0])
+    half = 0.5 * _AUTO_BRACKET_PAD_FACTOR * width
+    return float(T_centre - half), float(T_centre + half)

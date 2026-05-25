@@ -11,6 +11,7 @@ from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
     PhaseSplit,
+    _auto_bracket,
     _parabolic_vertex,
     _partition_means,
     _partition_sums,
@@ -231,3 +232,22 @@ def test_partition_means_symmetric_at_midpoint():
     )
     assert abs(mean_low - (-1.0)) < 0.05
     assert abs(mean_high - 1.0) < 0.05
+
+
+def test_auto_bracket_brackets_the_cv_peak():
+    # Two-Gaussian DOS with a clear first-order coexistence near
+    # T = 500 K (kT ~ 0.043 eV; peaks separated by 2 eV). The
+    # auto-bracket should return a (T_lo, T_hi) interval that
+    # contains the Cv peak.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=1.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    T_lo, T_hi = _auto_bracket(dos)
+    assert T_lo > 0.0
+    assert T_hi > T_lo
+    # The bracket must span a sensible Kelvin range — not collapse
+    # to zero width.
+    assert (T_hi - T_lo) / T_lo > 0.1
