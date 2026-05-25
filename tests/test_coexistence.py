@@ -11,6 +11,8 @@ from ase.units import kB
 import mchammer_pt.analysis.coexistence as _coexistence_mod
 from mchammer_pt.analysis._partition import (
     partition_means as _partition_means,
+)
+from mchammer_pt.analysis._partition import (
     partition_sums as _partition_sums,
 )
 from mchammer_pt.analysis.coexistence import (
