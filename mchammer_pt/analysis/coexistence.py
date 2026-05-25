@@ -183,7 +183,6 @@ def find_phase_split(
         -ln_g[i_right - 1], -ln_g[i_right], -ln_g[i_right + 1],
     )
 
-    # Maximum of phi between the two peak bin indices = minimum of P(E|T).
     interior = slice(i_left, i_right + 1)
     i_valley = int(np.argmax(phi[interior])) + i_left
     if i_valley == i_left or i_valley == i_right:
@@ -348,13 +347,11 @@ class CoexistencePoint:
             heights, multiplied by ``k_B * T_c``. Non-negative for a
             genuinely bimodal DOS.
         weight_imbalance: ``|w_low - w_high|`` at the returned
-            temperature, the bisection residual. Dimensionless
-            (unnormalised partition weights share a common scale).
+            temperature, the bisection residual.
         n_bisection_steps: number of bisection iterations executed.
 
     The coexistence temperature is exposed as the read-only
-    ``T_K`` property, delegating to ``split.T_K`` to avoid two
-    sources of truth for the same value.
+    ``T_K`` property, delegating to ``split.T_K``.
     """
 
     split: PhaseSplit
@@ -468,10 +465,7 @@ def equal_area_temperature(
             ) from exc
         n_steps += 1
         # Move the endpoint that shares a sign with f_mid. The
-        # sign-product form `f_lo * f_mid < 0` is the standard
-        # bisection idiom; it handles f_lo == 0 correctly (treated
-        # as a sign change to the right) where the explicit-sign
-        # form would always fall through to the `else` branch.
+        # sign-product test handles f_lo == 0 as a sign change.
         if f_lo * f_mid < 0.0:
             T_hi = T_mid
             f_hi = f_mid
@@ -490,17 +484,11 @@ def equal_area_temperature(
     )
     latent_heat = mean_high - mean_low
 
-    # barrier_height in eV, derived from the log-space identity
-    #   ln[P(E_star) / max(P_low_peak, P_high_peak)]
-    #     = phi_peak_min - phi(E_star)        (since P = exp(-phi))
-    # so barrier_height = k_B * T_c * (phi(E_star) - phi_peak_min).
-    # phi is sampled by a three-point parabolic interpolation
-    # centred on the nearest bin to each refined position, so it
-    # is evaluated at the same sub-bin energies that find_phase_split
-    # returned. Using bin-resolution phi[i_nearest] instead would
-    # introduce a sub-bin mismatch that can push barrier_height
-    # slightly negative on a shallow saddle, despite the genuine
-    # saddle existing (otherwise find_phase_split would have raised).
+    # barrier_height = k_B * T_c * (phi(E_star) - phi_peak_min), from
+    # the log-space identity ln[P(E_star) / max(P_low_peak, P_high_peak)]
+    # = phi_peak_min - phi(E_star) (since P = exp(-phi)). phi is
+    # sampled by three-point parabolic interpolation at the sub-bin
+    # energies returned by find_phase_split.
     beta_c = 1.0 / (kB * T_c)
     phi = beta_c * energies - ln_g
     energy_spacing = float(energies[1] - energies[0])
