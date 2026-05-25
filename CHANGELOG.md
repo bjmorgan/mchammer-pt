@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``mchammer_pt.analysis.coexistence`` — first-order coexistence-point
+  estimator that takes a stitched Wang–Landau DOS and returns the
+  equal-area temperature, phase peak locations, dividing energy,
+  latent heat, and free-energy barrier height as a
+  ``CoexistencePoint`` bundle. Public entry points:
+  ``find_phase_split`` (diagnostic shape analysis at a fixed T) and
+  ``equal_area_temperature`` (single 1D bisection on T with the
+  dividing energy refined at every step). Both re-exported from
+  ``mchammer_pt.analysis``.
+- ``mchammer_pt.analysis._partition`` — internal count-weighted
+  partition helpers (linear fractional apportionment of the boundary
+  bin, log-space stability) shared between the coexistence module
+  and its tests.
+- ``mchammer-pt-coexistence`` console script alongside
+  ``mchammer-pt-stitch`` and ``mchammer-pt-reweight``. Reads a
+  stitched-DOS CSV and writes a one-row coexistence-point summary
+  in JSON or CSV. Validates the input as a uniform, finite-valued,
+  numeric grid at the boundary.
+
 ## [0.14.0] - 2026-05-25
 
 ### Changed
