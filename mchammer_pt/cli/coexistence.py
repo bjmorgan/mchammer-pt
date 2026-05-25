@@ -148,14 +148,10 @@ def main(argv: list[str] | None = None) -> int:
         "n_bisection_steps": result.n_bisection_steps,
     }
 
-    try:
-        if args.format == "json":
-            args.output.write_text(json.dumps(row, indent=2) + "\n")
-        else:
-            pd.DataFrame([row]).to_csv(args.output, index=False)
-    except OSError as e:
-        print(f"error: could not write {args.output}: {e}", file=sys.stderr)
-        return 2
+    if args.format == "json":
+        args.output.write_text(json.dumps(row, indent=2) + "\n")
+    else:
+        pd.DataFrame([row]).to_csv(args.output, index=False)
     print(
         f"wrote {args.output}: T_c = {result.T_K:.3f} K, "
         f"latent heat = {result.latent_heat:.4g} eV, "
