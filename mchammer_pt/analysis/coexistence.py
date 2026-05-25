@@ -75,6 +75,28 @@ def _parabolic_vertex(
     return -b / (2.0 * a)
 
 
+def _parabolic_value_at(
+    x_l: float, x_c: float, x_r: float,
+    y_l: float, y_c: float, y_r: float,
+    x: float,
+) -> float:
+    """Evaluate the Lagrange parabola through three samples at ``x``.
+
+    Used to read sub-bin values of a quantity sampled on a uniform
+    grid (e.g. ``phi`` at the sub-bin-refined peak and valley
+    positions returned by ``find_phase_split``). Returns ``y_c`` if
+    the three x-values are coincident; for distinct bin centres on
+    a uniform grid this branch cannot fire.
+    """
+    denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
+    if denom == 0.0:
+        return y_c
+    w_l = (x - x_c) * (x - x_r) / ((x_l - x_c) * (x_l - x_r))
+    w_c = (x - x_l) * (x - x_r) / ((x_c - x_l) * (x_c - x_r))
+    w_r = (x - x_l) * (x - x_c) / ((x_r - x_l) * (x_r - x_c))
+    return w_l * y_l + w_c * y_c + w_r * y_r
+
+
 @dataclass(frozen=True)
 class PhaseSplit:
     """The two phase peaks and the free-energy minimum between them.
@@ -523,26 +545,35 @@ def equal_area_temperature(
     )
     latent_heat = mean_high - mean_low
 
-    # barrier_height in eV. Using log-space identity:
-    # ln(P(E_star) / max(P_low_peak, P_high_peak))
-    # = (phi at peak with smaller phi) - phi(E_star)
-    # where phi = beta * E - ln g.
+    # barrier_height in eV, derived from the log-space identity
+    #   ln[P(E_star) / max(P_low_peak, P_high_peak)]
+    #     = phi_peak_min - phi(E_star)        (since P = exp(-phi))
+    # so barrier_height = k_B * T_c * (phi(E_star) - phi_peak_min).
+    # phi is sampled by a three-point parabolic interpolation
+    # centred on the nearest bin to each refined position, so it
+    # is evaluated at the same sub-bin energies that find_phase_split
+    # returned. Using bin-resolution phi[i_nearest] instead would
+    # introduce a sub-bin mismatch that can push barrier_height
+    # slightly negative on a shallow saddle, despite the genuine
+    # saddle existing (otherwise find_phase_split would have raised).
     beta_c = 1.0 / (kB * T_c)
     phi = beta_c * energies - ln_g
     energy_spacing = float(energies[1] - energies[0])
 
-    def nearest_index(E: float) -> int:
+    def phi_at(E: float) -> float:
         i = int(round((E - energies[0]) / energy_spacing))
-        return max(0, min(i, len(energies) - 1))
+        i = max(1, min(i, len(energies) - 2))
+        return float(_parabolic_value_at(
+            energies[i - 1], energies[i], energies[i + 1],
+            phi[i - 1], phi[i], phi[i + 1],
+            E,
+        ))
 
-    i_peak_low = nearest_index(final_split.E_peak_low)
-    i_peak_high = nearest_index(final_split.E_peak_high)
-    i_star = nearest_index(final_split.E_star)
-    phi_peak_min = min(phi[i_peak_low], phi[i_peak_high])
-    # barrier_height = -k_B * T_c * ln(P(E_star) / max_P_peak)
-    #                = -k_B * T_c * (phi_peak_min - phi[i_star])
-    #                = k_B * T_c * (phi[i_star] - phi_peak_min)
-    barrier_height = float(kB * T_c * (phi[i_star] - phi_peak_min))
+    phi_peak_min = min(
+        phi_at(final_split.E_peak_low),
+        phi_at(final_split.E_peak_high),
+    )
+    barrier_height = float(kB * T_c * (phi_at(final_split.E_star) - phi_peak_min))
 
     return CoexistencePoint(
         T_K=float(T_c),
