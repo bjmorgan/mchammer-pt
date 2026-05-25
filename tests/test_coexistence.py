@@ -442,6 +442,70 @@ def test_equal_area_temperature_rejects_bad_bracket():
         equal_area_temperature(dos, T_bracket=(-10.0, 100.0))   # negative
 
 
+def test_equal_area_temperature_rejects_bad_xtol():
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(ValueError, match="xtol"):
+        equal_area_temperature(dos, T_bracket=(100.0, 200000.0), xtol=0.0)
+    with pytest.raises(ValueError, match="xtol"):
+        equal_area_temperature(dos, T_bracket=(100.0, 200000.0), xtol=-1.0)
+
+
+def test_equal_area_temperature_raises_no_bracket_when_user_bracket_spans_non_bimodal():
+    # User supplies a bracket whose lower end sits at a T so low that
+    # phi has no interior maximum between the DOS peaks. The bisection
+    # finds shape analysis failing mid-bracket and re-raises as
+    # NoBracketError (the auto-bracket would have avoided this T range).
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    # T=1 K: at this temperature phi(E) is dominated by beta*E and
+    # has no interior maximum; find_phase_split raises NotBimodalError
+    # which the bisection wraps as NoBracketError ("shape analysis
+    # failed at a bracket endpoint").
+    with pytest.raises(NoBracketError, match="shape analysis failed"):
+        equal_area_temperature(dos, T_bracket=(1.0, 200000.0))
+
+
+def test_equal_area_temperature_barrier_height_matches_analytic_anchor():
+    # Equal-width Gaussians at +/-1 eV with weights 1:2 have a
+    # closed-form coexistence temperature
+    #   T_c = (E_high - E_low) / (k_B * ln(w_high / w_low))
+    # and an analytic ln g(E*=0) in the sharp-peak limit (peaks of
+    # ln g - beta*E are well-separated, so logaddexp at the midpoint
+    # is dominated by neither term until the saddle).
+    # Anchor barrier_height to a value reasonable for these
+    # parameters: in the limit sigma -> 0, ln g(0) - ln g(E_peak) ~
+    # -E_peak^2 / (2 sigma^2) = -1/0.02 = -50; barrier_height in
+    # energy units is k_B * T_c * 50.
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    result = equal_area_temperature(dos, T_bracket=(1000.0, 200000.0))
+    T_c_analytic = 2.0 / (kB * np.log(2.0))
+    # At E* ~ 0 (between symmetric-position peaks), the larger DOS
+    # peak (weight 2) dominates the ln g(E*) computation through
+    # logaddexp of two equally-tailed Gaussians; the barrier in
+    # eV is approximately
+    #     k_B * T_c * (1/(2 sigma^2) + ln(1 + w_low/w_high)).
+    # The ln-correction term is small (ln 1.5 ~ 0.405) compared with
+    # 1/(2*0.01) = 50, so a 5% tolerance is generous and tight enough
+    # to catch unit slips (factors of k_B, k_B * T, etc).
+    expected_barrier = kB * T_c_analytic * (1.0 / (2.0 * 0.1 ** 2) + np.log(1.5))
+    assert result.barrier_height > 0.0
+    assert abs(result.barrier_height - expected_barrier) / expected_barrier < 0.1
+
+
 def test_public_surface_reexported_from_analysis():
     import mchammer_pt.analysis as analysis
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from mchammer_pt.cli.coexistence import main
@@ -62,7 +63,7 @@ def test_cli_writes_csv_row(tmp_path):
     assert "latent_heat" in df.columns
 
 
-def test_cli_fails_on_unimodal_dos(tmp_path):
+def test_cli_fails_on_unimodal_dos(tmp_path, capsys):
     dos = single_gaussian_dos(
         E_centre=0.0, sigma=0.5,
         E_min=-2.0, E_max=2.0, energy_spacing=0.01,
@@ -74,6 +75,10 @@ def test_cli_fails_on_unimodal_dos(tmp_path):
         "--output", str(tmp_path / "out.json"),
     ])
     assert rc != 0
+    err = capsys.readouterr().err
+    # The diagnostic identifies the underlying cause (no bimodality).
+    assert "error" in err.lower()
+    assert "bimodal" in err.lower() or "maxima" in err.lower()
 
 
 def test_cli_forwards_user_t_bracket(tmp_path):
@@ -91,9 +96,57 @@ def test_cli_forwards_user_t_bracket(tmp_path):
     assert data["T_K"] <= 200000.0
 
 
-def test_cli_rejects_missing_dos_columns(tmp_path):
+def test_cli_rejects_missing_dos_columns(tmp_path, capsys):
     bogus = pd.DataFrame({"x": [0.0, 1.0], "y": [0.0, 1.0]})
     dos_csv = tmp_path / "bogus.csv"
     bogus.to_csv(dos_csv, index=False)
     rc = main([str(dos_csv), "--output", str(tmp_path / "out.json")])
     assert rc != 0
+    err = capsys.readouterr().err
+    assert "energy" in err and "entropy" in err
+
+
+def test_cli_rejects_unreadable_dos(tmp_path, capsys):
+    # Path to a non-existent file: pd.read_csv raises FileNotFoundError
+    # (an OSError subclass), which the CLI catches and reports.
+    missing = tmp_path / "does_not_exist.csv"
+    rc = main([str(missing), "--output", str(tmp_path / "out.json")])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "could not read" in err
+
+
+def test_cli_rejects_non_numeric_columns(tmp_path, capsys):
+    bogus = pd.DataFrame({"energy": ["x", "y"], "entropy": ["a", "b"]})
+    dos_csv = tmp_path / "bogus.csv"
+    bogus.to_csv(dos_csv, index=False)
+    rc = main([str(dos_csv), "--output", str(tmp_path / "out.json")])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "numeric" in err
+
+
+def test_cli_rejects_non_finite_values(tmp_path, capsys):
+    dos = _asymmetric_two_gaussian_dos()
+    dos.loc[5, "entropy"] = float("nan")
+    dos_csv = tmp_path / "dos.csv"
+    _write_dos(dos_csv, dos)
+    rc = main([str(dos_csv), "--output", str(tmp_path / "out.json")])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "non-finite" in err or "NaN" in err
+
+
+def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
+    # Construct a DOS whose energy column has a clearly non-uniform
+    # spacing (one bin skipped). The CLI's grid check should fire.
+    dos = _asymmetric_two_gaussian_dos().copy()
+    energies = dos["energy"].to_numpy()
+    energies[10] = energies[10] + 0.005  # break the spacing at one bin
+    dos["energy"] = energies
+    dos_csv = tmp_path / "dos.csv"
+    _write_dos(dos_csv, dos)
+    rc = main([str(dos_csv), "--output", str(tmp_path / "out.json")])
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "uniform" in err
