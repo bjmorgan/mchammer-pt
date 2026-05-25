@@ -303,8 +303,9 @@ def _auto_bracket(
         NotBimodalError: if the DOS has fewer than two local maxima of
             ``ln g``.
         ValueError: if the entropy difference between the two peaks is
-            zero (symmetric DOS, T_c → ∞) or no sign change in
-            ``imbalance(T)`` is found across the scan grid.
+            zero (symmetric DOS, T_c → ∞).
+        NoBracketError: if no sign change in ``imbalance(T)`` is found
+            across the scan grid.
     """
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
@@ -353,7 +354,7 @@ def _auto_bracket(
         prev_T = float(T)
         prev_f = f
 
-    raise ValueError(
+    raise NoBracketError(
         "auto_bracket: imbalance(T) did not change sign across the scan "
         f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K "
         f"(kT_scale = {kT_scale:.4g} eV). "
@@ -368,6 +369,21 @@ class CoexistencePoint:
     Returned by :func:`equal_area_temperature`. Bundles the
     equal-area temperature and the diagnostics that only make sense
     at coexistence (latent heat, barrier height).
+
+    Attributes:
+        T_K: equal-area coexistence temperature, in Kelvin.
+        split: :class:`PhaseSplit` at ``T_K``; ``split.E_star`` is
+            ``E*(T_K)``.
+        latent_heat: ``<E>_high - <E>_low`` at ``T_K``, in eV. Positive
+            by construction.
+        barrier_height: free-energy barrier height at ``T_K``, in eV.
+            The negative log-ratio of the saddle ``P(E_star | T_K)``
+            to the larger of the two phase-peak heights, multiplied
+            by ``k_B * T_K``. Non-negative for a genuinely bimodal DOS.
+        weight_imbalance: ``|w_low - w_high|`` at the returned ``T_K``,
+            the bisection residual. Dimensionless (unnormalised
+            partition weights share a common scale).
+        n_bisection_steps: number of bisection iterations executed.
     """
 
     T_K: float
@@ -462,8 +478,6 @@ def equal_area_temperature(
         )
 
     n_steps = 0
-    T_mid = 0.5 * (T_lo + T_hi)
-    f_mid = 0.0
     while True:
         T_mid = 0.5 * (T_lo + T_hi)
         try:

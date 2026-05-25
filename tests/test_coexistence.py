@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from ase.units import kB
 
+import mchammer_pt.analysis.coexistence as _coexistence_mod
 from mchammer_pt.analysis.coexistence import (
     CoexistencePoint,
     NoBracketError,
@@ -270,6 +271,27 @@ def test_auto_bracket_raises_on_symmetric_dos():
         _auto_bracket(dos)
 
 
+def test_equal_area_temperature_raises_no_bracket_when_auto_scan_finds_no_crossing(
+    monkeypatch,
+):
+    # Two-phase DOS with a genuine sign change in imbalance(T). Shrink
+    # _AUTO_BRACKET_KT_HIGH_FRAC so the scan window covers only a
+    # fraction of T_c — entirely on the low-T side where imbalance is
+    # positive throughout. The scan finds no sign change and must raise
+    # NoBracketError (not plain ValueError).
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    # Restrict the scan to [0.05, 0.1] * kT_scale / kB, which is far
+    # below T_c ≈ kT_scale / kB, so imbalance is positive throughout.
+    monkeypatch.setattr(_coexistence_mod, "_AUTO_BRACKET_KT_HIGH_FRAC", 0.1)
+    with pytest.raises(NoBracketError, match="auto_bracket"):
+        _auto_bracket(dos)
+
+
 def test_coexistence_point_is_frozen_dataclass():
     split = PhaseSplit(
         E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=500.0,
@@ -310,6 +332,7 @@ def test_equal_area_temperature_two_phase_dos():
     assert abs(result.split.E_star) < 0.01
     assert abs(result.latent_heat - 2.0) < 0.05
     assert result.n_bisection_steps >= 1
+    assert result.barrier_height > 0.0
     # T_K must be within 5 % of the analytic value.
     assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.05
 
