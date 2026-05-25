@@ -288,6 +288,7 @@ def _auto_bracket(
     prev_T: float | None = None
     prev_f: float | None = None
     n_valid = 0
+    n_compared = 0
     for T in Ts:
         try:
             split = find_phase_split(
@@ -301,6 +302,7 @@ def _auto_bracket(
         f = w_low - w_high
         n_valid += 1
         if prev_f is not None and prev_T is not None:
+            n_compared += 1
             if prev_f * f <= 0.0:
                 return float(prev_T), float(T)
         prev_T = float(T)
@@ -314,9 +316,18 @@ def _auto_bracket(
             "in the scan range. Supply T_bracket explicitly if you "
             "believe a coexistence region exists outside it."
         )
+    if n_compared == 0:
+        raise NoBracketError(
+            f"auto_bracket: only isolated bimodal scan points in "
+            f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K (no two adjacent "
+            f"scan Ts were both bimodal; n_valid={n_valid}). The "
+            "bimodal-P(E|T) range is narrower than the scan grid "
+            "resolution. Supply T_bracket explicitly to bisect inside "
+            "the bimodal region."
+        )
     raise NoBracketError(
-        "auto_bracket: imbalance(T) did not change sign across the scan "
-        f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K "
+        "auto_bracket: imbalance(T) did not change sign across the "
+        f"scan [{T_lo_scan:.1f}, {T_hi_scan:.1f}] K "
         f"(kT_scale = {kT_scale:.4g} eV). "
         "Supply T_bracket explicitly."
     )
