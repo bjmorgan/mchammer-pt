@@ -168,13 +168,15 @@ def find_phase_split(
     # Maximum of phi between the two peak bin indices = minimum of P(E|T).
     interior = slice(i_left, i_right + 1)
     i_valley = int(np.argmax(phi[interior])) + i_left
-    # Guard against the maximum sitting at an endpoint of the
-    # interior slice (degenerate case; parabolic refinement still
-    # works if we clip).
-    j = min(max(i_valley, 1), len(phi) - 2)
+    if i_valley == i_left or i_valley == i_right:
+        raise NotBimodalError(
+            f"find_phase_split: no interior maximum of phi between the "
+            f"two DOS peaks at T={T_K} K (phi monotonic across the "
+            f"inter-peak range; canonical distribution lacks a saddle)"
+        )
     E_star = _parabolic_vertex(
-        energies[j - 1], energies[j], energies[j + 1],
-        phi[j - 1], phi[j], phi[j + 1],
+        energies[i_valley - 1], energies[i_valley], energies[i_valley + 1],
+        phi[i_valley - 1], phi[i_valley], phi[i_valley + 1],
     )
 
     return PhaseSplit(
@@ -337,6 +339,7 @@ def _auto_bracket(
 
     prev_T: float | None = None
     prev_f: float | None = None
+    n_valid = 0
     for T in Ts:
         try:
             split = find_phase_split(
@@ -348,12 +351,21 @@ def _auto_bracket(
             continue
         w_low, w_high = _partition_sums(energies, ln_g, float(T), split.E_star)
         f = w_low - w_high
+        n_valid += 1
         if prev_f is not None and prev_T is not None:
-            if (prev_f > 0.0 and f < 0.0) or (prev_f < 0.0 and f > 0.0):
+            if prev_f * f <= 0.0:
                 return float(prev_T), float(T)
         prev_T = float(T)
         prev_f = f
 
+    if n_valid == 0:
+        raise NotBimodalError(
+            "auto_bracket: shape analysis failed at every scan T in "
+            f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K. The canonical "
+            "distribution P(E|T) appears not to be bimodal anywhere "
+            "in the scan range. Supply T_bracket explicitly if you "
+            "believe a coexistence region exists outside it."
+        )
     raise NoBracketError(
         "auto_bracket: imbalance(T) did not change sign across the scan "
         f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K "
@@ -470,7 +482,7 @@ def equal_area_temperature(
             f"shape analysis failed at a bracket endpoint "
             f"(T_lo={T_lo}, T_hi={T_hi}): {exc}"
         ) from exc
-    if (f_lo > 0.0 and f_hi > 0.0) or (f_lo < 0.0 and f_hi < 0.0):
+    if f_lo * f_hi > 0.0:
         raise NoBracketError(
             f"imbalance has same sign at both endpoints "
             f"(T_lo={T_lo}: {f_lo:.3g}, T_hi={T_hi}: {f_hi:.3g}); "
@@ -488,7 +500,12 @@ def equal_area_temperature(
                 f"bracket extends outside the bimodal region: {exc}"
             ) from exc
         n_steps += 1
-        if (f_lo > 0.0 and f_mid < 0.0) or (f_lo < 0.0 and f_mid > 0.0):
+        # Move the endpoint that shares a sign with f_mid. The
+        # sign-product form `f_lo * f_mid < 0` is the standard
+        # bisection idiom; it handles f_lo == 0 correctly (treated
+        # as a sign change to the right) where the explicit-sign
+        # form would always fall through to the `else` branch.
+        if f_lo * f_mid < 0.0:
             T_hi = T_mid
             f_hi = f_mid
         else:

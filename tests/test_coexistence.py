@@ -126,6 +126,21 @@ def test_find_phase_split_raises_on_unimodal():
         find_phase_split(dos, T_K=300.0)
 
 
+def test_find_phase_split_raises_when_phi_has_no_interior_maximum():
+    # At very low T (huge beta), phi(E) = beta*E - ln g is dominated
+    # by the linear term and is monotonic across the inter-peak range.
+    # find_phase_split detects this and raises (clipping to a valid
+    # parabolic-fit window would silently return a corrupt E_star).
+    dos = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=1.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(NotBimodalError, match="no interior maximum"):
+        find_phase_split(dos, T_K=1.0)
+
+
 def test_find_phase_split_raises_on_adjacent_peaks():
     # Two peaks separated by only 2 bins (energy_spacing=0.1 -> 0.2 eV
     # apart), below the default min_peak_separation=5.
@@ -364,6 +379,20 @@ def test_equal_area_temperature_raises_on_unimodal():
     )
     with pytest.raises(NoBracketError):
         equal_area_temperature(dos, T_bracket=(100.0, 1000.0))
+
+
+def test_equal_area_temperature_auto_bracket_distinguishes_no_bimodality():
+    # With no T_bracket supplied on a unimodal DOS, the auto-scan
+    # finds no T at which shape analysis succeeds. The correct
+    # diagnostic is NotBimodalError (no bimodal region anywhere),
+    # not NoBracketError (which would imply a sign change existed
+    # but lay outside the scanned range).
+    dos = single_gaussian_dos(
+        E_centre=0.0, sigma=0.5,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    with pytest.raises(NotBimodalError):
+        equal_area_temperature(dos)
 
 
 def test_equal_area_temperature_auto_bracket():
