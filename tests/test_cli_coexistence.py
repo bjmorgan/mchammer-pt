@@ -138,11 +138,9 @@ def test_cli_rejects_non_finite_values(tmp_path, capsys):
 
 def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     # Construct a DOS whose energy column has a clearly non-uniform
-    # spacing (one bin skipped). The CLI's grid check should fire.
+    # spacing (one bin shifted). The CLI's grid check should fire.
     dos = _asymmetric_two_gaussian_dos().copy()
-    energies = dos["energy"].to_numpy()
-    energies[10] = energies[10] + 0.005  # break the spacing at one bin
-    dos["energy"] = energies
+    dos.loc[10, "energy"] = float(dos.loc[10, "energy"]) + 0.005
     dos_csv = tmp_path / "dos.csv"
     _write_dos(dos_csv, dos)
     rc = main([str(dos_csv), "--output", str(tmp_path / "out.json")])
