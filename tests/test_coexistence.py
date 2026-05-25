@@ -20,6 +20,7 @@ from mchammer_pt.analysis.coexistence import (
     equal_area_temperature,
     find_phase_split,
 )
+from mchammer_pt.analysis.dos import stitch_entropy
 from tests._coexistence_fixtures import single_gaussian_dos, two_gaussian_dos
 
 
@@ -386,3 +387,35 @@ def test_public_surface_reexported_from_analysis():
         "NoBracketError",
     ):
         assert hasattr(analysis, name), f"missing re-export: {name}"
+
+
+def test_stitch_then_equal_area_round_trip():
+    # Build a synthetic two-Gaussian DOS with asymmetric weights
+    # (finite equal-area T_c exists), then split it into two
+    # overlapping windows that look like REWL output. Stitch them
+    # back together and verify equal_area_temperature succeeds with
+    # latent_heat > 0.
+    full = two_gaussian_dos(
+        E_low=-1.0, E_high=1.0,
+        sigma_low=0.1, sigma_high=0.1,
+        weight_low=1.0, weight_high=2.0,
+        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+    )
+    # Window A: E in [-2.0, 0.2]; Window B: E in [-0.2, 2.0]; overlap
+    # [-0.2, 0.2]. Apply a constant additive shift to each window's
+    # entropy column to mimic per-window unknown offsets.
+    mask_a = (full["energy"] >= -2.0 - 1e-9) & (full["energy"] <= 0.2 + 1e-9)
+    mask_b = (full["energy"] >= -0.2 - 1e-9) & (full["energy"] <= 2.0 + 1e-9)
+    window_a = full[mask_a].copy()
+    window_b = full[mask_b].copy()
+    window_a["entropy"] = window_a["entropy"] + 3.0
+    window_b["entropy"] = window_b["entropy"] - 7.0
+
+    stitched, errors = stitch_entropy([window_a, window_b], 0.01)
+    # Alignment within the overlap should be tight.
+    assert all(v < 1e-6 for v in errors.values())
+
+    result = equal_area_temperature(stitched)
+    assert result.latent_heat > 0.0
+    # By construction, latent heat should be close to E_high - E_low = 2 eV.
+    assert abs(result.latent_heat - 2.0) < 0.05
