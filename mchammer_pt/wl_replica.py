@@ -498,6 +498,9 @@ class WangLandauReplica:
         Monotone within a run; survives halvings. ``bins_known``
         is ``len(_histogram)`` and includes seeded-but-unvisited
         bins.
+
+        ``phase`` is the current WL phase taken from the underlying
+        ensemble (``"halving"`` or ``"1_over_t"``).
         """
         e = self._ensemble
         histogram = dict(e._histogram)
@@ -508,6 +511,7 @@ class WangLandauReplica:
             "bins_visited": len(e._visited_bins),
             "bins_known": len(histogram),
             "converged": self.converged,
+            "phase": self.phase,
         }
 
     def data_container(self) -> WangLandauDataContainer:

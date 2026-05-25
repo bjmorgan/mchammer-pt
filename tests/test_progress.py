@@ -362,6 +362,7 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
                     "bins_visited": 0,
                     "bins_known": 0,
                     "converged": False,
+                    "phase": "halving",
                 }
                 for _ in range(len(pt.pool))
             ]
@@ -402,6 +403,7 @@ def test_wl_progress_printer_pooled_mode_reports_summed_flat_min():
                 "converged": False,
                 "flatness_mode": "pooled",
                 "per_walker_flat_min": 0.5,  # pooled wins; this is ignored.
+                "phase": "halving",
             }]
 
     printer = WangLandauProgressPrinter(
@@ -438,6 +440,7 @@ def test_wl_progress_printer_per_walker_mode_reports_walker_min():
                 "converged": False,
                 "flatness_mode": "per_walker",
                 "per_walker_flat_min": 0.500,
+                "phase": "halving",
             }]
 
     printer = WangLandauProgressPrinter(
@@ -471,6 +474,7 @@ def test_wl_progress_printer_back_compat_no_mode_field():
                 "bins_visited": 2,
                 "bins_known": 2,
                 "converged": False,
+                "phase": "halving",
             }]
 
     printer = WangLandauProgressPrinter(
@@ -483,6 +487,50 @@ def test_wl_progress_printer_back_compat_no_mode_field():
     blocks = _block_lines(buf.getvalue())
     last_row = blocks[-1][-1]
     assert "0.889" in last_row, last_row
+
+
+def test_wl_progress_printer_shows_phase_column():
+    """The per-window table renders ``halv`` for halving-phase windows
+    and ``1/t`` for windows whose BP switch has fired. The column is
+    in the header line, and each row picks up the right marker.
+    """
+    buf = io.StringIO()
+    pt = _wl_pt()
+
+    class _StubPool:
+        def __len__(self) -> int:
+            return 2
+
+        def per_window_stats(self):
+            base = {
+                "fill_factor": 1e-7,
+                "halvings": 24,
+                "histogram": {0: 100, 1: 100},
+                "bins_visited": 2,
+                "bins_known": 2,
+                "converged": False,
+                "flatness_mode": "pooled",
+            }
+            return [
+                {**base, "phase": "halving"},
+                {**base, "phase": "1_over_t"},
+            ]
+
+    printer = WangLandauProgressPrinter(
+        _StubPool(), interval=1, show_swap_rates=False, file=buf
+    )
+    history = pt.run(n_cycles=1)
+    printer.on_cycle_end(0, 1, history)
+
+    blocks = _block_lines(buf.getvalue())
+    assert blocks
+    block = blocks[-1]
+    header_row = block[1]
+    assert "phase" in header_row
+    # Two data rows, in window order.
+    halving_row, one_over_t_row = block[2], block[3]
+    assert " halv " in halving_row, halving_row
+    assert " 1/t " in one_over_t_row, one_over_t_row
 
 
 def test_wl_progress_printer_rejects_non_positive_interval():
@@ -515,6 +563,7 @@ def test_wl_progress_printer_per_walker_zero_flat_min_displays_as_zero():
                 "converged": False,
                 "flatness_mode": "per_walker",
                 "per_walker_flat_min": 0.0,
+                "phase": "halving",
             }]
 
     printer = WangLandauProgressPrinter(

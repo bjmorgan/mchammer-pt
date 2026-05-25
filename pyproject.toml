@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.13.0"
+version = "0.14.0"
 description = "Replica-exchange orchestrators for mchammer: canonical parallel tempering and multi-walker replica-exchange Wang-Landau"
 readme = "README.md"
 authors = [

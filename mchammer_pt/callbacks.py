@@ -237,7 +237,10 @@ class WangLandauProgressPrinter:
 
     Each row reports the current fill factor, number of WL halvings
     completed (each halving marks one successfully flattened
-    histogram), number of energy bins visited in the current
+    histogram), the current WL phase (``halv`` while the flatness
+    gate still drives halving, ``1/t`` once the Belardinelli-Pereyra
+    switch has fired and ``fill_factor`` decays continuously as
+    ``1/t``), number of energy bins visited in the current
     histogram phase, histogram flatness (``min(H) / mean(H)`` — compare
     against your ``flatness_limit``), and whether the window has
     converged.
@@ -322,13 +325,17 @@ class WangLandauProgressPrinter:
 
         col_hdr = (
             f"  {'win':>3s}  {'fill_factor':>11s}  "
-            f"{'halvings':>8s}  {'bins (vis/known)':>17s}  "
+            f"{'halvings':>8s}  {'phase':>5s}  "
+            f"{'bins (vis/known)':>17s}  "
             f"{'flat_min':>8s}  {'converged':>9s}"
         )
         rows: list[str] = []
         for i, s in enumerate(stats):
             ff_str = f"{s['fill_factor']:.3e}"
             halvings_str = str(s["halvings"])
+            # `1/t` (decaying continuously) vs `halv` (gate still
+            # consulting flat_min); makes the BP-switch state visible.
+            phase_str = "1/t" if s["phase"] == "1_over_t" else "halv"
 
             hist = s["histogram"]
             bins_str = f"{s['bins_visited']}/{s['bins_known']}"
@@ -352,6 +359,7 @@ class WangLandauProgressPrinter:
             conv_str = "yes" if s["converged"] else "no"
             rows.append(
                 f"  {i:>3d}  {ff_str:>11s}  {halvings_str:>8s}  "
+                f"{phase_str:>5s}  "
                 f"{bins_str:>17s}  {flat_str:>8s}  {conv_str:>9s}"
             )
 

@@ -182,7 +182,8 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
 
 def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     """per_window_stats() round-trips through WL_STATS opcode and returns
-    fill_factor, halvings, histogram, and converged for each window."""
+    fill_factor, halvings, histogram, bins_visited, bins_known,
+    converged, and phase for each window."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
     with ProcessWangLandauPool(
@@ -199,7 +200,7 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     for s in stats:
         assert set(s.keys()) == {
             "fill_factor", "halvings", "histogram",
-            "bins_visited", "bins_known", "converged",
+            "bins_visited", "bins_known", "converged", "phase",
         }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
@@ -207,6 +208,7 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert isinstance(s["bins_visited"], int)
         assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
+        assert s["phase"] in {"halving", "1_over_t"}
         assert s["fill_factor"] > 0.0
 
 
@@ -247,12 +249,13 @@ def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
         "bins_visited": 2,
         "bins_known": 2,
         "converged": False,
+        "phase": "halving",
         "visited_bins": [0, 1],
     }
     out = _merge_per_window_stats([s], flatness_mode="pooled")
     assert set(out.keys()) == {
         "fill_factor", "halvings", "histogram",
-        "bins_visited", "bins_known", "converged",
+        "bins_visited", "bins_known", "converged", "phase",
     }
     assert out["fill_factor"] == 0.5
     assert out["halvings"] == 1
@@ -556,6 +559,7 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_visited": 3,
         "bins_known": 3,
         "converged": False,
+        "phase": "halving",
         "visited_bins": [0, 1, 2],
     }
     s1 = {
@@ -565,6 +569,7 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_visited": 3,
         "bins_known": 3,
         "converged": True,
+        "phase": "halving",
         "visited_bins": [1, 2, 3],
     }
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
@@ -578,8 +583,29 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
     assert out["converged"] is False
     assert out["flatness_mode"] == "pooled"
     assert "per_walker_flat_min" in out
+    assert out["phase"] == "halving"
     # The internal field is stripped from the user-facing dict.
     assert "visited_bins" not in out
+
+
+def test_merge_per_window_stats_propagates_1_over_t_phase():
+    """A walker whose phase has flipped to 1_over_t propagates through
+    the multi-walker merge unchanged. ProgressPrinter uses this field
+    to distinguish a stalled halving phase from a 1/t plateau.
+    """
+    s0 = {
+        "fill_factor": 1e-7,
+        "halvings": 24,
+        "histogram": {0: 100, 1: 100},
+        "bins_visited": 2,
+        "bins_known": 2,
+        "converged": False,
+        "phase": "1_over_t",
+        "visited_bins": [0, 1],
+    }
+    s1 = {**s0, "histogram": {0: 110, 1: 90}, "visited_bins": [0, 1]}
+    out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
+    assert out["phase"] == "1_over_t"
 
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
