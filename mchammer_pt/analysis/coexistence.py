@@ -47,20 +47,13 @@ def _parabolic_vertex(
 ) -> float:
     """Return the x-coordinate of the parabolic vertex through three samples.
 
-    Fits ``y = a x^2 + b x + c`` to the three points by Lagrange
-    interpolation and returns ``-b / (2 a)``. In typical use the three
-    points are the centre bin of an extremum of ``phi(E)`` and its two
-    neighbours on the DOS energy grid; the function returns a sub-bin
-    refined position of the extremum.
+    Fits ``y = a x^2 + b x + c`` by Lagrange interpolation and returns
+    ``-b / (2 a)``. Typical use: three points centred on an extremum
+    bin of ``phi(E)`` on the DOS energy grid; the return is the sub-bin
+    refined extremum position.
 
-    Falls back to ``x_c`` in two cases:
-
-    - ``denom == 0``: two of the three x-values coincide. Cannot arise
-      from distinct bin centres on a uniform grid; this branch is a
-      defensive guard.
-    - ``a == 0``: the three points are collinear (the local fit is
-      linear, no parabolic vertex exists). Returning the centre sample
-      is the natural no-op.
+    Returns ``x_c`` when the parabola degenerates: ``a == 0``
+    (collinear samples) or coincident x-values.
     """
     denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
     if denom == 0.0:
@@ -87,11 +80,10 @@ def _parabolic_value_at(
 ) -> float:
     """Evaluate the Lagrange parabola through three samples at ``x``.
 
-    Used to read sub-bin values of a quantity sampled on a uniform
-    grid (e.g. ``phi`` at the sub-bin-refined peak and valley
-    positions returned by ``find_phase_split``). Returns ``y_c`` if
-    the three x-values are coincident; for distinct bin centres on
-    a uniform grid this branch cannot fire.
+    Used to read sub-bin values of a quantity sampled on the bin grid
+    (e.g. ``phi`` at the sub-bin peak and valley positions returned
+    by ``find_phase_split``). Returns ``y_c`` if the three x-values
+    are coincident.
     """
     denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
     if denom == 0.0:
@@ -106,8 +98,15 @@ def _parabolic_value_at(
 class PhaseSplit:
     """The two phase peaks and the free-energy minimum between them.
 
-    All energies are in eV. Peak and valley positions are refined to
-    sub-bin precision by local-quadratic fits.
+    Attributes:
+        E_peak_low: low-energy phase peak position in eV, sub-bin
+            refined from the two largest local maxima of ``ln g``.
+        E_peak_high: high-energy phase peak position in eV, sub-bin
+            refined.
+        E_star: dividing energy in eV — the maximum of
+            ``phi(E) = beta * E - ln g(E)`` between the two peaks at
+            ``T_K``, sub-bin refined.
+        T_K: temperature in Kelvin at which ``E_star`` was located.
     """
 
     E_peak_low: float
@@ -375,16 +374,17 @@ def equal_area_temperature(
     trial T, ``find_phase_split`` is called to locate the dividing
     energy ``E*(T)`` and ``imbalance(T) = w_low(T) - w_high(T)`` is
     computed from the count-weighted microstate partition at that
-    ``E*``. Converges when ``|T_new - T_old| < xtol * T_new``.
+    ``E*``. The bisection terminates when the bracket has shrunk
+    below ``xtol * T_mid``.
 
     Args:
         dos: stitched DOS as produced by
             ``mchammer_pt.analysis.dos.stitch_entropy``.
         T_bracket: ``(T_lo, T_hi)`` bracket in Kelvin. If ``None``,
-            built by :func:`_auto_bracket`, which derives a kT scale
-            from the energy and entropy differences of the two
-            dominant DOS peaks and locates an adjacent pair of trial
-            temperatures across which ``imbalance(T)`` changes sign.
+            built automatically from a kT-scale heuristic derived
+            from the energy and entropy difference of the two
+            dominant DOS peaks; the heuristic scans ``imbalance(T)``
+            on a log-spaced grid to find the first sign change.
         xtol: relative bisection tolerance on T. Default 1e-4.
         min_peak_separation: forwarded to
             :func:`find_phase_split`.
@@ -394,6 +394,9 @@ def equal_area_temperature(
 
     Raises:
         ValueError: on invalid inputs.
+        NotBimodalError: if no T in the auto-built scan range
+            yields a bimodal ``P(E|T)`` (only when ``T_bracket`` is
+            ``None``).
         NoBracketError: if ``imbalance(T)`` does not change sign
             across the bracket, or if shape analysis fails at any
             bracket endpoint or mid-bracket trial.

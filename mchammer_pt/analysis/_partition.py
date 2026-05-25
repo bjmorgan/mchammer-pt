@@ -44,10 +44,10 @@ def _log_weights(
 ) -> tuple[np.ndarray, float]:
     """Return ``(log_w_shifted, log_w_max)`` for stable summation.
 
-    ``log_w[i] = ln g[i] - beta * energies[i]``. The returned array
-    has its maximum subtracted off; the caller exponentiates and
-    sums to recover an unnormalised partition function up to the
-    overall factor ``exp(log_w_max)``.
+    ``log_w[i] = ln g[i] - beta * energies[i]``; the returned array
+    has had ``log_w_max`` subtracted off. Exponentiating and summing
+    gives an unnormalised partition function up to the overall
+    factor ``exp(log_w_max)``.
     """
     beta = 1.0 / (kB * T_K)
     log_w = ln_g - beta * energies
@@ -60,8 +60,8 @@ def partition_sums(
 ) -> tuple[float, float]:
     """Count-weighted partition at ``E_star``: ``(w_low, w_high)``.
 
-    Linear apportionment of the boundary bin (fraction ``f_low`` low,
-    ``1 - f_low`` high) makes the partition exact at sub-bin
+    The boundary bin is apportioned linearly (fraction ``f_low`` low,
+    ``1 - f_low`` high), making the partition exact at sub-bin
     ``E_star``; ``w_low + w_high`` equals the full sum.
     """
     energy_spacing = float(energies[1] - energies[0])
@@ -78,12 +78,11 @@ def partition_means(
 ) -> tuple[float, float]:
     """Conditional means ``<E>_low``, ``<E>_high`` at ``E_star``.
 
-    Uses the same fractional bin apportionment as
-    :func:`partition_sums`, so the moments are consistent with the
-    weights and ``<E> = (<E>_low * w_low + <E>_high * w_high) / Z``
-    holds. The boundary bin contributes its centre energy to both
-    halves, weighted by ``f_low * w_bin`` and ``(1 - f_low) * w_bin``
-    respectively.
+    Shares the fractional-bin apportionment with :func:`partition_sums`
+    so that ``<E> = (<E>_low * w_low + <E>_high * w_high) / Z`` holds.
+    The boundary bin contributes its centre energy weighted by
+    ``f_low * w_bin`` to the low side and ``(1 - f_low) * w_bin`` to
+    the high side.
     """
     energy_spacing = float(energies[1] - energies[0])
     log_w, _ = _log_weights(energies, ln_g, T_K)
