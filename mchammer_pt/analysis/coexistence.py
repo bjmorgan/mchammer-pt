@@ -397,9 +397,10 @@ def equal_area_temperature(
         dos: stitched DOS as produced by
             ``mchammer_pt.analysis.dos.stitch_entropy``.
         T_bracket: ``(T_lo, T_hi)`` bracket in Kelvin. If ``None``,
-            built from a coarse Cv scan via
-            :func:`reweight_canonical_from_dos` and the kT-scale
-            heuristic.
+            built by :func:`_auto_bracket`, which derives a kT scale
+            from the energy and entropy differences of the two
+            dominant DOS peaks and locates an adjacent pair of trial
+            temperatures across which ``imbalance(T)`` changes sign.
         xtol: relative bisection tolerance on T. Default 1e-4.
         min_peak_separation: forwarded to
             :func:`find_phase_split`.
