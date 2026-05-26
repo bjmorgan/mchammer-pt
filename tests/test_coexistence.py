@@ -285,6 +285,39 @@ def test_two_dominant_peak_indices_raises_on_fewer_than_two_minima():
         _two_dominant_peak_indices(phi)
 
 
+def test_find_phase_split_rejects_adjacent_minima():
+    # Two phi minima at adjacent indices: separation = 1 < default
+    # min_peak_separation = 5. find_phase_split should raise.
+    # Build a tiny DOS where phi has minima at indices 1 and 3
+    # (separation 2): pick energies and ln_g so that, at T_K=1 K,
+    # phi = beta*E - ln_g has minima there.
+    # Simpler: bypass T construction by using a custom DOS whose
+    # ln_g shape directly produces the desired phi at beta = 1.
+    # At beta=1, phi = E - ln_g. We want phi minima at E indices 1
+    # and 3 of an array of length 5: pick energies = [0, 1, 2, 3, 4]
+    # and ln_g such that phi = [5, 0, 5, 0, 5] (minima at 1 and 3).
+    # ln_g = E - phi = [-5, 1, -3, 3, -1]. T_K = 1 / kB.
+    energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    ln_g = np.array([-5.0, 1.0, -3.0, 3.0, -1.0])
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    T_K = 1.0 / kB  # beta = 1
+    with pytest.raises(NotBimodalError, match="within"):
+        find_phase_split(dos, T_K=T_K, min_peak_separation=5)
+
+
+def test_find_phase_split_accepts_small_min_peak_separation():
+    # Same DOS, but explicitly lower the separation requirement so
+    # the helper accepts the two adjacent minima.
+    energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    ln_g = np.array([-5.0, 1.0, -3.0, 3.0, -1.0])
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    T_K = 1.0 / kB
+    split = find_phase_split(dos, T_K=T_K, min_peak_separation=1)
+    # Peaks fall between energies 0 and 4 (the two minima of phi
+    # are at energy indices 1 and 3).
+    assert split.E_peak_low < split.E_peak_high
+
+
 def test_find_phase_split_on_lattice_like_dos_at_design_beta():
     # Fixture parameters: a=1, beta_c=10, c=1.
     # At beta = beta_c = 10 eV^-1, phi = beta*E - ln_g is the
@@ -300,6 +333,22 @@ def test_find_phase_split_on_lattice_like_dos_at_design_beta():
     assert abs(split.E_peak_high - 1.0) < 0.002
     # E_star is the maximum of phi between the peaks at E = 0.
     assert abs(split.E_star) < 0.005
+
+
+def test_find_phase_split_sub_bin_refinement_on_lattice_like_dos():
+    # Choose c slightly off a bin centre so the analytic peak
+    # positions (E = +/- c = +/- 1.0007) fall between bins of the
+    # 0.001-spaced grid. Parabolic refinement must recover the
+    # sub-bin positions to better than energy_spacing / 10.
+    c = 1.0007
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=c,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    T_K = 1.0 / (kB * 10.0)
+    split = find_phase_split(dos, T_K=T_K)
+    assert abs(split.E_peak_low - (-c)) < 1e-4
+    assert abs(split.E_peak_high - c) < 1e-4
 
 
 def test_find_phase_split_raises_outside_bimodal_window():
@@ -341,6 +390,19 @@ def test_auto_bracket_returns_valid_range_on_lattice_like_dos():
     split_hi = find_phase_split(dos, T_K=T_hi)
     assert split_lo.E_peak_low < split_lo.E_peak_high
     assert split_hi.E_peak_low < split_hi.E_peak_high
+    # The bracket must actually bracket the imbalance sign change —
+    # otherwise the bisection inside equal_area_temperature would
+    # fail with NoBracketError. Verify the sign-change invariant
+    # explicitly.
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_low_lo, w_high_lo = _partition_sums(
+        energies, ln_g, T_K=T_lo, E_star=split_lo.E_star,
+    )
+    w_low_hi, w_high_hi = _partition_sums(
+        energies, ln_g, T_K=T_hi, E_star=split_hi.E_star,
+    )
+    assert (w_low_lo - w_high_lo) * (w_low_hi - w_high_hi) <= 0
 
 
 def test_auto_bracket_raises_value_error_on_flat_ln_g():
@@ -350,6 +412,19 @@ def test_auto_bracket_raises_value_error_on_flat_ln_g():
         "entropy": np.zeros(21),
     })
     with pytest.raises(ValueError, match="kT scale"):
+        _auto_bracket(dos)
+
+
+def test_auto_bracket_raises_not_bimodal_when_no_T_yields_bimodal_P():
+    # Single-bump ln g: no T anywhere in the scan range produces a
+    # bimodal P(E|T). _auto_bracket should raise NotBimodalError,
+    # distinct from NoBracketError (which signals "bracket existed
+    # but sign change wasn't found").
+    energies = np.linspace(-2.0, 2.0, 401)
+    ln_g = -(energies ** 2)
+    ln_g -= ln_g.min()
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    with pytest.raises(NotBimodalError):
         _auto_bracket(dos)
 
 
@@ -392,6 +467,12 @@ def test_equal_area_temperature_on_lattice_like_dos():
     # find_phase_split at result.T_K must reproduce the same split.
     re_split = find_phase_split(dos, T_K=result.T_K)
     assert abs(re_split.E_star - result.split.E_star) < 1e-6
+    # At beta = beta_c with a=c=1, phi is the designed quartic
+    # double-well with wells at phi=0 (after rebasing) and saddle
+    # at phi=a*c^4=1. The barrier height (in eV) is kB * Tc times
+    # this phi gap: barrier_height = kB * Tc * 1.0. With Tc =
+    # 1/(kB * 10), that simplifies to 0.1 eV exactly.
+    assert abs(result.barrier_height - 0.1) < 5e-4
 
 
 def test_equal_area_temperature_auto_bracket_on_lattice_like_dos():

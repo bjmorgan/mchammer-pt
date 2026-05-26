@@ -76,6 +76,9 @@ def test_cli_fails_on_unimodal_dos(tmp_path, capsys):
     assert rc != 0
     err = capsys.readouterr().err
     assert "error" in err.lower()
+    # Diagnostic must name the underlying cause (no bimodal P(E|T)
+    # anywhere in the scan range), not just "error".
+    assert "phi" in err.lower() or "bimodal" in err.lower()
 
 
 def test_cli_forwards_user_t_bracket(tmp_path):
