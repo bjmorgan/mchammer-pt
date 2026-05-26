@@ -514,6 +514,8 @@ def test_stitch_cli_emin_trims_low_bins(tmp_path, monkeypatch, capsys):
     assert rc == 0
     df = pd.read_csv(out)
     assert (df["energy"] > -1.5).all()
+    stdout = capsys.readouterr().out
+    assert "kept 3 of 3 windows" in stdout
 
 
 def test_stitch_cli_emin_drops_entire_window_when_out_of_range(

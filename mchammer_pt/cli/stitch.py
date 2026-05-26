@@ -327,25 +327,22 @@ def main(argv: list[str] | None = None) -> int:
         or args.emax is not None
     )
     if len(per_window) < 2:
-        if filters_active:
-            active_parts = []
-            if args.windows is not None:
-                active_parts.append(f"--windows={','.join(str(i) for i in args.windows)}")
-            if args.emin is not None:
-                active_parts.append(f"--emin={args.emin}")
-            if args.emax is not None:
-                active_parts.append(f"--emax={args.emax}")
-            print(
-                f"error: filters left fewer than 2 windows for stitching "
-                f"({' '.join(active_parts)}; "
-                f"{_format_window_summary(surviving_keys, len(by_window))})",
-                file=sys.stderr,
-            )
-            return 2
+        # When no filters are active, len(per_window) == len(by_window) and
+        # the discovery-time guard above already returned. So we can only
+        # reach here with filters_active=True.
+        assert filters_active, "unreachable: discovery guard above returns first"
+        active_parts: list[str] = []
+        if args.windows is not None:
+            joined = ",".join(str(i) for i in args.windows)
+            active_parts.append(f"--windows={joined}")
+        if args.emin is not None:
+            active_parts.append(f"--emin={args.emin}")
+        if args.emax is not None:
+            active_parts.append(f"--emax={args.emax}")
         print(
-            f"error: stitching needs at least two distinct windows; got "
-            f"{len(per_window)} (all containers share the same "
-            f"energy_limit_left/right)",
+            f"error: filters left fewer than 2 windows for stitching "
+            f"({' '.join(active_parts)}; "
+            f"{_format_window_summary(surviving_keys, len(by_window))})",
             file=sys.stderr,
         )
         return 2
