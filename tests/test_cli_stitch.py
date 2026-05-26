@@ -14,6 +14,7 @@ from mchammer.data_containers.wang_landau_data_container import (
 
 from mchammer_pt.cli.stitch import (
     _build_parser,
+    _format_window_summary,
     _select_window_keys,
     _trim_entropy_bins,
     main,
@@ -423,3 +424,25 @@ def test_trim_entropy_bins_returns_empty_when_everything_dropped():
     df = pd.DataFrame({"energy": [-2.0, -1.0], "entropy": [0.0, 0.5]})
     out = _trim_entropy_bins(df, emin=0.0, emax=None)
     assert out.empty
+
+
+def test_format_window_summary_lists_kept_windows():
+    kept = [(-10.0, -8.0), (-7.0, -5.0)]
+    out = _format_window_summary(kept_keys=kept, total=3)
+    assert "kept 2 of 3 windows" in out
+    assert "(-10.0, -8.0)" in out
+    assert "(-7.0, -5.0)" in out
+
+
+def test_format_window_summary_handles_none_bounds():
+    # An outer window may have None for left or right energy limit
+    # (no-bound case from mchammer's ensemble_parameters).
+    kept = [(None, -8.0), (-7.0, None)]
+    out = _format_window_summary(kept_keys=kept, total=2)
+    assert "(None, -8.0)" in out
+    assert "(-7.0, None)" in out
+
+
+def test_format_window_summary_no_kept_windows():
+    out = _format_window_summary(kept_keys=[], total=5)
+    assert "kept 0 of 5 windows" in out

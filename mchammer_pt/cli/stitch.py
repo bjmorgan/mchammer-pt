@@ -212,6 +212,15 @@ def _trim_entropy_bins(
     return df.loc[mask].reset_index(drop=True)
 
 
+def _format_window_summary(
+    kept_keys: list[tuple[float | None, float | None]],
+    total: int,
+) -> str:
+    """Build the 'kept K of W windows: ...' fragment for the success line."""
+    pairs = ", ".join(f"({lo}, {hi})" for lo, hi in kept_keys)
+    return f"kept {len(kept_keys)} of {total} windows: {pairs}"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
