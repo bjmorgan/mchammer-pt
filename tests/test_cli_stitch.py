@@ -11,7 +11,7 @@ from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
-from mchammer_pt.cli.stitch import main
+from mchammer_pt.cli.stitch import _build_parser, main
 
 
 def _mock_dc(
@@ -299,3 +299,28 @@ def test_stitch_cli_translates_stitch_value_error(tmp_path, monkeypatch, capsys)
     rc = main(["--containers", "a.dc", "b.dc", "-o", str(tmp_path / "dos.csv")])
     assert rc != 0
     assert "stitching failed" in capsys.readouterr().err
+
+
+def test_parser_accepts_windows_flag():
+    parser = _build_parser()
+    args = parser.parse_args(
+        ["input.h5", "--windows", "0,2,3"]
+    )
+    assert args.windows == [0, 2, 3]
+
+
+def test_parser_accepts_emin_emax_flags():
+    parser = _build_parser()
+    args = parser.parse_args(
+        ["input.h5", "--emin", "-10.5", "--emax", "-5.0"]
+    )
+    assert args.emin == pytest.approx(-10.5)
+    assert args.emax == pytest.approx(-5.0)
+
+
+def test_parser_defaults_filter_flags_to_none():
+    parser = _build_parser()
+    args = parser.parse_args(["input.h5"])
+    assert args.windows is None
+    assert args.emin is None
+    assert args.emax is None

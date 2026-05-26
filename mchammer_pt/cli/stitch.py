@@ -36,6 +36,16 @@ from mchammer_pt.wl_result import WindowResult
 _REQUIRED_PARAMS = ("energy_spacing", "energy_limit_left", "energy_limit_right")
 
 
+def _parse_window_indices(s: str) -> list[int]:
+    """argparse type for ``--windows``: comma-separated 0-based ints."""
+    try:
+        return [int(x) for x in s.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--windows: expected comma-separated integers; got {s!r}"
+        ) from exc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mchammer-pt-stitch",
@@ -72,6 +82,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "If given, each walker contributes the entropy recorded at "
             "the step when its fill factor first reached this limit."
+        ),
+    )
+    p.add_argument(
+        "--windows", type=_parse_window_indices, default=None,
+        metavar="IDX[,IDX...]",
+        help=(
+            "Comma-separated 0-based window indices to keep "
+            "(energy-sorted ascending). If omitted, keep all."
+        ),
+    )
+    p.add_argument(
+        "--emin", type=float, default=None, metavar="E_MIN",
+        help=(
+            "Drop bins with energy <= E_MIN from each surviving "
+            "window before stitching."
+        ),
+    )
+    p.add_argument(
+        "--emax", type=float, default=None, metavar="E_MAX",
+        help=(
+            "Drop bins with energy >= E_MAX from each surviving "
+            "window before stitching."
         ),
     )
     return p
