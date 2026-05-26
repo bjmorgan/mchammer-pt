@@ -121,14 +121,11 @@ def find_phase_split(
 ) -> PhaseSplit:
     """Locate the two phase peaks and the dividing energy at T_K.
 
-    Phase peak positions (``E_peak_low``, ``E_peak_high``) are the
-    two dominant local minima of ``phi(E) = beta * E - ln g(E)`` at
-    the supplied temperature — equivalently, the two largest peaks
-    of ``P(E | T_K)``. They are temperature-dependent: as T varies,
-    the location where ``d(ln g)/dE = beta`` shifts with the slope
-    of ``ln g``. The valley position ``E_star`` is the maximum of
-    ``phi`` between the two peaks. All three positions are refined
-    to sub-bin precision by three-point parabolic fits.
+    The two phase peak positions ``E_peak_low`` and ``E_peak_high``
+    are the two deepest local minima of
+    ``phi(E) = beta * E - ln g(E)``. ``E_star`` is the maximum of
+    ``phi`` between them. All three positions are refined to
+    sub-bin precision by three-point parabolic fits.
 
     Args:
         dos: DataFrame with ``energy`` (eV) and ``entropy`` (``ln g``)
@@ -146,8 +143,7 @@ def find_phase_split(
         ValueError: if ``dos`` is empty or ``T_K <= 0``.
         NotBimodalError: if ``P(E | T_K)`` is not bimodal (fewer than
             two local minima of ``phi``, or the two deepest within
-            ``min_peak_separation`` bins of each other, or no interior
-            maximum of ``phi`` between them).
+            ``min_peak_separation`` bins of each other).
     """
     if dos.empty:
         raise ValueError("dos has no rows; need at least one energy bin")
@@ -160,6 +156,11 @@ def find_phase_split(
 
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
+    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
+        raise ValueError(
+            "find_phase_split: dos contains non-finite (NaN/inf) "
+            "values in 'energy' or 'entropy' columns"
+        )
     beta = 1.0 / (kB * T_K)
     phi = beta * energies - ln_g
 
@@ -188,13 +189,10 @@ def find_phase_split(
     )
 
     interior = slice(i_left, i_right + 1)
+    # i_valley is strictly between i_left and i_right: both are local
+    # minima of phi (strict interior minima), so phi at either endpoint
+    # of the slice is smaller than at least one neighbour inside the slice.
     i_valley = int(np.argmax(phi[interior])) + i_left
-    if i_valley == i_left or i_valley == i_right:
-        raise NotBimodalError(
-            f"find_phase_split: no interior maximum of phi between the "
-            f"two DOS peaks at T={T_K} K (phi monotonic across the "
-            f"inter-peak range; canonical distribution lacks a saddle)"
-        )
     E_star = _parabolic_vertex(
         energies[i_valley - 1], energies[i_valley], energies[i_valley + 1],
         phi[i_valley - 1], phi[i_valley], phi[i_valley + 1],
@@ -258,8 +256,13 @@ def _auto_bracket(
     """
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
+    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
+        raise ValueError(
+            "auto_bracket: dos contains non-finite (NaN/inf) "
+            "values in 'energy' or 'entropy' columns"
+        )
 
-    E_range = float(energies[-1] - energies[0])
+    E_range = float(energies.max() - energies.min())
     ln_g_range = float(ln_g.max() - ln_g.min())
     if ln_g_range < 1e-10:
         raise ValueError(
