@@ -327,10 +327,11 @@ def main(argv: list[str] | None = None) -> int:
         or args.emax is not None
     )
     if len(per_window) < 2:
-        # When no filters are active, len(per_window) == len(by_window) and
-        # the discovery-time guard above already returned. So we can only
-        # reach here with filters_active=True.
-        assert filters_active, "unreachable: discovery guard above returns first"
+        # Reachable only with filters_active=True: the discovery-time
+        # guard above returned for len(by_window) < 2, and per_window
+        # can only fall short of by_window when _trim_entropy_bins
+        # empties a window or _select_window_keys filters one out —
+        # both require --windows, --emin, or --emax.
         active_parts: list[str] = []
         if args.windows is not None:
             joined = ",".join(str(i) for i in args.windows)
