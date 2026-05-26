@@ -550,3 +550,44 @@ def test_stitch_then_equal_area_round_trip():
     assert result.latent_heat > 0.0
     # By construction, latent heat should be close to E_high - E_low = 2 eV.
     assert abs(result.latent_heat - 2.0) < 0.05
+
+
+def test_lattice_like_dos_is_monotone_in_energy():
+    from tests._coexistence_fixtures import lattice_like_dos
+
+    dos = lattice_like_dos(
+        A=30.0, B=2.5, w=0.05, E_c=0.0,
+        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
+    )
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    # Monotone increasing across the support.
+    assert (np.diff(ln_g) > 0).all()
+    # First bin rebased to zero (matches stitch_entropy contract).
+    assert ln_g[0] == pytest.approx(0.0, abs=1e-12)
+    # Grid is uniform.
+    assert np.allclose(np.diff(energies), 0.001)
+
+
+def test_lattice_like_dos_has_analytic_phase_peaks_at_design_beta():
+    # With A=30, B=2.5, w=0.05, E_c=0:
+    #   d(ln g)/dE = 30 + 50 / (1 + (E/0.05)**2)
+    #   max slope at E=0 is 80; asymptotic slope is 30.
+    # At beta = 55 (between 30 and 80) the equation
+    #   d(ln g)/dE = beta
+    # has two solutions: 50/(1+(E/0.05)**2) = 25 -> E = +/- 0.05.
+    from tests._coexistence_fixtures import lattice_like_dos
+
+    dos = lattice_like_dos(
+        A=30.0, B=2.5, w=0.05, E_c=0.0,
+        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
+    )
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    # Numerical derivative at E=0.05 and E=-0.05 should be close to 55.
+    i_pos = int(np.argmin(np.abs(energies - 0.05)))
+    i_neg = int(np.argmin(np.abs(energies - (-0.05))))
+    d_pos = (ln_g[i_pos + 1] - ln_g[i_pos - 1]) / (2 * 0.001)
+    d_neg = (ln_g[i_neg + 1] - ln_g[i_neg - 1]) / (2 * 0.001)
+    assert abs(d_pos - 55.0) < 0.5
+    assert abs(d_neg - 55.0) < 0.5

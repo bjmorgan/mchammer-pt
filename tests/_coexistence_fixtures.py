@@ -55,3 +55,51 @@ def single_gaussian_dos(
     log_g = -(energies - E_centre) ** 2 / (2.0 * sigma ** 2)
     log_g -= log_g.min()
     return pd.DataFrame({"energy": energies, "entropy": log_g})
+
+
+def lattice_like_dos(
+    *,
+    A: float,
+    B: float,
+    w: float,
+    E_c: float,
+    E_min: float,
+    E_max: float,
+    energy_spacing: float,
+) -> pd.DataFrame:
+    """Build a DOS with monotone ln g and a slope kink at E_c.
+
+    Models the canonical shape of a lattice-system DOS: ``ln g(E)``
+    rises monotonically across its support, with the slope steepening
+    locally around an energy ``E_c`` that represents the first-order
+    coexistence region.
+
+    Formula::
+
+        ln g(E) = A * E + B * arctan((E - E_c) / w)
+
+    so that::
+
+        d(ln g)/dE = A + (B / w) / (1 + ((E - E_c) / w) ** 2)
+
+    is strictly positive (monotone ``ln g``) when ``A > 0`` and varies
+    smoothly from the asymptotic slope ``A`` far from ``E_c`` to a
+    peak slope ``A + B / w`` at ``E_c``. For any inverse temperature
+    ``beta`` with ``A < beta < A + B / w``, ``d(ln g)/dE = beta`` has
+    two solutions — the two minima of ``phi(E) = beta * E - ln g(E)``
+    and hence the two peaks of ``P(E | T)``. Analytically the phase
+    peaks sit at::
+
+        E = E_c +/- w * sqrt(B / (w * (beta - A)) - 1)
+
+    The returned DataFrame has ``energy`` (eV) and ``entropy``
+    (``ln g``) columns on a uniform grid spanning ``[E_min, E_max]``
+    with spacing ``energy_spacing``. ``entropy`` is rebased so its
+    minimum is zero (matching ``stitch_entropy``'s output
+    convention).
+    """
+    n_bins = int(round((E_max - E_min) / energy_spacing)) + 1
+    energies = E_min + np.arange(n_bins) * energy_spacing
+    ln_g = A * energies + B * np.arctan((energies - E_c) / w)
+    ln_g -= ln_g.min()
+    return pd.DataFrame({"energy": energies, "entropy": ln_g})
