@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- ``mchammer_pt.analysis.coexistence.find_phase_split`` previously
+  located phase peaks as local maxima of ``ln g(E)``, an assumption
+  that holds only for synthetic bimodal-``ln g`` DOS shapes. For any
+  real lattice system, ``ln g(E)`` is monotonically increasing in
+  energy (combinatorial expansion of configurations), so the helper
+  raised ``NotBimodalError`` at every trial temperature and the
+  estimator was unusable on real REWL output. Phase peaks are now
+  correctly located as the two dominant local minima of
+  ``phi(E) = beta * E - ln g(E)`` (peaks of ``P(E | T)``), which is
+  temperature-dependent. ``_auto_bracket``'s ``kT_scale`` heuristic,
+  which used the same broken peak detection, is replaced with
+  ``(E_max - E_min) / (ln_g_max - ln_g_min)`` — the average slope of
+  the full DOS, well-defined for monotone ``ln g``.
+
 ## [0.16.0] - 2026-05-28
 
 ### Fixed
