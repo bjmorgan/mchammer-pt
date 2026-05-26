@@ -12,11 +12,12 @@ from tests._coexistence_fixtures import lattice_like_dos
 
 
 def _coexistence_dos():
-    # Lattice-like DOS with bimodal P(E|T) window in T ~ (145, 387) K.
-    # See lattice_like_dos docstring for the slope-kink mechanics.
+    # Lattice-like DOS: canonical phi at beta_c=10 is the designed
+    # double-well a*(E**2 - c**2)**2 with phase peaks at E = +/- 1;
+    # bimodal P(E|T) for T in ~(1006, 1372) K.
     return lattice_like_dos(
-        A=30.0, B=2.5, w=0.05, E_c=0.0,
-        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
 
 

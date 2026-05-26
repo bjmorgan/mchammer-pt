@@ -12,47 +12,51 @@ import pandas as pd
 
 def lattice_like_dos(
     *,
-    A: float,
-    B: float,
-    w: float,
-    E_c: float,
+    a: float,
+    beta_c: float,
+    c: float,
     E_min: float,
     E_max: float,
     energy_spacing: float,
 ) -> pd.DataFrame:
-    """Build a DOS with monotone ln g and a slope kink at E_c.
+    """Build a DOS with monotone ln g whose canonical P(E|T) is bimodal.
 
-    Models the canonical shape of a lattice-system DOS: ``ln g(E)``
-    rises monotonically across its support, with the slope steepening
-    locally around an energy ``E_c`` that represents the first-order
-    coexistence region.
+    Constructs the DOS by designing the canonical phi function
+    ``phi(E) = beta_c * E - ln g(E)`` as a quartic double-well::
 
-    Formula::
+        phi(E) = a * (E ** 2 - c ** 2) ** 2
 
-        ln g(E) = A * E + B * arctan((E - E_c) / w)
+    so that
 
-    so that::
+    .. code-block:: python
 
-        d(ln g)/dE = A + (B / w) / (1 + ((E - E_c) / w) ** 2)
+        ln g(E) = beta_c * E - a * (E ** 2 - c ** 2) ** 2
 
-    is strictly positive (monotone ``ln g``) when ``A > 0`` and varies
-    smoothly from the asymptotic slope ``A`` far from ``E_c`` to a
-    peak slope ``A + B / w`` at ``E_c``. For any inverse temperature
-    ``beta`` with ``A < beta < A + B / w``, ``d(ln g)/dE = beta`` has
-    two solutions — the two minima of ``phi(E) = beta * E - ln g(E)``
-    and hence the two peaks of ``P(E | T)``. Analytically the phase
-    peaks sit at::
+    At ``beta = beta_c``, phi is the designed double-well with minima
+    at ``E = +/- c`` and a maximum at ``E = 0``. ``d(ln g)/dE`` is
+    non-monotonic (local minimum at ``E = -c/sqrt(3)``, local maximum
+    at ``E = +c/sqrt(3)``) — exactly the slope-oscillation structure
+    that produces bimodal ``P(E|T)`` in a finite beta window around
+    ``beta_c``. As ``beta`` moves away from ``beta_c`` the linear
+    perturbation tilts phi; one well eventually swallows the other
+    and bimodality is lost. The bimodal-beta window has half-width
+    ``8 * a * c ** 3 / (3 * sqrt(3))``.
 
-        E = E_c +/- w * sqrt(B / (w * (beta - A)) - 1)
+    ``ln g(E)`` is monotonically increasing in ``E`` over the central
+    range where the cubic term has not yet overtaken the linear
+    ``beta_c * E`` term. The boundary of that range is the real root
+    of ``E ** 3 - c ** 2 * E - beta_c / (4 * a) = 0``. For
+    ``c = 1, beta_c = 10, a = 1`` this root is at ``E ≈ 1.65``, so a
+    safe energy range is ``[E_min, E_max] = [-1.5, 1.5]``.
 
-    The returned DataFrame has ``energy`` (eV) and ``entropy``
-    (``ln g``) columns on a uniform grid spanning ``[E_min, E_max]``
-    with spacing ``energy_spacing``. ``entropy`` is rebased so its
+    Returned DataFrame: ``energy`` (eV) and ``entropy`` (``ln g``)
+    columns on a uniform grid spanning ``[E_min, E_max]`` with
+    spacing ``energy_spacing``. ``entropy`` is rebased so its
     minimum is zero (matching ``stitch_entropy``'s output
     convention).
     """
     n_bins = int(round((E_max - E_min) / energy_spacing)) + 1
     energies = E_min + np.arange(n_bins) * energy_spacing
-    ln_g = A * energies + B * np.arctan((energies - E_c) / w)
+    ln_g = beta_c * energies - a * (energies ** 2 - c ** 2) ** 2
     ln_g -= ln_g.min()
     return pd.DataFrame({"energy": energies, "entropy": ln_g})

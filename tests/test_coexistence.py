@@ -221,13 +221,15 @@ def test_public_surface_reexported_from_analysis():
 
 
 def test_lattice_like_dos_is_monotone_in_energy():
+    # For a=1, beta_c=10, c=1 the boundary of monotonicity is the
+    # real root of E**3 - E - 2.5 = 0 at E ~ 1.65; [-1.5, 1.5] is
+    # comfortably inside.
     dos = lattice_like_dos(
-        A=30.0, B=2.5, w=0.05, E_c=0.0,
-        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
-    # Monotone increasing across the support.
     assert (np.diff(ln_g) > 0).all()
     # First bin rebased to zero (matches stitch_entropy contract).
     assert ln_g[0] == pytest.approx(0.0, abs=1e-12)
@@ -235,23 +237,24 @@ def test_lattice_like_dos_is_monotone_in_energy():
     assert np.allclose(np.diff(energies), 0.001)
 
 
-def test_lattice_like_dos_has_analytic_phase_peaks_at_design_beta():
-    # With A=30, B=2.5, w=0.05, E_c=0:
-    #   d(ln g)/dE = 30 + 50 / (1 + (E/0.05)**2)
-    #   max slope at E=0 is 80; asymptotic slope is 30.
-    # At beta = 55 (between 30 and 80) the equation
-    #   d(ln g)/dE = beta
-    # has two solutions: 50/(1+(E/0.05)**2) = 25 -> E = +/- 0.05.
+def test_lattice_like_dos_phi_is_quartic_double_well_at_design_beta():
+    # The fixture is built so that at beta = beta_c the canonical
+    # phi(E) = beta_c * E - ln g(E) = a * (E**2 - c**2)**2 is a clean
+    # quartic double-well: minima at E = +/- c with equal depth, a
+    # maximum at E = 0 between them.
     dos = lattice_like_dos(
-        A=30.0, B=2.5, w=0.05, E_c=0.0,
-        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
-    # Numerical derivative at E=0.05 and E=-0.05 should be close to 55.
-    i_pos = int(np.argmin(np.abs(energies - 0.05)))
-    i_neg = int(np.argmin(np.abs(energies - (-0.05))))
-    d_pos = (ln_g[i_pos + 1] - ln_g[i_pos - 1]) / (2 * 0.001)
-    d_neg = (ln_g[i_neg + 1] - ln_g[i_neg - 1]) / (2 * 0.001)
-    assert abs(d_pos - 55.0) < 0.5
-    assert abs(d_neg - 55.0) < 0.5
+    beta_c = 10.0
+    phi = beta_c * energies - ln_g
+    i_zero = int(np.argmin(np.abs(energies)))
+    i_pos = int(np.argmin(np.abs(energies - 1.0)))
+    i_neg = int(np.argmin(np.abs(energies - (-1.0))))
+    # Saddle higher than both wells.
+    assert phi[i_zero] > phi[i_pos]
+    assert phi[i_zero] > phi[i_neg]
+    # Wells equally deep by construction.
+    assert abs(phi[i_pos] - phi[i_neg]) < 0.01
