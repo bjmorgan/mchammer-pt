@@ -276,6 +276,13 @@ def main(argv: list[str] | None = None) -> int:
         key = (params["energy_limit_left"], params["energy_limit_right"])
         by_window[key].append(dc)
 
+    if args.emin is not None and args.emax is not None and args.emin >= args.emax:
+        print(
+            f"error: --emin ({args.emin}) must be < --emax ({args.emax})",
+            file=sys.stderr,
+        )
+        return 2
+
     if len(by_window) < 2:
         print(
             f"error: stitching needs at least two distinct windows; got "
@@ -285,8 +292,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    per_window = []
-    for (lo, hi), containers in by_window.items():
+    kept_keys, err = _select_window_keys(by_window, args.windows)
+    if err is not None:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+
+    per_window: list[pd.DataFrame] = []
+    surviving_keys: list[tuple[float | None, float | None]] = []
+    for lo, hi in kept_keys:
+        containers = by_window[(lo, hi)]
         result = WindowResult(
             energy_limit_left=float(lo) if lo is not None else float("-inf"),
             energy_limit_right=float(hi) if hi is not None else float("inf"),
@@ -301,7 +315,40 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        df = _trim_entropy_bins(df, args.emin, args.emax)
+        if df.empty:
+            continue  # whole window trimmed away; drop silently
         per_window.append(df)
+        surviving_keys.append((lo, hi))
+
+    filters_active = (
+        args.windows is not None
+        or args.emin is not None
+        or args.emax is not None
+    )
+    if len(per_window) < 2:
+        if filters_active:
+            active_parts = []
+            if args.windows is not None:
+                active_parts.append(f"--windows={','.join(str(i) for i in args.windows)}")
+            if args.emin is not None:
+                active_parts.append(f"--emin={args.emin}")
+            if args.emax is not None:
+                active_parts.append(f"--emax={args.emax}")
+            print(
+                f"error: filters left fewer than 2 windows for stitching "
+                f"({' '.join(active_parts)}; "
+                f"{_format_window_summary(surviving_keys, len(by_window))})",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"error: stitching needs at least two distinct windows; got "
+            f"{len(per_window)} (all containers share the same "
+            f"energy_limit_left/right)",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         stitched, errors = stitch_entropy(per_window, energy_spacing)
@@ -317,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     msg = f"wrote {args.output} ({len(stitched)} rows)"
     if errors:
         msg += f"; max overlap std = {max(errors.values()):.3g}"
+    if filters_active:
+        msg += "; " + _format_window_summary(surviving_keys, len(by_window))
     print(msg)
     return 0
 

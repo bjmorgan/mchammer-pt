@@ -446,3 +446,155 @@ def test_format_window_summary_handles_none_bounds():
 def test_format_window_summary_no_kept_windows():
     out = _format_window_summary(kept_keys=[], total=5)
     assert "kept 0 of 5 windows" in out
+
+
+def _three_window_mocks() -> tuple[object, object, object]:
+    """Three adjacent windows with simple linear ``ln g`` in each."""
+    a = _mock_dc(
+        entropy={-4: 0.0, -3: 0.4, -2: 0.7},
+        energy_spacing=0.5,
+        energy_limit_left=-2.0,
+        energy_limit_right=-1.0,
+    )
+    b = _mock_dc(
+        entropy={-3: 0.9, -2: 1.0, -1: 1.2},
+        energy_spacing=0.5,
+        energy_limit_left=-1.5,
+        energy_limit_right=-0.5,
+    )
+    c = _mock_dc(
+        entropy={-2: 1.4, -1: 1.5, 0: 1.7},
+        energy_spacing=0.5,
+        energy_limit_left=-1.0,
+        energy_limit_right=0.0,
+    )
+    return a, b, c
+
+
+def test_stitch_cli_windows_filter_drops_lowest(tmp_path, monkeypatch, capsys):
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    out = tmp_path / "dos.csv"
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--windows", "1,2",
+        "-o", str(out),
+    ])
+    assert rc == 0
+    df = pd.read_csv(out)
+    # Window 0 (energies -2.0 .. -1.0) dropped; stitched DOS covers
+    # the bins from windows 1 and 2 only.
+    assert df["energy"].min() >= -1.5 - 1e-9
+    stdout = capsys.readouterr().out
+    assert "kept 2 of 3 windows" in stdout
+
+
+def test_stitch_cli_emin_trims_low_bins(tmp_path, monkeypatch, capsys):
+    # Mock-window energies (energy_spacing=0.5, integer bin keys):
+    #   window A bins: -2.0, -1.5, -1.0
+    #   window B bins: -1.5, -1.0, -0.5
+    #   window C bins: -1.0, -0.5,  0.0
+    # --emin=-1.5 drops bins at E <= -1.5 (strict). Window A keeps
+    # -1.0 only; window B keeps -1.0 and -0.5; window C keeps all
+    # three. Stitched DOS therefore contains no bins at or below -1.5.
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    out = tmp_path / "dos.csv"
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--emin", "-1.5",
+        "-o", str(out),
+    ])
+    assert rc == 0
+    df = pd.read_csv(out)
+    assert (df["energy"] > -1.5).all()
+
+
+def test_stitch_cli_emin_drops_entire_window_when_out_of_range(
+    tmp_path, monkeypatch, capsys,
+):
+    # --emin=-1.0 drops every bin in window A (its three bins are
+    # -2.0, -1.5, -1.0, all <= -1.0). Window A's trimmed DataFrame
+    # is empty and the window is silently dropped from per_window.
+    # Window B keeps -0.5 only (one bin); window C keeps -0.5 and
+    # 0.0; stitch sees the overlap at -0.5.
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    out = tmp_path / "dos.csv"
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--emin", "-1.0",
+        "-o", str(out),
+    ])
+    assert rc == 0
+    stdout = capsys.readouterr().out
+    assert "kept 2 of 3 windows" in stdout
+
+
+def test_stitch_cli_rejects_emin_not_below_emax(
+    tmp_path, monkeypatch, capsys,
+):
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--emin", "-1.0", "--emax", "-2.0",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--emin" in err and "--emax" in err
+
+
+def test_stitch_cli_rejects_windows_out_of_range(
+    tmp_path, monkeypatch, capsys,
+):
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--windows", "0,7",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "out of range" in err
+    assert "7" in err
+
+
+def test_stitch_cli_filters_reducing_below_two_windows_has_distinct_error(
+    tmp_path, monkeypatch, capsys,
+):
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--windows", "0",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "fewer than 2 windows" in err
+    assert "--windows" in err
+    # The 'distinct error' (not the existing 'needs at least two
+    # distinct windows' message) so we verify the discovery-side
+    # phrasing did not fire:
+    assert "all containers share" not in err
