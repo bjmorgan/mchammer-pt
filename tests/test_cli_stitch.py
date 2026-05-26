@@ -503,6 +503,38 @@ def test_stitch_cli_windows_filter_drops_lowest(tmp_path, monkeypatch, capsys):
     assert "kept 2 of 3 windows" in stdout
 
 
+def test_stitch_cli_windows_and_emin_compose(tmp_path, monkeypatch, capsys):
+    # --windows=1,2 keeps the two upper windows (B and C); --emin=-1.0
+    # then trims their bins at or below -1.0. After both:
+    #   Window B (-1.5, -1.0, -0.5) -> keeps -0.5
+    #   Window C (-1.0, -0.5,  0.0) -> keeps -0.5 and 0.0
+    # If the filter order were reversed (trim first, then index-select),
+    # window A would still be dropped but the resulting bins would be
+    # the same; this test catches a regression that mis-orders the
+    # filters AND changes the kept-windows accounting (e.g. by
+    # selecting after trim, window indices would be re-numbered against
+    # the trimmed-empty windows and "--windows 1,2" would mean
+    # something different).
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    out = tmp_path / "dos.csv"
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--windows", "1,2",
+        "--emin", "-1.0",
+        "-o", str(out),
+    ])
+    assert rc == 0
+    df = pd.read_csv(out)
+    assert (df["energy"] > -1.0).all()
+    assert df["energy"].max() == pytest.approx(0.0)
+    stdout = capsys.readouterr().out
+    assert "kept 2 of 3 windows" in stdout
+
+
 def test_stitch_cli_emin_trims_low_bins(tmp_path, monkeypatch, capsys):
     # Mock-window energies (energy_spacing=0.5, integer bin keys):
     #   window A bins: -2.0, -1.5, -1.0
@@ -551,6 +583,11 @@ def test_stitch_cli_emin_drops_entire_window_when_out_of_range(
     assert rc == 0
     stdout = capsys.readouterr().out
     assert "kept 2 of 3 windows" in stdout
+    # Window A's bins (-2.0, -1.5, -1.0) all fail the emin=-1.0 filter
+    # and the whole window is silently dropped. The stitched DOS must
+    # contain no bins at or below -1.0.
+    df = pd.read_csv(out)
+    assert (df["energy"] > -1.0).all()
 
 
 def test_stitch_cli_emax_trims_high_bins(tmp_path, monkeypatch, capsys):
@@ -631,7 +668,4 @@ def test_stitch_cli_filters_reducing_below_two_windows_has_distinct_error(
     err = capsys.readouterr().err
     assert "fewer than 2 windows" in err
     assert "--windows" in err
-    # The 'distinct error' (not the existing 'needs at least two
-    # distinct windows' message) so we verify the discovery-side
-    # phrasing did not fire:
     assert "all containers share" not in err

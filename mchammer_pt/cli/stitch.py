@@ -197,12 +197,12 @@ def _select_window_keys(
 def _trim_entropy_bins(
     df: pd.DataFrame, emin: float | None, emax: float | None,
 ) -> pd.DataFrame:
-    """Return a copy of ``df`` with bins below/above the threshold dropped.
+    """Return a copy of ``df`` with bins outside ``(emin, emax)`` dropped.
 
-    ``emin`` and ``emax`` are bin-wise: a bin at exactly ``emin`` is
-    dropped (strict ``<=``); same for ``emax`` (strict ``>=``). Either
-    or both may be ``None``, in which case that side is not trimmed.
-    The returned DataFrame may be empty.
+    The kept interval is open: a bin at exactly ``emin`` is dropped, and
+    a bin at exactly ``emax`` is dropped. Either bound may be ``None``,
+    in which case that side is not trimmed. The returned DataFrame may
+    be empty.
     """
     mask = pd.Series(True, index=df.index)
     if emin is not None:
