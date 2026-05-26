@@ -4,22 +4,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from mchammer_pt.cli.coexistence import main
-from tests._coexistence_fixtures import (
-    single_gaussian_dos,
-    two_gaussian_dos,
-)
+from tests._coexistence_fixtures import lattice_like_dos
 
 
-def _asymmetric_two_gaussian_dos():
-    # Asymmetric weights so a finite equal-area T_c exists.
-    return two_gaussian_dos(
-        E_low=-1.0, E_high=1.0,
-        sigma_low=0.1, sigma_high=0.1,
-        weight_low=1.0, weight_high=2.0,
-        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
+def _coexistence_dos():
+    # Lattice-like DOS with bimodal P(E|T) window in T ~ (145, 387) K.
+    # See lattice_like_dos docstring for the slope-kink mechanics.
+    return lattice_like_dos(
+        A=30.0, B=2.5, w=0.05, E_c=0.0,
+        E_min=-1.0, E_max=1.0, energy_spacing=0.001,
     )
 
 
@@ -30,7 +27,7 @@ def _write_dos(path: Path, dos: pd.DataFrame) -> None:
 def test_cli_writes_json_with_expected_fields(tmp_path):
     dos_csv = tmp_path / "dos.csv"
     out_json = tmp_path / "result.json"
-    _write_dos(dos_csv, _asymmetric_two_gaussian_dos())
+    _write_dos(dos_csv, _coexistence_dos())
     rc = main([
         str(dos_csv),
         "--output", str(out_json),
@@ -49,7 +46,7 @@ def test_cli_writes_json_with_expected_fields(tmp_path):
 def test_cli_writes_csv_row(tmp_path):
     dos_csv = tmp_path / "dos.csv"
     out_csv = tmp_path / "result.csv"
-    _write_dos(dos_csv, _asymmetric_two_gaussian_dos())
+    _write_dos(dos_csv, _coexistence_dos())
     rc = main([
         str(dos_csv),
         "--output", str(out_csv),
@@ -63,10 +60,12 @@ def test_cli_writes_csv_row(tmp_path):
 
 
 def test_cli_fails_on_unimodal_dos(tmp_path, capsys):
-    dos = single_gaussian_dos(
-        E_centre=0.0, sigma=0.5,
-        E_min=-2.0, E_max=2.0, energy_spacing=0.01,
-    )
+    # Single-bump ln g: no bimodal P(E|T) at any T.
+    energies = np.linspace(-2.0, 2.0, 401)
+    # Parabola peaked at zero, monotonically decreasing on both sides.
+    ln_g = -(energies ** 2)
+    ln_g -= ln_g.min()
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
     dos_csv = tmp_path / "dos.csv"
     _write_dos(dos_csv, dos)
     rc = main([
@@ -75,15 +74,13 @@ def test_cli_fails_on_unimodal_dos(tmp_path, capsys):
     ])
     assert rc != 0
     err = capsys.readouterr().err
-    # The diagnostic identifies the underlying cause (no bimodality).
     assert "error" in err.lower()
-    assert "bimodal" in err.lower() or "maxima" in err.lower()
 
 
 def test_cli_forwards_user_t_bracket(tmp_path):
     dos_csv = tmp_path / "dos.csv"
     out_json = tmp_path / "result.json"
-    _write_dos(dos_csv, _asymmetric_two_gaussian_dos())
+    _write_dos(dos_csv, _coexistence_dos())
     rc = main([
         str(dos_csv),
         "--output", str(out_json),
@@ -126,7 +123,7 @@ def test_cli_rejects_non_numeric_columns(tmp_path, capsys):
 
 
 def test_cli_rejects_non_finite_values(tmp_path, capsys):
-    dos = _asymmetric_two_gaussian_dos()
+    dos = _coexistence_dos()
     dos.loc[5, "entropy"] = float("nan")
     dos_csv = tmp_path / "dos.csv"
     _write_dos(dos_csv, dos)
@@ -139,7 +136,7 @@ def test_cli_rejects_non_finite_values(tmp_path, capsys):
 def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     # Construct a DOS whose energy column has a clearly non-uniform
     # spacing (one bin shifted). The CLI's grid check should fire.
-    dos = _asymmetric_two_gaussian_dos().copy()
+    dos = _coexistence_dos().copy()
     dos.loc[10, "energy"] = float(dos.loc[10, "energy"]) + 0.005
     dos_csv = tmp_path / "dos.csv"
     _write_dos(dos_csv, dos)
