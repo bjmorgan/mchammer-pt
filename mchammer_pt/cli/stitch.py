@@ -24,6 +24,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import pandas as pd
 from mchammer.data_containers.base_data_container import BaseDataContainer
 from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
@@ -34,6 +35,16 @@ from mchammer_pt.analysis.dos import stitch_entropy
 from mchammer_pt.wl_result import WindowResult
 
 _REQUIRED_PARAMS = ("energy_spacing", "energy_limit_left", "energy_limit_right")
+
+
+def _parse_window_indices(s: str) -> list[int]:
+    """argparse type for ``--windows``: comma-separated 0-based ints."""
+    try:
+        return [int(x) for x in s.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--windows: expected comma-separated integers; got {s!r}"
+        ) from exc
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -72,6 +83,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "If given, each walker contributes the entropy recorded at "
             "the step when its fill factor first reached this limit."
+        ),
+    )
+    p.add_argument(
+        "--windows", type=_parse_window_indices, default=None,
+        metavar="IDX[,IDX...]",
+        help=(
+            "Comma-separated 0-based window indices to keep "
+            "(energy-sorted ascending). If omitted, keep all."
+        ),
+    )
+    p.add_argument(
+        "--emin", type=float, default=None, metavar="E_MIN",
+        help=(
+            "Drop bins at or below E_MIN from each surviving "
+            "window before stitching (kept interval is open above E_MIN)."
+        ),
+    )
+    p.add_argument(
+        "--emax", type=float, default=None, metavar="E_MAX",
+        help=(
+            "Drop bins at or above E_MAX from each surviving "
+            "window before stitching (kept interval is open below E_MAX)."
         ),
     )
     return p
@@ -130,6 +163,69 @@ def _get_window_params(
     return params, None
 
 
+def _select_window_keys(
+    by_window: dict[tuple[float | None, float | None], list[BaseDataContainer]],
+    windows_keep: list[int] | None,
+) -> tuple[list[tuple[float | None, float | None]], str | None]:
+    """Return the window keys to keep in energy-sorted order.
+
+    Sorts ``by_window`` keys by ``energy_limit_left`` ascending (treating
+    ``None`` as ``-inf``), with ``energy_limit_right`` (``None`` -> ``+inf``)
+    as a tie-breaker so windows that share a left bound are ordered
+    deterministically by their upper edge. If ``windows_keep`` is
+    ``None``, returns all keys. Otherwise filters by the supplied
+    0-based indices.
+
+    Returns ``(keys, error_message)``. On error the keys list is empty.
+    """
+    def sort_key(k: tuple[float | None, float | None]) -> tuple[float, float]:
+        lo, hi = k
+        lo_val = float("-inf") if lo is None else float(lo)
+        hi_val = float("inf") if hi is None else float(hi)
+        return lo_val, hi_val
+
+    ordered = sorted(by_window.keys(), key=sort_key)
+    if windows_keep is None:
+        return ordered, None
+
+    n = len(ordered)
+    bad = [i for i in windows_keep if i < 0 or i >= n]
+    if bad:
+        return [], (
+            f"--windows index {bad[0]} out of range; discovered "
+            f"{n} windows (valid: 0..{n - 1})"
+        )
+    keep = sorted(set(windows_keep))
+    return [ordered[i] for i in keep], None
+
+
+def _trim_entropy_bins(
+    df: pd.DataFrame, emin: float | None, emax: float | None,
+) -> pd.DataFrame:
+    """Return a copy of ``df`` with bins outside ``(emin, emax)`` dropped.
+
+    The kept interval is open: a bin at exactly ``emin`` is dropped, and
+    a bin at exactly ``emax`` is dropped. Either bound may be ``None``,
+    in which case that side is not trimmed. The returned DataFrame may
+    be empty.
+    """
+    mask = pd.Series(True, index=df.index)
+    if emin is not None:
+        mask &= df["energy"] > emin
+    if emax is not None:
+        mask &= df["energy"] < emax
+    return df.loc[mask].reset_index(drop=True)
+
+
+def _format_window_summary(
+    kept_keys: list[tuple[float | None, float | None]],
+    total: int,
+) -> str:
+    """Build the 'kept K of W windows: ...' fragment for the success line."""
+    pairs = ", ".join(f"({lo}, {hi})" for lo, hi in kept_keys)
+    return f"kept {len(kept_keys)} of {total} windows: {pairs}"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -185,6 +281,13 @@ def main(argv: list[str] | None = None) -> int:
         key = (params["energy_limit_left"], params["energy_limit_right"])
         by_window[key].append(dc)
 
+    if args.emin is not None and args.emax is not None and args.emin >= args.emax:
+        print(
+            f"error: --emin ({args.emin}) must be < --emax ({args.emax})",
+            file=sys.stderr,
+        )
+        return 2
+
     if len(by_window) < 2:
         print(
             f"error: stitching needs at least two distinct windows; got "
@@ -194,8 +297,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    per_window = []
-    for (lo, hi), containers in by_window.items():
+    kept_keys, err = _select_window_keys(by_window, args.windows)
+    if err is not None:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+
+    per_window: list[pd.DataFrame] = []
+    surviving_keys: list[tuple[float | None, float | None]] = []
+    for lo, hi in kept_keys:
+        containers = by_window[(lo, hi)]
         result = WindowResult(
             energy_limit_left=float(lo) if lo is not None else float("-inf"),
             energy_limit_right=float(hi) if hi is not None else float("inf"),
@@ -210,7 +320,35 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        df = _trim_entropy_bins(df, args.emin, args.emax)
+        if df.empty:
+            continue
         per_window.append(df)
+        surviving_keys.append((lo, hi))
+
+    filters_active = (
+        args.windows is not None
+        or args.emin is not None
+        or args.emax is not None
+    )
+    if len(per_window) < 2:
+        # Reachable only with filters_active=True (discovery-time
+        # guard above handles the no-filter case).
+        active_parts: list[str] = []
+        if args.windows is not None:
+            joined = ",".join(str(i) for i in args.windows)
+            active_parts.append(f"--windows={joined}")
+        if args.emin is not None:
+            active_parts.append(f"--emin={args.emin}")
+        if args.emax is not None:
+            active_parts.append(f"--emax={args.emax}")
+        print(
+            f"error: filters left fewer than 2 windows for stitching "
+            f"({' '.join(active_parts)}; "
+            f"{_format_window_summary(surviving_keys, len(by_window))})",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         stitched, errors = stitch_entropy(per_window, energy_spacing)
@@ -226,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     msg = f"wrote {args.output} ({len(stitched)} rows)"
     if errors:
         msg += f"; max overlap std = {max(errors.values()):.3g}"
+    if filters_active:
+        msg += "; " + _format_window_summary(surviving_keys, len(by_window))
     print(msg)
     return 0
 
