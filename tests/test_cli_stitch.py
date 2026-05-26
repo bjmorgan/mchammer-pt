@@ -1,6 +1,7 @@
 """Tests for mchammer_pt.cli.stitch."""
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -15,6 +16,7 @@ from mchammer.data_containers.wang_landau_data_container import (
 from mchammer_pt.cli.stitch import (
     _build_parser,
     _format_window_summary,
+    _parse_window_indices,
     _select_window_keys,
     _trim_entropy_bins,
     main,
@@ -184,7 +186,7 @@ def test_stitch_cli_rejects_disagreeing_energy_spacing(
 
 # --- Happy paths ----------------------------------------------------------
 
-def test_stitch_cli_writes_csv_from_containers(tmp_path, monkeypatch):
+def test_stitch_cli_writes_csv_from_containers(tmp_path, monkeypatch, capsys):
     a = _mock_dc(
         entropy={-2: 0.0, -1: 0.4, 0: 0.7},
         energy_spacing=0.5,
@@ -210,6 +212,8 @@ def test_stitch_cli_writes_csv_from_containers(tmp_path, monkeypatch):
     assert list(df.columns) == ["energy", "entropy"]
     assert len(df) == 4
     assert df["entropy"].min() == pytest.approx(0.0, abs=1e-12)
+    stdout = capsys.readouterr().out
+    assert "kept" not in stdout
 
 
 def test_stitch_cli_writes_csv_from_checkpoint(tmp_path, monkeypatch):
@@ -331,6 +335,13 @@ def test_parser_defaults_filter_flags_to_none():
     assert args.windows is None
     assert args.emin is None
     assert args.emax is None
+
+
+def test_parse_window_indices_rejects_non_integer():
+    with pytest.raises(
+        argparse.ArgumentTypeError, match="expected comma-separated integers"
+    ):
+        _parse_window_indices("0,abc,2")
 
 
 def test_select_window_keys_returns_all_sorted_when_none():
@@ -540,6 +551,30 @@ def test_stitch_cli_emin_drops_entire_window_when_out_of_range(
     assert rc == 0
     stdout = capsys.readouterr().out
     assert "kept 2 of 3 windows" in stdout
+
+
+def test_stitch_cli_emax_trims_high_bins(tmp_path, monkeypatch, capsys):
+    # Symmetric counterpart to test_stitch_cli_emin_trims_low_bins:
+    # --emax=-0.5 drops bins at E >= -0.5 (strict) across all windows.
+    # Window A keeps -2.0, -1.5, -1.0; window B keeps -1.5, -1.0;
+    # window C keeps -1.0 only. Stitched DOS contains no bins at or
+    # above -0.5.
+    a, b, c = _three_window_mocks()
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c], None),
+    )
+    out = tmp_path / "dos.csv"
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--emax", "-0.5",
+        "-o", str(out),
+    ])
+    assert rc == 0
+    df = pd.read_csv(out)
+    assert (df["energy"] < -0.5).all()
+    stdout = capsys.readouterr().out
+    assert "kept 3 of 3 windows" in stdout
 
 
 def test_stitch_cli_rejects_emin_not_below_emax(
