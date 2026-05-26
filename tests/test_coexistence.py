@@ -351,3 +351,77 @@ def test_auto_bracket_raises_value_error_on_flat_ln_g():
     })
     with pytest.raises(ValueError, match="kT scale"):
         _auto_bracket(dos)
+
+
+def test_equal_area_temperature_on_lattice_like_dos():
+    # Fixture: a=1, beta_c=10, c=1. Bimodal-beta window
+    # (beta_c +/- 8 a c^3 / (3 sqrt(3))) ~ (8.46, 11.54),
+    # T window ~ (1006, 1372) K. By symmetry of the fixture
+    # (E_low = -c, E_high = +c, equal phi-well depths at beta_c)
+    # the equal-area Tc is exactly beta_c -> T = 1 / (kB * 10).
+    # The half-width 8/(3 sqrt(3)) = 1.5396... rounds to 1.54, so the
+    # rounded edges 8.46 and 11.54 sit on/just outside the strict
+    # bimodal window; we inset to 8.5 / 11.5 (still tight on Tc=10)
+    # to guarantee both endpoints yield a valid PhaseSplit.
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    T_bimodal_lo = 1.0 / (kB * 11.5)
+    T_bimodal_hi = 1.0 / (kB * 8.5)
+    T_c_analytic = 1.0 / (kB * 10.0)
+    result = equal_area_temperature(
+        dos, T_bracket=(T_bimodal_lo, T_bimodal_hi),
+    )
+    assert T_bimodal_lo < result.T_K < T_bimodal_hi
+    assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.01
+    # weight_imbalance is in the same (unnormalised) units as
+    # partition_sums, so we check it relative to the total partition
+    # weight at the converged Tc. Default xtol=1e-4 narrows T to a
+    # window ~0.1 K wide; for this fixture the imbalance(T) slope is
+    # steep, giving an absolute residual ~0.3 against a total ~1930
+    # (relative ~1.4e-4).
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_low, w_high = _partition_sums(
+        energies, ln_g, result.T_K, result.split.E_star,
+    )
+    assert result.weight_imbalance / (w_low + w_high) < 1e-3
+    assert result.latent_heat > 0.0
+    # Returned PhaseSplit must be self-consistent: re-running
+    # find_phase_split at result.T_K must reproduce the same split.
+    re_split = find_phase_split(dos, T_K=result.T_K)
+    assert abs(re_split.E_star - result.split.E_star) < 1e-6
+
+
+def test_equal_area_temperature_auto_bracket_on_lattice_like_dos():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    result = equal_area_temperature(dos)  # no T_bracket -> auto
+    T_bimodal_lo = 1.0 / (kB * 11.54)
+    T_bimodal_hi = 1.0 / (kB * 8.46)
+    assert T_bimodal_lo < result.T_K < T_bimodal_hi
+    # See bracketed-case note above on weight_imbalance vs. xtol.
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_low, w_high = _partition_sums(
+        energies, ln_g, result.T_K, result.split.E_star,
+    )
+    assert result.weight_imbalance / (w_low + w_high) < 1e-3
+    assert result.latent_heat > 0.0
+
+
+def test_equal_area_temperature_raises_no_bracket_on_bad_user_range():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    # T well above the bimodal window (beta ~ 1-2, far below beta_c):
+    # P is unimodal, find_phase_split fails at the bracket endpoint,
+    # surfaced as NoBracketError.
+    T_too_hot_lo = 1.0 / (kB * 2.0)
+    T_too_hot_hi = 1.0 / (kB * 1.0)
+    with pytest.raises(NoBracketError):
+        equal_area_temperature(dos, T_bracket=(T_too_hot_lo, T_too_hot_hi))
