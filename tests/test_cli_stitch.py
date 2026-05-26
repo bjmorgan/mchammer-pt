@@ -503,18 +503,58 @@ def test_stitch_cli_windows_filter_drops_lowest(tmp_path, monkeypatch, capsys):
     assert "kept 2 of 3 windows" in stdout
 
 
+def test_stitch_cli_windows_with_hole_fails_at_stitch(
+    tmp_path, monkeypatch, capsys,
+):
+    # A user who selects non-adjacent windows (skipping the middle
+    # two of a four-window ladder) leaves a gap that stitch_entropy
+    # cannot bridge — windows 0 and 3 share no overlap bins. The CLI
+    # surfaces this via the existing stitch_entropy ValueError catch.
+    a = _mock_dc(
+        entropy={-4: 0.0, -3: 0.4, -2: 0.7},
+        energy_spacing=0.5,
+        energy_limit_left=-2.0,
+        energy_limit_right=-1.0,
+    )
+    b = _mock_dc(
+        entropy={-3: 0.9, -2: 1.0, -1: 1.2},
+        energy_spacing=0.5,
+        energy_limit_left=-1.5,
+        energy_limit_right=-0.5,
+    )
+    c = _mock_dc(
+        entropy={-2: 1.4, -1: 1.5, 0: 1.7},
+        energy_spacing=0.5,
+        energy_limit_left=-1.0,
+        energy_limit_right=0.0,
+    )
+    d = _mock_dc(
+        entropy={1: 1.9, 2: 2.0, 3: 2.2},
+        energy_spacing=0.5,
+        energy_limit_left=0.5,
+        energy_limit_right=1.5,
+    )
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda _: (None, [a, b, c, d], None),
+    )
+    rc = main([
+        str(tmp_path / "run.h5"),
+        "--windows", "0,3",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "stitching failed" in err
+    assert "overlap" in err.lower()
+
+
 def test_stitch_cli_windows_and_emin_compose(tmp_path, monkeypatch, capsys):
-    # --windows=1,2 keeps the two upper windows (B and C); --emin=-1.0
-    # then trims their bins at or below -1.0. After both:
+    # --windows indexes discovery order, applied first; --emin then
+    # trims bins from each surviving window. With --windows=1,2 and
+    # --emin=-1.0:
     #   Window B (-1.5, -1.0, -0.5) -> keeps -0.5
     #   Window C (-1.0, -0.5,  0.0) -> keeps -0.5 and 0.0
-    # If the filter order were reversed (trim first, then index-select),
-    # window A would still be dropped but the resulting bins would be
-    # the same; this test catches a regression that mis-orders the
-    # filters AND changes the kept-windows accounting (e.g. by
-    # selecting after trim, window indices would be re-numbered against
-    # the trimmed-empty windows and "--windows 1,2" would mean
-    # something different).
     a, b, c = _three_window_mocks()
     monkeypatch.setattr(
         "mchammer_pt.cli.stitch.read_hdf5",

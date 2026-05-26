@@ -96,15 +96,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--emin", type=float, default=None, metavar="E_MIN",
         help=(
-            "Drop bins with energy <= E_MIN from each surviving "
-            "window before stitching."
+            "Drop bins at or below E_MIN from each surviving "
+            "window before stitching (kept interval is open above E_MIN)."
         ),
     )
     p.add_argument(
         "--emax", type=float, default=None, metavar="E_MAX",
         help=(
-            "Drop bins with energy >= E_MAX from each surviving "
-            "window before stitching."
+            "Drop bins at or above E_MAX from each surviving "
+            "window before stitching (kept interval is open below E_MAX)."
         ),
     )
     return p
