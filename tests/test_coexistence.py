@@ -15,6 +15,7 @@ from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
     PhaseSplit,
+    _auto_bracket,
     _parabolic_vertex,
     _two_dominant_peak_indices,
     equal_area_temperature,
@@ -319,3 +320,34 @@ def test_find_phase_split_raises_outside_bimodal_window():
     T_above = 1.0 / (kB * 2.0)
     with pytest.raises(NotBimodalError):
         find_phase_split(dos, T_K=T_above)
+
+
+def test_auto_bracket_returns_valid_range_on_lattice_like_dos():
+    # Fixture's bimodal-P window is T ~ (1006, 1372) K.
+    # auto_bracket must return a (T_lo, T_hi) bracket whose endpoints
+    # both yield a valid find_phase_split, and whose imbalance signs
+    # differ (so it brackets the equal-area Tc inside the bimodal
+    # window).
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    T_lo, T_hi = _auto_bracket(dos)
+    assert T_lo > 0.0
+    assert T_hi > T_lo
+    # Both endpoints sit inside the bimodal window (give a valid
+    # PhaseSplit).
+    split_lo = find_phase_split(dos, T_K=T_lo)
+    split_hi = find_phase_split(dos, T_K=T_hi)
+    assert split_lo.E_peak_low < split_lo.E_peak_high
+    assert split_hi.E_peak_low < split_hi.E_peak_high
+
+
+def test_auto_bracket_raises_value_error_on_flat_ln_g():
+    # A DOS with constant ln g has no slope to derive kT_scale from.
+    dos = pd.DataFrame({
+        "energy": np.linspace(-1.0, 1.0, 21),
+        "entropy": np.zeros(21),
+    })
+    with pytest.raises(ValueError, match="kT scale"):
+        _auto_bracket(dos)

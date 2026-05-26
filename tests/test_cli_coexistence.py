@@ -79,18 +79,19 @@ def test_cli_fails_on_unimodal_dos(tmp_path, capsys):
 
 
 def test_cli_forwards_user_t_bracket(tmp_path):
+    # Bracket sits inside the fixture's bimodal-P window (T ~ 1006-1372 K).
     dos_csv = tmp_path / "dos.csv"
     out_json = tmp_path / "result.json"
     _write_dos(dos_csv, _coexistence_dos())
     rc = main([
         str(dos_csv),
         "--output", str(out_json),
-        "--T-bracket", "1000", "200000",
+        "--T-bracket", "1050", "1350",
     ])
     assert rc == 0
     data = json.loads(out_json.read_text())
-    assert data["T_K"] >= 1000.0
-    assert data["T_K"] <= 200000.0
+    assert data["T_K"] >= 1050.0
+    assert data["T_K"] <= 1350.0
 
 
 def test_cli_rejects_missing_dos_columns(tmp_path, capsys):

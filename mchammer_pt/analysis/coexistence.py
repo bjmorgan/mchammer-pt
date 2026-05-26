@@ -172,7 +172,7 @@ def find_phase_split(
     i_left, i_right = int(peak_idx[0]), int(peak_idx[1])
     if i_right - i_left < min_peak_separation:
         raise NotBimodalError(
-            f"find_phase_split: two largest DOS peaks at bin indices "
+            f"find_phase_split: two deepest phi minima at bin indices "
             f"{i_left} and {i_right} are within "
             f"{min_peak_separation} bins of each other at T={T_K} K"
         )
@@ -237,47 +237,39 @@ def _auto_bracket(
 ) -> tuple[float, float]:
     """Build a T-bracket for the equal-area bisection.
 
-    Derives a kT-scale heuristic from the energy separation and entropy
-    difference of the two DOS peaks, then scans
+    Derives a kT-scale heuristic as ``(E_max - E_min) / (ln_g_max -
+    ln_g_min)`` — the inverse of the average slope of ``ln g`` across
+    the full DOS, which is the right order of magnitude for the
+    coexistence temperature of a typical lattice system. Scans
     ``imbalance(T) = w_low(T) - w_high(T)`` on a log-spaced grid
-    spanning
-    ``[_AUTO_BRACKET_KT_LOW_FRAC, _AUTO_BRACKET_KT_HIGH_FRAC] * kT_scale / k_B``.
-    Returns ``(T_lo, T_hi)`` as the first adjacent pair in the scan
-    where imbalance changes sign.
-
-    The kT-scale is derived as ``ΔE_peaks / |Δln g_peaks|`` where
-    ``ΔE_peaks`` is the energy separation between the two dominant DOS
-    peaks and ``|Δln g_peaks|`` is their entropy difference. This
-    ratio is the leading-order estimate of T_c for a bimodal DOS.
+    spanning ``[_AUTO_BRACKET_KT_LOW_FRAC,
+    _AUTO_BRACKET_KT_HIGH_FRAC] * kT_scale / k_B`` and returns
+    ``(T_lo, T_hi)`` as the first adjacent pair in the scan where
+    imbalance changes sign.
 
     Raises:
-        NotBimodalError: if the DOS has fewer than two local maxima of
-            ``ln g``.
-        ValueError: if the entropy difference between the two peaks is
-            zero (symmetric DOS, T_c → ∞).
-        NoBracketError: if no sign change in ``imbalance(T)`` is found
-            across the scan grid.
+        ValueError: if ``ln g`` has no variation across the DOS, so
+            no kT scale can be derived. Caller should supply
+            ``T_bracket`` explicitly.
+        NotBimodalError: if no T in the scan range yields a bimodal
+            ``P(E|T)`` (so no sign change can be evaluated).
+        NoBracketError: if the scan was bimodal somewhere but no
+            sign change in ``imbalance(T)`` was found.
     """
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
 
-    try:
-        peak_idx = _two_dominant_peak_indices(ln_g)
-    except NotBimodalError as exc:
-        raise NotBimodalError(
-            f"auto_bracket: {exc}; cannot derive a kT scale. "
-            "Supply T_bracket explicitly."
-        ) from exc
-    i_left, i_right = int(peak_idx[0]), int(peak_idx[1])
-    E_peak_sep = float(energies[i_right] - energies[i_left])
-    ln_g_diff = abs(float(ln_g[i_right] - ln_g[i_left]))
-    if ln_g_diff < 1e-10:
+    E_range = float(energies[-1] - energies[0])
+    ln_g_range = float(ln_g.max() - ln_g.min())
+    if ln_g_range < 1e-10:
         raise ValueError(
-            "auto_bracket: two DOS peaks have equal entropy "
-            f"(ln g diff = {ln_g_diff:.2g}); T_c → ∞ for a symmetric DOS. "
+            "auto_bracket: ln g has no variation across the DOS "
+            f"(range = {ln_g_range:.2g}); cannot derive a kT scale. "
             "Supply T_bracket explicitly."
         )
-    kT_scale = E_peak_sep / ln_g_diff  # eV
+    kT_scale = E_range / ln_g_range  # eV — inverse of the average
+    # slope of ln g, ≈ k_B * T at a physical coexistence temperature
+    # for typical lattice systems.
     T_lo_scan = max(_AUTO_BRACKET_KT_LOW_FRAC * kT_scale / kB, 1.0)
     T_hi_scan = _AUTO_BRACKET_KT_HIGH_FRAC * kT_scale / kB
     Ts = np.logspace(
