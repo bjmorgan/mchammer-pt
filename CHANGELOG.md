@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-26
+
 ### Added
 
 - ``mchammer_pt.analysis.coexistence`` — first-order coexistence-point
