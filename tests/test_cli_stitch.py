@@ -399,6 +399,18 @@ def test_select_window_keys_dedupes_and_returns_energy_sorted():
     assert keys == [(-10.0, -8.0), (-7.0, -5.0), (-5.0, -3.0)]
 
 
+def test_select_window_keys_breaks_left_bound_ties_by_right():
+    # Two windows share energy_limit_left = -5.0; the one with the
+    # smaller right edge sorts first.
+    by_window = {
+        (-5.0, -2.0): ["c1"],
+        (-5.0, -3.0): ["c0"],
+    }
+    keys, err = _select_window_keys(by_window, windows_keep=None)
+    assert err is None
+    assert keys == [(-5.0, -3.0), (-5.0, -2.0)]
+
+
 def test_trim_entropy_bins_no_filter_returns_input_unchanged():
     df = pd.DataFrame({"energy": [-2.0, -1.0, 0.0], "entropy": [0.0, 0.5, 1.0]})
     out = _trim_entropy_bins(df, emin=None, emax=None)
@@ -558,7 +570,8 @@ def test_stitch_cli_windows_with_hole_fails_at_stitch(
 
 
 def test_stitch_cli_windows_and_emin_compose(tmp_path, monkeypatch, capsys):
-    # --windows indexes discovery order, applied first; --emin then
+    # --windows indexes the energy-sorted window order, applied first;
+    # --emin then
     # trims bins from each surviving window. With --windows=1,2 and
     # --emin=-1.0: window B keeps -0.5; window C keeps -0.5 and 0.0.
     a, b, c = _three_window_mocks()

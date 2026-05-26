@@ -27,15 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stitched-DOS CSV and writes a one-row coexistence-point summary
   in JSON or CSV. Validates the input as a uniform, finite-valued,
   numeric grid at the boundary.
-- ``mchammer-pt-stitch`` gains three filter flags: ``--windows
-  IDX[,IDX...]`` to keep only the listed 0-based window indices
-  (energy-sorted ascending); ``--emin E_MIN`` and ``--emax E_MAX``
-  to drop bins outside the range from each surviving window's
-  entropy DataFrame before stitching, so the overlap-alignment
-  step sees only the kept bins. Motivated by the equal-area
-  coexistence analysis, where the low-energy windows of a REWL
-  run are often the hardest to converge and contribute the
-  noisiest part of the stitched DOS.
+- ``mchammer-pt-stitch`` gains three filter flags. ``--windows IDX[,IDX...]``
+  keeps only the listed 0-based window indices (energy-sorted ascending).
+  ``--emin E_MIN`` and ``--emax E_MAX`` drop bins outside the range from
+  each surviving window's entropy DataFrame before stitching, so the
+  overlap-alignment step sees only the kept bins. Motivated by the
+  equal-area coexistence analysis, where the low-energy windows of a REWL
+  run are often the hardest to converge and contribute the noisiest part
+  of the stitched DOS.
 
 ## [0.14.0] - 2026-05-25
 

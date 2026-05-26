@@ -170,14 +170,19 @@ def _select_window_keys(
     """Return the window keys to keep in energy-sorted order.
 
     Sorts ``by_window`` keys by ``energy_limit_left`` ascending (treating
-    ``None`` as ``-inf``). If ``windows_keep`` is ``None``, returns all
-    keys. Otherwise filters by the supplied 0-based indices.
+    ``None`` as ``-inf``), with ``energy_limit_right`` (``None`` -> ``+inf``)
+    as a tie-breaker so windows that share a left bound are ordered
+    deterministically by their upper edge. If ``windows_keep`` is
+    ``None``, returns all keys. Otherwise filters by the supplied
+    0-based indices.
 
     Returns ``(keys, error_message)``. On error the keys list is empty.
     """
-    def sort_key(k: tuple[float | None, float | None]) -> float:
-        lo = k[0]
-        return float("-inf") if lo is None else float(lo)
+    def sort_key(k: tuple[float | None, float | None]) -> tuple[float, float]:
+        lo, hi = k
+        lo_val = float("-inf") if lo is None else float(lo)
+        hi_val = float("inf") if hi is None else float(hi)
+        return lo_val, hi_val
 
     ordered = sorted(by_window.keys(), key=sort_key)
     if windows_keep is None:
