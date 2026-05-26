@@ -24,6 +24,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import pandas as pd
 from mchammer.data_containers.base_data_container import BaseDataContainer
 from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
@@ -191,6 +192,24 @@ def _select_window_keys(
         )
     keep = sorted(set(windows_keep))
     return [ordered[i] for i in keep], None
+
+
+def _trim_entropy_bins(
+    df: pd.DataFrame, emin: float | None, emax: float | None,
+) -> pd.DataFrame:
+    """Return a copy of ``df`` with bins below/above the threshold dropped.
+
+    ``emin`` and ``emax`` are bin-wise: a bin at exactly ``emin`` is
+    dropped (strict ``<=``); same for ``emax`` (strict ``>=``). Either
+    or both may be ``None``, in which case that side is not trimmed.
+    The returned DataFrame may be empty.
+    """
+    mask = pd.Series(True, index=df.index)
+    if emin is not None:
+        mask &= df["energy"] > emin
+    if emax is not None:
+        mask &= df["energy"] < emax
+    return df.loc[mask].reset_index(drop=True)
 
 
 def main(argv: list[str] | None = None) -> int:

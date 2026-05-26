@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import numpy as np
 import pandas as pd
 import pytest
 from mchammer.data_containers.base_data_container import BaseDataContainer
@@ -11,7 +12,12 @@ from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
-from mchammer_pt.cli.stitch import _build_parser, _select_window_keys, main
+from mchammer_pt.cli.stitch import (
+    _build_parser,
+    _select_window_keys,
+    _trim_entropy_bins,
+    main,
+)
 
 
 def _mock_dc(
@@ -379,3 +385,41 @@ def test_select_window_keys_dedupes_and_returns_energy_sorted():
     keys, err = _select_window_keys(by_window, windows_keep=[2, 0, 0, 1])
     assert err is None
     assert keys == [(-10.0, -8.0), (-7.0, -5.0), (-5.0, -3.0)]
+
+
+def test_trim_entropy_bins_no_filter_returns_input_unchanged():
+    df = pd.DataFrame({"energy": [-2.0, -1.0, 0.0], "entropy": [0.0, 0.5, 1.0]})
+    out = _trim_entropy_bins(df, emin=None, emax=None)
+    assert out["energy"].tolist() == [-2.0, -1.0, 0.0]
+    assert out["entropy"].tolist() == [0.0, 0.5, 1.0]
+
+
+def test_trim_entropy_bins_emin_drops_strictly_below_or_equal():
+    df = pd.DataFrame(
+        {"energy": [-2.0, -1.0, 0.0, 1.0], "entropy": [0.0, 0.5, 1.0, 1.5]}
+    )
+    out = _trim_entropy_bins(df, emin=-1.0, emax=None)
+    # bins at E <= -1.0 dropped; -1.0 itself goes (strict ``<=``)
+    assert out["energy"].tolist() == [0.0, 1.0]
+
+
+def test_trim_entropy_bins_emax_drops_strictly_above_or_equal():
+    df = pd.DataFrame(
+        {"energy": [-2.0, -1.0, 0.0, 1.0], "entropy": [0.0, 0.5, 1.0, 1.5]}
+    )
+    out = _trim_entropy_bins(df, emin=None, emax=0.0)
+    # bins at E >= 0.0 dropped
+    assert out["energy"].tolist() == [-2.0, -1.0]
+
+
+def test_trim_entropy_bins_both_filters_compose():
+    df = pd.DataFrame({"energy": [-3.0, -2.0, -1.0, 0.0, 1.0], "entropy": np.zeros(5)})
+    out = _trim_entropy_bins(df, emin=-2.0, emax=0.0)
+    # keep -2.0 < E < 0.0 -> only -1.0 survives
+    assert out["energy"].tolist() == [-1.0]
+
+
+def test_trim_entropy_bins_returns_empty_when_everything_dropped():
+    df = pd.DataFrame({"energy": [-2.0, -1.0], "entropy": [0.0, 0.5]})
+    out = _trim_entropy_bins(df, emin=0.0, emax=None)
+    assert out.empty
