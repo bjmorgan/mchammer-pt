@@ -324,3 +324,47 @@ def test_parser_defaults_filter_flags_to_none():
     assert args.windows is None
     assert args.emin is None
     assert args.emax is None
+
+
+from mchammer_pt.cli.stitch import _select_window_keys
+
+
+def test_select_window_keys_returns_all_sorted_when_none():
+    by_window = {
+        (-5.0, -3.0): ["c2"],
+        (-10.0, -8.0): ["c0"],
+        (-7.0, -5.0): ["c1"],
+    }
+    keys, err = _select_window_keys(by_window, windows_keep=None)
+    assert err is None
+    assert keys == [(-10.0, -8.0), (-7.0, -5.0), (-5.0, -3.0)]
+
+
+def test_select_window_keys_filters_by_index():
+    by_window = {
+        (-5.0, -3.0): ["c2"],
+        (-10.0, -8.0): ["c0"],
+        (-7.0, -5.0): ["c1"],
+    }
+    keys, err = _select_window_keys(by_window, windows_keep=[0, 2])
+    assert err is None
+    assert keys == [(-10.0, -8.0), (-5.0, -3.0)]
+
+
+def test_select_window_keys_rejects_out_of_range_index():
+    by_window = {
+        (-10.0, -8.0): ["c0"],
+        (-7.0, -5.0): ["c1"],
+    }
+    keys, err = _select_window_keys(by_window, windows_keep=[0, 5])
+    assert err is not None
+    assert "out of range" in err
+    assert "5" in err
+    assert keys == []
+
+
+def test_select_window_keys_rejects_negative_index():
+    by_window = {(-10.0, -8.0): ["c0"], (-7.0, -5.0): ["c1"]}
+    keys, err = _select_window_keys(by_window, windows_keep=[-1])
+    assert err is not None
+    assert "out of range" in err

@@ -162,6 +162,37 @@ def _get_window_params(
     return params, None
 
 
+def _select_window_keys(
+    by_window: dict[tuple[float | None, float | None], list[BaseDataContainer]],
+    windows_keep: list[int] | None,
+) -> tuple[list[tuple[float | None, float | None]], str | None]:
+    """Return the window keys to keep in energy-sorted order.
+
+    Sorts ``by_window`` keys by ``energy_limit_left`` ascending (treating
+    ``None`` as ``-inf``). If ``windows_keep`` is ``None``, returns all
+    keys. Otherwise filters by the supplied 0-based indices.
+
+    Returns ``(keys, error_message)``. On error the keys list is empty.
+    """
+    def sort_key(k: tuple[float | None, float | None]) -> float:
+        lo = k[0]
+        return float("-inf") if lo is None else float(lo)
+
+    ordered = sorted(by_window.keys(), key=sort_key)
+    if windows_keep is None:
+        return ordered, None
+
+    n = len(ordered)
+    bad = [i for i in windows_keep if i < 0 or i >= n]
+    if bad:
+        return [], (
+            f"--windows index {bad[0]} out of range; discovered "
+            f"{n} windows (valid: 0..{n - 1})"
+        )
+    keep = sorted(set(windows_keep))
+    return [ordered[i] for i in keep], None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
