@@ -460,7 +460,15 @@ def test_format_window_summary_no_kept_windows():
 
 
 def _three_window_mocks() -> tuple[object, object, object]:
-    """Three adjacent windows with simple linear ``ln g`` in each."""
+    """Three adjacent windows with simple linear ``ln g`` in each.
+
+    ``_mock_dc``'s ``entropy`` dict uses integer bin keys; with
+    ``energy_spacing=0.5`` the per-window bins are:
+
+    - Window A (energy_limit_left=-2.0, right=-1.0): bins -2.0, -1.5, -1.0
+    - Window B (energy_limit_left=-1.5, right=-0.5): bins -1.5, -1.0, -0.5
+    - Window C (energy_limit_left=-1.0, right= 0.0): bins -1.0, -0.5,  0.0
+    """
     a = _mock_dc(
         entropy={-4: 0.0, -3: 0.4, -2: 0.7},
         energy_spacing=0.5,
@@ -552,9 +560,7 @@ def test_stitch_cli_windows_with_hole_fails_at_stitch(
 def test_stitch_cli_windows_and_emin_compose(tmp_path, monkeypatch, capsys):
     # --windows indexes discovery order, applied first; --emin then
     # trims bins from each surviving window. With --windows=1,2 and
-    # --emin=-1.0:
-    #   Window B (-1.5, -1.0, -0.5) -> keeps -0.5
-    #   Window C (-1.0, -0.5,  0.0) -> keeps -0.5 and 0.0
+    # --emin=-1.0: window B keeps -0.5; window C keeps -0.5 and 0.0.
     a, b, c = _three_window_mocks()
     monkeypatch.setattr(
         "mchammer_pt.cli.stitch.read_hdf5",
@@ -576,13 +582,9 @@ def test_stitch_cli_windows_and_emin_compose(tmp_path, monkeypatch, capsys):
 
 
 def test_stitch_cli_emin_trims_low_bins(tmp_path, monkeypatch, capsys):
-    # Mock-window energies (energy_spacing=0.5, integer bin keys):
-    #   window A bins: -2.0, -1.5, -1.0
-    #   window B bins: -1.5, -1.0, -0.5
-    #   window C bins: -1.0, -0.5,  0.0
-    # --emin=-1.5 drops bins at E <= -1.5 (strict). Window A keeps
-    # -1.0 only; window B keeps -1.0 and -0.5; window C keeps all
-    # three. Stitched DOS therefore contains no bins at or below -1.5.
+    # --emin=-1.5 drops bins at E <= -1.5. Window A keeps -1.0;
+    # window B keeps -1.0 and -0.5; window C keeps all three.
+    # Stitched DOS contains no bins at or below -1.5.
     a, b, c = _three_window_mocks()
     monkeypatch.setattr(
         "mchammer_pt.cli.stitch.read_hdf5",
@@ -604,11 +606,10 @@ def test_stitch_cli_emin_trims_low_bins(tmp_path, monkeypatch, capsys):
 def test_stitch_cli_emin_drops_entire_window_when_out_of_range(
     tmp_path, monkeypatch, capsys,
 ):
-    # --emin=-1.0 drops every bin in window A (its three bins are
-    # -2.0, -1.5, -1.0, all <= -1.0). Window A's trimmed DataFrame
+    # --emin=-1.0 drops every bin in window A; its trimmed DataFrame
     # is empty and the window is silently dropped from per_window.
-    # Window B keeps -0.5 only (one bin); window C keeps -0.5 and
-    # 0.0; stitch sees the overlap at -0.5.
+    # Window B keeps -0.5 only; window C keeps -0.5 and 0.0;
+    # stitch sees the overlap at -0.5.
     a, b, c = _three_window_mocks()
     monkeypatch.setattr(
         "mchammer_pt.cli.stitch.read_hdf5",
@@ -623,19 +624,16 @@ def test_stitch_cli_emin_drops_entire_window_when_out_of_range(
     assert rc == 0
     stdout = capsys.readouterr().out
     assert "kept 2 of 3 windows" in stdout
-    # Window A's bins (-2.0, -1.5, -1.0) all fail the emin=-1.0 filter
-    # and the whole window is silently dropped. The stitched DOS must
-    # contain no bins at or below -1.0.
+    # The stitched DOS must contain no bins at or below -1.0.
     df = pd.read_csv(out)
     assert (df["energy"] > -1.0).all()
 
 
 def test_stitch_cli_emax_trims_high_bins(tmp_path, monkeypatch, capsys):
     # Symmetric counterpart to test_stitch_cli_emin_trims_low_bins:
-    # --emax=-0.5 drops bins at E >= -0.5 (strict) across all windows.
-    # Window A keeps -2.0, -1.5, -1.0; window B keeps -1.5, -1.0;
-    # window C keeps -1.0 only. Stitched DOS contains no bins at or
-    # above -0.5.
+    # --emax=-0.5 drops bins at E >= -0.5. Window A keeps all three;
+    # window B keeps -1.5 and -1.0; window C keeps -1.0 only.
+    # Stitched DOS contains no bins at or above -0.5.
     a, b, c = _three_window_mocks()
     monkeypatch.setattr(
         "mchammer_pt.cli.stitch.read_hdf5",

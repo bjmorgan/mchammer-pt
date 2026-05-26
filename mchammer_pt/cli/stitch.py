@@ -317,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         df = _trim_entropy_bins(df, args.emin, args.emax)
         if df.empty:
-            continue  # whole window trimmed away; drop silently
+            continue
         per_window.append(df)
         surviving_keys.append((lo, hi))
 
@@ -327,11 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         or args.emax is not None
     )
     if len(per_window) < 2:
-        # Reachable only with filters_active=True: the discovery-time
-        # guard above returned for len(by_window) < 2, and per_window
-        # can only fall short of by_window when _trim_entropy_bins
-        # empties a window or _select_window_keys filters one out —
-        # both require --windows, --emin, or --emax.
+        # Reachable only with filters_active=True (discovery-time
+        # guard above handles the no-filter case).
         active_parts: list[str] = []
         if args.windows is not None:
             joined = ",".join(str(i) for i in args.windows)
