@@ -11,7 +11,7 @@ from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
-from mchammer_pt.cli.stitch import _build_parser, main
+from mchammer_pt.cli.stitch import _build_parser, _select_window_keys, main
 
 
 def _mock_dc(
@@ -326,9 +326,6 @@ def test_parser_defaults_filter_flags_to_none():
     assert args.emax is None
 
 
-from mchammer_pt.cli.stitch import _select_window_keys
-
-
 def test_select_window_keys_returns_all_sorted_when_none():
     by_window = {
         (-5.0, -3.0): ["c2"],
@@ -368,3 +365,17 @@ def test_select_window_keys_rejects_negative_index():
     keys, err = _select_window_keys(by_window, windows_keep=[-1])
     assert err is not None
     assert "out of range" in err
+
+
+def test_select_window_keys_dedupes_and_returns_energy_sorted():
+    # User passes duplicates and out-of-order indices; helper should
+    # dedupe and emit in energy-sorted order so downstream stitching
+    # sees a deterministic input regardless of how the user typed it.
+    by_window = {
+        (-5.0, -3.0): ["c2"],
+        (-10.0, -8.0): ["c0"],
+        (-7.0, -5.0): ["c1"],
+    }
+    keys, err = _select_window_keys(by_window, windows_keep=[2, 0, 0, 1])
+    assert err is None
+    assert keys == [(-10.0, -8.0), (-7.0, -5.0), (-5.0, -3.0)]
