@@ -97,13 +97,14 @@ class PhaseSplit:
 
     Attributes:
         E_peak_low: low-energy phase peak position in eV, sub-bin
-            refined from the two largest local maxima of ``ln g``.
+            refined from the two deepest local minima of
+            ``phi(E) = beta * E - ln g(E)`` at ``T_K``.
         E_peak_high: high-energy phase peak position in eV, sub-bin
             refined.
-        E_star: dividing energy in eV — the maximum of
-            ``phi(E) = beta * E - ln g(E)`` between the two peaks at
-            ``T_K``, sub-bin refined.
-        T_K: temperature in Kelvin at which ``E_star`` was located.
+        E_star: dividing energy in eV — the maximum of ``phi``
+            between the two peaks at ``T_K``, sub-bin refined.
+        T_K: temperature in Kelvin at which the peaks and valley
+            were located.
     """
 
     E_peak_low: float
@@ -121,17 +122,19 @@ def find_phase_split(
     """Locate the two phase peaks and the dividing energy at T_K.
 
     Phase peak positions (``E_peak_low``, ``E_peak_high``) are the
-    two dominant local maxima of ``ln g(E)`` — these are properties
-    of the DOS and do not depend on temperature. The valley position
-    ``E_star`` is the minimum of ``P(E | T_K)``, found as the maximum
-    of ``phi(E) = beta * E - ln g(E)`` between the two peaks. All
-    three positions are refined to sub-bin precision by three-point
-    parabolic fits.
+    two dominant local minima of ``phi(E) = beta * E - ln g(E)`` at
+    the supplied temperature — equivalently, the two largest peaks
+    of ``P(E | T_K)``. They are temperature-dependent: as T varies,
+    the location where ``d(ln g)/dE = beta`` shifts with the slope
+    of ``ln g``. The valley position ``E_star`` is the maximum of
+    ``phi`` between the two peaks. All three positions are refined
+    to sub-bin precision by three-point parabolic fits.
 
     Args:
         dos: DataFrame with ``energy`` (eV) and ``entropy`` (``ln g``)
             columns on a uniform grid.
-        T_K: temperature in Kelvin at which ``E_star`` is evaluated.
+        T_K: temperature in Kelvin at which the peaks and valley are
+            located.
         min_peak_separation: minimum number of bins required between
             the two phase peaks. Default 5.
 
@@ -141,9 +144,10 @@ def find_phase_split(
 
     Raises:
         ValueError: if ``dos`` is empty or ``T_K <= 0``.
-        NotBimodalError: if fewer than two local maxima of ``ln g``
-            are found, or the two largest are within
-            ``min_peak_separation`` bins of each other.
+        NotBimodalError: if ``P(E | T_K)`` is not bimodal (fewer than
+            two local minima of ``phi``, or the two deepest within
+            ``min_peak_separation`` bins of each other, or no interior
+            maximum of ``phi`` between them).
     """
     if dos.empty:
         raise ValueError("dos has no rows; need at least one energy bin")
@@ -160,7 +164,7 @@ def find_phase_split(
     phi = beta * energies - ln_g
 
     try:
-        peak_idx = _two_dominant_peak_indices(ln_g)
+        peak_idx = _two_dominant_peak_indices(phi)
     except NotBimodalError as exc:
         raise NotBimodalError(
             f"find_phase_split at T={T_K} K: {exc}"
@@ -173,14 +177,14 @@ def find_phase_split(
             f"{min_peak_separation} bins of each other at T={T_K} K"
         )
 
-    # Sub-bin refinement of each DOS peak (maximise ln_g -> minimise -ln_g).
+    # Sub-bin refinement of each phase peak (minimum of phi).
     E_peak_low = _parabolic_vertex(
         energies[i_left - 1], energies[i_left], energies[i_left + 1],
-        -ln_g[i_left - 1], -ln_g[i_left], -ln_g[i_left + 1],
+        phi[i_left - 1], phi[i_left], phi[i_left + 1],
     )
     E_peak_high = _parabolic_vertex(
         energies[i_right - 1], energies[i_right], energies[i_right + 1],
-        -ln_g[i_right - 1], -ln_g[i_right], -ln_g[i_right + 1],
+        phi[i_right - 1], phi[i_right], phi[i_right + 1],
     )
 
     interior = slice(i_left, i_right + 1)
@@ -204,25 +208,26 @@ def find_phase_split(
     )
 
 
-def _two_dominant_peak_indices(ln_g: np.ndarray) -> np.ndarray:
-    """Return the bin indices of the two largest local maxima of ln_g.
+def _two_dominant_peak_indices(phi: np.ndarray) -> np.ndarray:
+    """Return the bin indices of the two deepest local minima of phi.
 
-    Local maxima are interior bins strictly higher than both
-    neighbours. The two with the largest ``ln_g`` values are returned
-    in ascending bin-index order.
+    Local minima are interior bins strictly lower than both
+    neighbours. The two with the smallest ``phi`` values are returned
+    in ascending bin-index order. These are the two dominant peaks
+    of ``P(E | T) ∝ exp(-phi(E))``.
 
     Raises:
-        NotBimodalError: if fewer than two local maxima exist.
+        NotBimodalError: if fewer than two local minima exist.
     """
-    is_max = (ln_g[1:-1] > ln_g[:-2]) & (ln_g[1:-1] > ln_g[2:])
-    maxima_idx = np.flatnonzero(is_max) + 1
-    if maxima_idx.size < 2:
+    is_min = (phi[1:-1] < phi[:-2]) & (phi[1:-1] < phi[2:])
+    minima_idx = np.flatnonzero(is_min) + 1
+    if minima_idx.size < 2:
         raise NotBimodalError(
-            f"fewer than two local maxima of ln g "
-            f"(found {maxima_idx.size})"
+            f"fewer than two local minima of phi "
+            f"(found {minima_idx.size})"
         )
-    two_largest = maxima_idx[np.argsort(ln_g[maxima_idx])[-2:]]
-    return np.array(sorted(int(x) for x in two_largest), dtype=np.int64)
+    two_smallest = minima_idx[np.argsort(phi[minima_idx])[:2]]
+    return np.array(sorted(int(x) for x in two_smallest), dtype=np.int64)
 
 
 def _auto_bracket(

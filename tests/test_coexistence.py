@@ -16,6 +16,7 @@ from mchammer_pt.analysis.coexistence import (
     NotBimodalError,
     PhaseSplit,
     _parabolic_vertex,
+    _two_dominant_peak_indices,
     equal_area_temperature,
     find_phase_split,
 )
@@ -258,3 +259,63 @@ def test_lattice_like_dos_phi_is_quartic_double_well_at_design_beta():
     assert phi[i_zero] > phi[i_neg]
     # Wells equally deep by construction.
     assert abs(phi[i_pos] - phi[i_neg]) < 0.01
+
+
+def test_two_dominant_peak_indices_finds_two_minima():
+    # phi has two minima at indices 2 and 6, with the deeper one at 6.
+    phi = np.array([5.0, 3.0, 1.0, 3.0, 4.0, 3.0, 0.5, 2.0, 5.0])
+    out = _two_dominant_peak_indices(phi)
+    assert list(out) == [2, 6]
+
+
+def test_two_dominant_peak_indices_ignores_shallow_third_minimum():
+    # Three local minima at indices 1, 4, 7; the two deepest are
+    # at 1 (phi=0) and 4 (phi=1); the third (index 7, phi=2) is
+    # ignored.
+    phi = np.array([5.0, 0.0, 5.0, 5.0, 1.0, 5.0, 5.0, 2.0, 5.0])
+    out = _two_dominant_peak_indices(phi)
+    assert list(out) == [1, 4]
+
+
+def test_two_dominant_peak_indices_raises_on_fewer_than_two_minima():
+    # Monotone phi has zero interior minima.
+    phi = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    with pytest.raises(NotBimodalError, match="local minima of phi"):
+        _two_dominant_peak_indices(phi)
+
+
+def test_find_phase_split_on_lattice_like_dos_at_design_beta():
+    # Fixture parameters: a=1, beta_c=10, c=1.
+    # At beta = beta_c = 10 eV^-1, phi = beta*E - ln_g is the
+    # designed double-well a*(E**2 - c**2)**2 with minima at E = +/- c
+    # = +/- 1 and a maximum at E = 0.
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    T_K = 1.0 / (kB * 10.0)
+    split = find_phase_split(dos, T_K=T_K)
+    assert abs(split.E_peak_low - (-1.0)) < 0.002
+    assert abs(split.E_peak_high - 1.0) < 0.002
+    # E_star is the maximum of phi between the peaks at E = 0.
+    assert abs(split.E_star) < 0.005
+
+
+def test_find_phase_split_raises_outside_bimodal_window():
+    # The bimodal-beta window has half-width
+    # 8 * a * c**3 / (3 * sqrt(3)) ~ 1.54 for a=1, c=1.
+    # Centred on beta_c = 10, so the window is (8.46, 11.54).
+    # Outside this window, the linear term in phi has overtaken
+    # one of the wells and phi has fewer than two minima.
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    # Well above the window: beta = 20 eV^-1 -> T ~ 580 K.
+    T_below = 1.0 / (kB * 20.0)
+    with pytest.raises(NotBimodalError):
+        find_phase_split(dos, T_K=T_below)
+    # Well below the window: beta = 2 eV^-1 -> T ~ 5800 K.
+    T_above = 1.0 / (kB * 2.0)
+    with pytest.raises(NotBimodalError):
+        find_phase_split(dos, T_K=T_above)
