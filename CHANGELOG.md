@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ``mchammer_pt.__version__`` is now derived from the installed
+  package metadata (``importlib.metadata``) rather than a hardcoded
+  string, so ``pyproject.toml`` is the single source of truth. The
+  previous hardcoded value had drifted from the packaged version.
 - Wang-Landau 1/t schedule: decoupled the halving criterion from
   ``flatness_limit``. Under ``schedule='1_over_t'`` the halving gate
   now uses the Belardinelli-Pereyra ``min(H) > 0`` criterion, so the
