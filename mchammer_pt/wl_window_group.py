@@ -90,7 +90,7 @@ class WangLandauWindowGroup:
         self._schedule: Schedule = cast(Schedule, sched0)
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
-                is_flat=False,
+                halving_criterion_met=False,
                 fill_factor=1.0,
                 entropy={},
                 step=0,
@@ -216,9 +216,10 @@ class WangLandauWindowGroup:
     def converged(self) -> bool:
         return all(r.converged for r in self._replicas)
 
-    def is_flat(self) -> bool:
-        """Return ``True`` iff every walker in the group is flat."""
-        return all(r.is_flat() for r in self._replicas)
+    def halving_criterion_met(self) -> bool:
+        """Return ``True`` iff every walker in the group satisfies
+        its halving criterion."""
+        return all(r.halving_criterion_met() for r in self._replicas)
 
     def data_container(self) -> WangLandauDataContainer:
         """Data container for the first walker in the group."""

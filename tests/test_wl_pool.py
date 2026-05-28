@@ -733,7 +733,7 @@ def test_wl_worker_advance_ack_carries_state(tmp_path):
     try:
         payload = request(conn, ("ADVANCE", 50), 0)
         assert isinstance(payload, WalkerPostBlockState)
-        assert isinstance(payload.is_flat, bool)
+        assert isinstance(payload.halving_criterion_met, bool)
         assert isinstance(payload.fill_factor, float)
         assert isinstance(payload.entropy, dict)
         assert isinstance(payload.step, int)
