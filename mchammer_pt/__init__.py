@@ -1,5 +1,7 @@
 """mchammer-pt: parallel tempering for mchammer canonical Monte Carlo."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .analysis.dos import reweight_canonical_from_dos, stitch_entropy
 from .base import BaseParallelTempering
 from .callbacks import (
@@ -32,7 +34,11 @@ from .wl import WangLandauParallelTempering
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica
 
-__version__ = "0.14.0"
+try:
+    __version__ = version("mchammer-pt")
+except PackageNotFoundError:
+    # Not installed (e.g. imported from a raw source checkout).
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "BaseParallelTempering",
