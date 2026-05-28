@@ -349,8 +349,8 @@ def test_wl_replica_restore_state_does_not_mutate_caller_container(tmp_path):
     assert container._last_state is not replica._ensemble._data_container._last_state
 
 
-def test_is_flat_returns_false_before_window_reached():
-    """Walker outside its window is not flat."""
+def test_halving_criterion_met_returns_false_before_window_reached():
+    """Walker outside its window does not meet the halving criterion."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl_replica import WangLandauReplica
@@ -372,10 +372,10 @@ def test_is_flat_returns_false_before_window_reached():
     )
     # Override _reached_energy_window to simulate "outside" state.
     r.ensemble._reached_energy_window = False
-    assert r.is_flat() is False
+    assert r.halving_criterion_met() is False
 
 
-def test_is_flat_returns_true_on_flat_histogram():
+def test_halving_criterion_met_returns_true_on_flat_histogram():
     """A perfectly flat histogram passes mchammer's flatness criterion."""
     from mchammer.calculators import ClusterExpansionCalculator
 
@@ -398,11 +398,12 @@ def test_is_flat_returns_true_on_flat_histogram():
     )
     r.ensemble._reached_energy_window = True
     r.ensemble._histogram = {0: 1000, 1: 1000, 2: 1000}
-    assert r.is_flat() is True
+    assert r.halving_criterion_met() is True
 
 
-def test_is_flat_returns_false_on_uneven_histogram():
-    """A histogram with one bin below limit*mean is not flat."""
+def test_halving_criterion_met_returns_false_on_uneven_histogram():
+    """Under the halving schedule, a histogram with one bin below
+    limit*mean fails the WL flatness criterion."""
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl_replica import WangLandauReplica
@@ -424,11 +425,11 @@ def test_is_flat_returns_false_on_uneven_histogram():
     )
     r.ensemble._reached_energy_window = True
     r.ensemble._histogram = {0: 100, 1: 1000, 2: 900}
-    assert r.is_flat() is False
+    assert r.halving_criterion_met() is False
 
 
-def test_is_flat_returns_false_on_all_zero_histogram():
-    """``is_flat`` returns False when every histogram entry is zero.
+def test_halving_criterion_met_returns_false_on_all_zero_histogram():
+    """``halving_criterion_met`` returns False when every histogram entry is zero.
 
     Without the ``mean <= 0`` short-circuit, ``limit =
     flatness_limit * mean(counts) = 0`` and ``all(counts >= 0)``
@@ -438,7 +439,30 @@ def test_is_flat_returns_false_on_all_zero_histogram():
     e = replica.ensemble
     e._reached_energy_window = True
     e._histogram = {0: 0, 1: 0, 2: 0}
-    assert replica.is_flat() is False
+    assert replica.halving_criterion_met() is False
+
+
+def test_halving_criterion_met_uses_bp_under_one_over_t():
+    """Under schedule='1_over_t', the BP coupon-collector criterion
+    (min(H) > 0) replaces the WL flatness criterion. A histogram with
+    all visited bins positive but very uneven counts must still satisfy
+    the halving criterion."""
+    replica = _make_wl_replica(schedule="1_over_t")
+    e = replica.ensemble
+    e._reached_energy_window = True
+    e._histogram = {0: 1, 1: 100, 2: 100}
+    assert replica.halving_criterion_met() is True
+
+
+def test_halving_criterion_met_uses_wl_under_halving():
+    """Under schedule='halving', the WL flatness criterion applies
+    unchanged. A histogram with min(H)/mean(H) below flatness_limit
+    is not halving-ready."""
+    replica = _make_wl_replica(schedule="halving")
+    e = replica.ensemble
+    e._reached_energy_window = True
+    e._histogram = {0: 1, 1: 100, 2: 100}
+    assert replica.halving_criterion_met() is False
 
 
 def test_default_ensemble_cls_is_coordinated():

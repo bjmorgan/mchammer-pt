@@ -579,7 +579,7 @@ class ProcessWangLandauWindow:
         self.phase: Phase = "halving"
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
-                is_flat=False,
+                halving_criterion_met=False,
                 fill_factor=1.0,
                 entropy={},
                 step=0,
@@ -594,14 +594,8 @@ class ProcessWangLandauWindow:
         """Connection to the current exchange-representative walker."""
         return self.workers[self.exchange_idx][1]
 
-    def collect_flatness_flags(self) -> list[bool]:
-        return [s.is_flat for s in self.walker_states]
-
     def collect_entropy_snapshots(self) -> list[dict[int, float]]:
         return [dict(s.entropy) for s in self.walker_states]
-
-    def collect_fill_factors(self) -> list[float]:
-        return [s.fill_factor for s in self.walker_states]
 
     def collect_ts(self) -> list[int]:
         """Per-walker ``t = step - window_entry_step + 1``.

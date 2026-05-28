@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Wang-Landau 1/t schedule: decoupled the halving criterion from
+  ``flatness_limit``. Under ``schedule='1_over_t'`` the halving gate
+  now uses the Belardinelli-Pereyra ``min(H) > 0`` criterion, so the
+  BP switch to the 1/t phase reliably fires under any
+  ``flatness_limit``. Vanilla ``schedule='halving'`` is unchanged.
+
+### Changed
+
+- Renamed ``is_flat`` to ``halving_criterion_met`` on
+  ``WangLandauReplica``, ``WangLandauWindowGroup``, and the
+  ``WalkerPostBlockState`` snapshot field, reflecting that the
+  criterion is no longer flatness-based under all schedules.
+
 ## [0.15.0] - 2026-05-26
 
 ### Added

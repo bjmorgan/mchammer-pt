@@ -287,7 +287,7 @@ class WangLandauWorker(BaseWorker):
         self._replica.advance(n_steps)
         e = self._replica.ensemble
         self._reply(WalkerPostBlockState(
-            is_flat=self._replica.is_flat(),
+            halving_criterion_met=self._replica.halving_criterion_met(),
             fill_factor=float(e._fill_factor),
             entropy=dict(e._entropy),
             step=int(e.step),

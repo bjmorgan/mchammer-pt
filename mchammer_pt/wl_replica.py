@@ -117,7 +117,7 @@ class WangLandauSlot(Protocol):
     def walker_states(self) -> Sequence[WalkerPostBlockState]: ...
     def apply_plan(self, plan: CoordinatorPlan) -> None: ...
     def reroll_exchange_idx(self) -> None: ...
-    def is_flat(self) -> bool: ...
+    def halving_criterion_met(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
     def current_energy(self) -> float: ...
     def current_occupations(self) -> np.ndarray: ...
@@ -283,7 +283,7 @@ class WangLandauReplica:
 
         self.walker_states: tuple[WalkerPostBlockState, ...] = (
             WalkerPostBlockState(
-                is_flat=False,
+                halving_criterion_met=False,
                 fill_factor=1.0,
                 entropy={},
                 step=0,
@@ -388,12 +388,16 @@ class WangLandauReplica:
             random.setstate(previous_state)
         self.walker_states = (self._snapshot(),)
 
-    def is_flat(self) -> bool:
-        """Return ``True`` if this walker's own histogram is flat.
+    def halving_criterion_met(self) -> bool:
+        """Return ``True`` if this walker satisfies the halving
+        criterion for its current schedule.
 
-        Uses mchammer's flatness criterion: every bin's count is
-        ``>= flatness_limit * mean(counts)``. Walkers that have not
-        yet entered the window return ``False``.
+        Under ``schedule='halving'`` the criterion is the WL flatness
+        test: every bin's count is ``>= flatness_limit * mean(counts)``.
+        Under ``schedule='1_over_t'`` the criterion is the BP
+        coupon-collector test: every visited bin has been visited at
+        least once since the last halve. Walkers that have not yet
+        entered the window return ``False``.
         """
         e = self._ensemble
         if not e._reached_energy_window:
@@ -406,6 +410,10 @@ class WangLandauReplica:
         mean_count = float(np.average(histogram))
         if mean_count <= 0:
             return False
+        if e._schedule == "1_over_t":
+            # Belardinelli-Pereyra coupon-collector criterion.
+            # flatness_limit is not consulted under this schedule.
+            return bool(np.all(histogram > 0))
         limit = e._flatness_limit * mean_count
         return bool(np.all(histogram >= limit))
 
@@ -413,7 +421,7 @@ class WangLandauReplica:
         """Read live ensemble state into a WalkerPostBlockState."""
         e = self._ensemble
         return WalkerPostBlockState(
-            is_flat=self.is_flat(),
+            halving_criterion_met=self.halving_criterion_met(),
             fill_factor=float(e._fill_factor),
             entropy=dict(e._entropy),
             step=int(e.step),

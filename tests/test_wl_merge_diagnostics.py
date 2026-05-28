@@ -74,7 +74,7 @@ def _flat_walker(
 ) -> WalkerPostBlockState:
     """Build a walker snapshot that the coordinator will treat as flat."""
     return WalkerPostBlockState(
-        is_flat=True,
+        halving_criterion_met=True,
         fill_factor=fill_factor,
         entropy=dict(entropy),
         step=step,

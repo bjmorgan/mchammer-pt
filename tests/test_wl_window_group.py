@@ -333,8 +333,8 @@ def test_decide_bp_switch_any_walker_below_threshold_returns_false():
     assert decide_bp_switch(ts=[100, 100], fs=[0.005, 0.02]) is False
 
 
-def test_is_flat_all_walkers_flat_returns_true():
-    """Group's is_flat returns True iff all walkers are flat."""
+def test_halving_criterion_met_all_walkers_flat_returns_true():
+    """Group's halving_criterion_met returns True iff every walker meets it."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     replicas = _make_replicas(2)
@@ -343,11 +343,11 @@ def test_is_flat_all_walkers_flat_returns_true():
         r.ensemble._histogram = {0: 1000, 1: 1000}
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
-    assert group.is_flat() is True
+    assert group.halving_criterion_met() is True
 
 
-def test_is_flat_one_walker_not_flat_returns_false():
-    """Group's is_flat returns False if any walker is not flat."""
+def test_halving_criterion_met_one_walker_not_flat_returns_false():
+    """Group's halving_criterion_met returns False if any walker fails it."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     replicas = _make_replicas(2)
@@ -357,7 +357,7 @@ def test_is_flat_one_walker_not_flat_returns_false():
     replicas[1].ensemble._histogram = {0: 100, 1: 1000}  # not flat
 
     group = WangLandauWindowGroup(replicas, random_seed=0)
-    assert group.is_flat() is False
+    assert group.halving_criterion_met() is False
 
 
 
@@ -397,11 +397,11 @@ def test_validate_merge_cadence_rejects_unknown_value():
         _validate_merge_cadence("bogus")
 
 
-def test_summed_histogram_flat_from_snapshots_pooled_case():
+def test_summed_histogram_halving_criterion_met_pooled_case():
     """Pooled flatness from snapshots: pooling fixes per-walker gaps."""
     from mchammer_pt.wl_coordinator import (
         WalkerPostBlockState,
-        _summed_histogram_flat_from_snapshots,
+        _summed_histogram_halving_criterion_met,
     )
 
     # Walker A has skewed coverage; walker B has the complementary skew.
@@ -409,7 +409,7 @@ def test_summed_histogram_flat_from_snapshots_pooled_case():
     # Pooled: combined histogram is even, passes the test.
     snapshots = [
         WalkerPostBlockState(
-            is_flat=False,
+            halving_criterion_met=False,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -418,7 +418,7 @@ def test_summed_histogram_flat_from_snapshots_pooled_case():
             reached_energy_window=True,
         ),
         WalkerPostBlockState(
-            is_flat=False,
+            halving_criterion_met=False,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -429,19 +429,22 @@ def test_summed_histogram_flat_from_snapshots_pooled_case():
     ]
     # Pooled: {0: 1100, 1: 1100}, mean 1100, limit 880 (0.8 * 1100);
     # both >= 880 -> True.
-    assert _summed_histogram_flat_from_snapshots(snapshots, 0.8) is True
+    assert (
+        _summed_histogram_halving_criterion_met(snapshots, 0.8, schedule="halving")
+        is True
+    )
 
 
-def test_summed_histogram_flat_from_snapshots_false_when_unentered():
+def test_summed_histogram_halving_criterion_met_false_when_unentered():
     """Pooled flatness from snapshots returns False if any walker has not entered."""
     from mchammer_pt.wl_coordinator import (
         WalkerPostBlockState,
-        _summed_histogram_flat_from_snapshots,
+        _summed_histogram_halving_criterion_met,
     )
 
     snapshots = [
         WalkerPostBlockState(
-            is_flat=True,
+            halving_criterion_met=True,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -450,7 +453,7 @@ def test_summed_histogram_flat_from_snapshots_false_when_unentered():
             reached_energy_window=True,
         ),
         WalkerPostBlockState(
-            is_flat=False,
+            halving_criterion_met=False,
             fill_factor=1.0,
             entropy={},
             step=0,
@@ -459,7 +462,10 @@ def test_summed_histogram_flat_from_snapshots_false_when_unentered():
             reached_energy_window=False,
         ),
     ]
-    assert _summed_histogram_flat_from_snapshots(snapshots, 0.8) is False
+    assert (
+        _summed_histogram_halving_criterion_met(snapshots, 0.8, schedule="halving")
+        is False
+    )
 
 
 

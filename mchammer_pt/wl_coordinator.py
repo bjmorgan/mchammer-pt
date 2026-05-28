@@ -17,7 +17,7 @@ import numpy as np
 class WalkerPostBlockState:
     """Snapshot of one walker's state at a single MC step."""
 
-    is_flat: bool
+    halving_criterion_met: bool
     fill_factor: float
     entropy: dict[int, float]
     step: int
@@ -115,16 +115,18 @@ class CoordinatorPlan:
     switch_to_phase: Literal["1_over_t"] | None
 
 
-def _summed_histogram_flat_from_snapshots(
+def _summed_histogram_halving_criterion_met(
     snapshots: list[WalkerPostBlockState],
     flatness_limit: float,
+    schedule: Schedule,
 ) -> bool:
-    """Pooled-histogram flatness from per-walker snapshots.
+    """Pooled-histogram halving criterion across per-walker snapshots.
 
-    Pools the per-walker histograms carried by each ``WalkerPostBlockState``
-    and applies the flatness criterion: every bin count must be at least
-    ``flatness_limit * mean(counts)``. Returns False if any walker has not
-    yet entered its window.
+    Under ``schedule='halving'`` applies the WL flatness criterion:
+    every bin count must be at least ``flatness_limit * mean(counts)``.
+    Under ``schedule='1_over_t'`` applies the BP coupon-collector
+    criterion: every bin count must be positive. Returns False if any
+    walker has not yet entered its window.
     """
     if not snapshots:
         return False
@@ -140,6 +142,11 @@ def _summed_histogram_flat_from_snapshots(
     mean_count = float(np.average(counts))
     if mean_count <= 0:
         return False
+    if schedule == "1_over_t":
+        # Belardinelli-Pereyra coupon-collector criterion across the
+        # pooled histogram. flatness_limit is not consulted under
+        # this schedule.
+        return bool(np.all(counts > 0))
     limit = flatness_limit * mean_count
     return bool(np.all(counts >= limit))
 
@@ -256,10 +263,14 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
         )
 
     if view.flatness_mode == "per_walker":
-        should_halve = all(s.is_flat for s in view.walker_states)
+        should_halve = all(
+            s.halving_criterion_met for s in view.walker_states
+        )
     else:  # pooled
-        should_halve = _summed_histogram_flat_from_snapshots(
-            list(view.walker_states), view.flatness_limit
+        should_halve = _summed_histogram_halving_criterion_met(
+            list(view.walker_states),
+            view.flatness_limit,
+            view.schedule,
         )
 
     if not should_halve:

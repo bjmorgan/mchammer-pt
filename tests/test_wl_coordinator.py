@@ -11,14 +11,14 @@ from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     SlotView,
     WalkerPostBlockState,
-    _summed_histogram_flat_from_snapshots,
+    _summed_histogram_halving_criterion_met,
     decide_block_actions,
 )
 
 
 def _state(
     *,
-    is_flat: bool = True,
+    halving_criterion_met: bool = True,
     fill_factor: float = 1.0,
     entropy: dict[int, float] | None = None,
     step: int = 1000,
@@ -27,7 +27,7 @@ def _state(
     reached: bool = True,
 ) -> WalkerPostBlockState:
     return WalkerPostBlockState(
-        is_flat=is_flat,
+        halving_criterion_met=halving_criterion_met,
         fill_factor=fill_factor,
         entropy=dict(entropy) if entropy is not None else {0: 0.0, 1: 0.0},
         step=step,
@@ -58,7 +58,7 @@ def _view(
 
 class TestPhaseGate:
     def test_one_over_t_phase_returns_empty_plan(self) -> None:
-        view = _view([_state(is_flat=True)], phase="1_over_t")
+        view = _view([_state(halving_criterion_met=True)], phase="1_over_t")
         plan = decide_block_actions(view)
         assert plan == CoordinatorPlan(
             halve=False, merged_entropy=None, switch_to_phase=None
@@ -68,7 +68,7 @@ class TestPhaseGate:
 class TestHalveGatePerWalker:
     def test_all_flat_triggers_halve(self) -> None:
         view = _view(
-            [_state(is_flat=True), _state(is_flat=True)],
+            [_state(halving_criterion_met=True), _state(halving_criterion_met=True)],
             flatness_mode="per_walker",
         )
         plan = decide_block_actions(view)
@@ -76,7 +76,7 @@ class TestHalveGatePerWalker:
 
     def test_one_not_flat_blocks_halve(self) -> None:
         view = _view(
-            [_state(is_flat=True), _state(is_flat=False)],
+            [_state(halving_criterion_met=True), _state(halving_criterion_met=False)],
             flatness_mode="per_walker",
         )
         plan = decide_block_actions(view)
@@ -87,8 +87,8 @@ class TestHalveGatePooled:
     def test_summed_histogram_flat_triggers_halve(self) -> None:
         view = _view(
             [
-                _state(histogram={0: 50, 1: 50}, is_flat=False),
-                _state(histogram={0: 50, 1: 50}, is_flat=False),
+                _state(histogram={0: 50, 1: 50}, halving_criterion_met=False),
+                _state(histogram={0: 50, 1: 50}, halving_criterion_met=False),
             ],
             flatness_mode="pooled",
         )
@@ -98,8 +98,8 @@ class TestHalveGatePooled:
     def test_summed_histogram_not_flat_blocks_halve(self) -> None:
         view = _view(
             [
-                _state(histogram={0: 10, 1: 100}, is_flat=False),
-                _state(histogram={0: 10, 1: 100}, is_flat=False),
+                _state(histogram={0: 10, 1: 100}, halving_criterion_met=False),
+                _state(histogram={0: 10, 1: 100}, halving_criterion_met=False),
             ],
             flatness_mode="pooled",
         )
@@ -122,8 +122,8 @@ class TestMergeCadence:
     def test_at_halve_with_w_gt_one_produces_merged_entropy(self) -> None:
         view = _view(
             [
-                _state(entropy={0: 1.0, 1: 2.0}, is_flat=True),
-                _state(entropy={0: 1.5, 1: 2.5}, is_flat=True),
+                _state(entropy={0: 1.0, 1: 2.0}, halving_criterion_met=True),
+                _state(entropy={0: 1.5, 1: 2.5}, halving_criterion_met=True),
             ],
             flatness_mode="per_walker",
             merge_cadence="at_halve",
@@ -137,8 +137,8 @@ class TestMergeCadence:
     def test_never_cadence_skips_merge(self) -> None:
         view = _view(
             [
-                _state(entropy={0: 1.0, 1: 2.0}, is_flat=True),
-                _state(entropy={0: 1.5, 1: 2.5}, is_flat=True),
+                _state(entropy={0: 1.0, 1: 2.0}, halving_criterion_met=True),
+                _state(entropy={0: 1.5, 1: 2.5}, halving_criterion_met=True),
             ],
             flatness_mode="per_walker",
             merge_cadence="never",
@@ -149,7 +149,7 @@ class TestMergeCadence:
 
     def test_w_eq_one_skips_merge_regardless_of_cadence(self) -> None:
         view = _view(
-            [_state(entropy={0: 1.0, 1: 2.0}, is_flat=True)],
+            [_state(entropy={0: 1.0, 1: 2.0}, halving_criterion_met=True)],
             flatness_mode="per_walker",
             merge_cadence="at_halve",
         )
@@ -178,9 +178,17 @@ class TestBPSwitch:
         # guard inside the BP-switch branch must block the switch.
         view = _view(
             [
-                _state(fill_factor=1.0, step=0, window_entry_step=0, is_flat=True),
                 _state(
-                    fill_factor=1.0, step=0, window_entry_step=None, is_flat=True
+                    fill_factor=1.0,
+                    step=0,
+                    window_entry_step=0,
+                    halving_criterion_met=True,
+                ),
+                _state(
+                    fill_factor=1.0,
+                    step=0,
+                    window_entry_step=None,
+                    halving_criterion_met=True,
                 ),
             ],
             flatness_mode="per_walker",
@@ -223,14 +231,14 @@ class TestSummedHistogramFlatZeroCount:
 
     def test_zero_count_bin_blocks_flatness(self) -> None:
         snapshot = _state(histogram={0: 0, 1: 1000})
-        assert not _summed_histogram_flat_from_snapshots(
-            [snapshot], flatness_limit=0.7
+        assert not _summed_histogram_halving_criterion_met(
+            [snapshot], flatness_limit=0.7, schedule="halving"
         )
 
     def test_no_zero_entry_is_flat(self) -> None:
         snapshot = _state(histogram={1: 1000})
-        assert _summed_histogram_flat_from_snapshots(
-            [snapshot], flatness_limit=0.7
+        assert _summed_histogram_halving_criterion_met(
+            [snapshot], flatness_limit=0.7, schedule="halving"
         )
 
 
@@ -243,22 +251,87 @@ class TestSummedHistogramFlatAllZero:
 
     def test_single_zero_bin_does_not_flatten(self) -> None:
         snapshot = _state(histogram={0: 0})
-        assert not _summed_histogram_flat_from_snapshots(
-            [snapshot], flatness_limit=0.8
+        assert not _summed_histogram_halving_criterion_met(
+            [snapshot], flatness_limit=0.8, schedule="halving"
         )
 
     def test_all_zero_histogram_with_multiple_bins_does_not_flatten(
         self,
     ) -> None:
         snapshot = _state(histogram={0: 0, 1: 0, 2: 0})
-        assert not _summed_histogram_flat_from_snapshots(
-            [snapshot], flatness_limit=0.8
+        assert not _summed_histogram_halving_criterion_met(
+            [snapshot], flatness_limit=0.8, schedule="halving"
         )
 
 
 class TestWOneCollapsesModes:
     def test_pooled_and_per_walker_give_identical_plan_for_w1(self) -> None:
-        state = _state(histogram={0: 100, 1: 100}, is_flat=True)
+        state = _state(histogram={0: 100, 1: 100}, halving_criterion_met=True)
         v_pooled = _view([state], flatness_mode="pooled")
         v_per = _view([state], flatness_mode="per_walker")
         assert decide_block_actions(v_pooled) == decide_block_actions(v_per)
+
+
+class TestScheduleAwarePooledGate:
+    """The pooled halving gate honours the schedule: BP min(H) > 0
+    under '1_over_t', WL flatness under 'halving'."""
+
+    def test_bp_criterion_under_one_over_t(self) -> None:
+        snapshots = [
+            _state(histogram={0: 1, 1: 100}, halving_criterion_met=False),
+        ]
+        result = _summed_histogram_halving_criterion_met(
+            snapshots, flatness_limit=0.8, schedule="1_over_t"
+        )
+        assert result is True
+
+    def test_wl_criterion_under_halving(self) -> None:
+        snapshots = [
+            _state(histogram={0: 1, 1: 100}, halving_criterion_met=False),
+        ]
+        result = _summed_histogram_halving_criterion_met(
+            snapshots, flatness_limit=0.8, schedule="halving"
+        )
+        assert result is False
+
+    def test_decide_halves_under_one_over_t_low_flatness(self) -> None:
+        """A pooled histogram satisfying BP (min > 0) but failing WL
+        flatness still produces a halve plan. Demonstrates the bug fix."""
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=1.0,
+                step=1000,
+                window_entry_step=0,
+                halving_criterion_met=False,
+            ),
+        ]
+        view = _view(
+            states,
+            flatness_mode="pooled",
+            schedule="1_over_t",
+            flatness_limit=0.8,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is True
+
+    def test_decide_does_not_halve_under_halving_low_flatness(self) -> None:
+        """A pooled histogram with min/mean below flatness_limit must
+        NOT halve under 'halving'. Regression guard."""
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=1.0,
+                step=1000,
+                window_entry_step=0,
+                halving_criterion_met=False,
+            ),
+        ]
+        view = _view(
+            states,
+            flatness_mode="pooled",
+            schedule="halving",
+            flatness_limit=0.8,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is False
