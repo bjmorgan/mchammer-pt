@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-28
+
 ### Fixed
 
 - ``mchammer_pt.__version__`` is now derived from the installed
