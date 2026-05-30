@@ -39,7 +39,7 @@ def test_cli_writes_json_with_expected_fields(tmp_path):
     for key in (
         "T_K", "E_peak_low", "E_peak_high", "E_star",
         "latent_heat", "barrier_height", "weight_imbalance",
-        "n_bisection_steps",
+        "n_iterations",
     ):
         assert key in data, f"missing key in JSON: {key}"
 

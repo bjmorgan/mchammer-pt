@@ -15,9 +15,10 @@ from mchammer_pt.analysis.coexistence import (
     NoBracketError,
     NotBimodalError,
     PhaseSplit,
-    _auto_bracket,
+    _cv_peak_seed,
     _parabolic_vertex,
     _two_dominant_peak_indices,
+    _walk_outward_bracket,
     equal_area_temperature,
     find_phase_split,
 )
@@ -165,7 +166,7 @@ def test_coexistence_point_is_frozen_dataclass():
     cp = CoexistencePoint(
         split=split,
         latent_heat=2.0, barrier_height=0.1,
-        weight_imbalance=1e-9, n_bisection_steps=18,
+        weight_imbalance=1e-9, n_iterations=18,
     )
     with pytest.raises(FrozenInstanceError):
         cp.latent_heat = 3.0  # type: ignore[misc]
@@ -178,7 +179,7 @@ def test_coexistence_point_T_K_delegates_to_split():
     cp = CoexistencePoint(
         split=split,
         latent_heat=2.0, barrier_height=0.1,
-        weight_imbalance=1e-9, n_bisection_steps=18,
+        weight_imbalance=1e-9, n_iterations=18,
     )
     assert cp.T_K == 500.0
     # T_K is a read-only property; no separate field to assign.
@@ -371,61 +372,85 @@ def test_find_phase_split_raises_outside_bimodal_window():
         find_phase_split(dos, T_K=T_above)
 
 
-def test_auto_bracket_returns_valid_range_on_lattice_like_dos():
-    # Fixture's bimodal-P window is T ~ (1006, 1372) K.
-    # auto_bracket must return a (T_lo, T_hi) bracket whose endpoints
-    # both yield a valid find_phase_split, and whose imbalance signs
-    # differ (so it brackets the equal-area Tc inside the bimodal
-    # window).
+def test_cv_peak_seed_lands_inside_bimodal_window():
+    # The Cv peak must sit inside the bimodal-P(E|T) window — that's
+    # the entire physical justification for using it as a bracket
+    # seed. Fixture's bimodal-T window is ~(1006, 1372) K at
+    # beta_c=10, c=1; the Cv peak should be somewhere inside it.
     dos = lattice_like_dos(
         a=1.0, beta_c=10.0, c=1.0,
         E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
-    T_lo, T_hi = _auto_bracket(dos)
-    assert T_lo > 0.0
-    assert T_hi > T_lo
-    # Both endpoints sit inside the bimodal window (give a valid
-    # PhaseSplit).
-    split_lo = find_phase_split(dos, T_K=T_lo)
-    split_hi = find_phase_split(dos, T_K=T_hi)
-    assert split_lo.E_peak_low < split_lo.E_peak_high
-    assert split_hi.E_peak_low < split_hi.E_peak_high
-    # The bracket must actually bracket the imbalance sign change —
-    # otherwise the bisection inside equal_area_temperature would
-    # fail with NoBracketError. Verify the sign-change invariant
-    # explicitly.
-    energies = dos["energy"].to_numpy()
-    ln_g = dos["entropy"].to_numpy()
-    w_low_lo, w_high_lo = _partition_sums(
-        energies, ln_g, T_K=T_lo, E_star=split_lo.E_star,
-    )
-    w_low_hi, w_high_hi = _partition_sums(
-        energies, ln_g, T_K=T_hi, E_star=split_hi.E_star,
-    )
-    assert (w_low_lo - w_high_lo) * (w_low_hi - w_high_hi) <= 0
+    T_seed = _cv_peak_seed(dos)
+    # Bimodal-window verification: find_phase_split must succeed at
+    # T_seed.
+    split = find_phase_split(dos, T_K=T_seed)
+    assert split.E_peak_low < split.E_peak_high
+    # And T_seed must lie inside the analytic bimodal window.
+    T_bimodal_lo = 1.0 / (kB * 11.54)
+    T_bimodal_hi = 1.0 / (kB * 8.46)
+    assert T_bimodal_lo < T_seed < T_bimodal_hi
 
 
-def test_auto_bracket_raises_value_error_on_flat_ln_g():
+def test_cv_peak_seed_raises_value_error_on_flat_ln_g():
     # A DOS with constant ln g has no slope to derive kT_scale from.
     dos = pd.DataFrame({
         "energy": np.linspace(-1.0, 1.0, 21),
         "entropy": np.zeros(21),
     })
     with pytest.raises(ValueError, match="kT scale"):
-        _auto_bracket(dos)
+        _cv_peak_seed(dos)
 
 
-def test_auto_bracket_raises_not_bimodal_when_no_T_yields_bimodal_P():
-    # Single-bump ln g: no T anywhere in the scan range produces a
-    # bimodal P(E|T). _auto_bracket should raise NotBimodalError,
-    # distinct from NoBracketError (which signals "bracket existed
-    # but sign change wasn't found").
+def test_walk_outward_bracket_returns_sign_changing_pair():
+    # From a seed inside the bimodal window, walk_outward_bracket
+    # must return (T_lo, T_hi) with imbalance(T_lo) and
+    # imbalance(T_hi) of opposite sign (or one zero). Both endpoints
+    # must still yield a valid PhaseSplit.
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+    )
+    T_seed = _cv_peak_seed(dos)
+    T_lo, T_hi = _walk_outward_bracket(dos, T_seed)
+    assert T_lo > 0.0
+    assert T_hi > T_lo
+    split_lo = find_phase_split(dos, T_K=T_lo)
+    split_hi = find_phase_split(dos, T_K=T_hi)
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_lo_lo, w_hi_lo = _partition_sums(
+        energies, ln_g, T_K=T_lo, E_star=split_lo.E_star,
+    )
+    w_lo_hi, w_hi_hi = _partition_sums(
+        energies, ln_g, T_K=T_hi, E_star=split_hi.E_star,
+    )
+    assert (w_lo_lo - w_hi_lo) * (w_lo_hi - w_hi_hi) <= 0
+
+
+def test_walk_outward_bracket_raises_not_bimodal_at_bad_seed():
+    # A seed outside the bimodal window must surface as
+    # NotBimodalError immediately, not as a wandering walk.
     energies = np.linspace(-2.0, 2.0, 401)
     ln_g = -(energies ** 2)
     ln_g -= ln_g.min()
     dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    # T = 100 K is well inside the kT-scale range for this DOS but
+    # P(E|T) is unimodal, so find_phase_split must fail.
     with pytest.raises(NotBimodalError):
-        _auto_bracket(dos)
+        _walk_outward_bracket(dos, T_seed=100.0)
+
+
+def test_equal_area_temperature_raises_not_bimodal_on_unimodal_dos():
+    # Single-bump ln g: no T anywhere yields bimodal P(E|T). The
+    # auto-bracket path computes a Cv peak, then verifies bimodality
+    # there — the seed verification should raise NotBimodalError.
+    energies = np.linspace(-2.0, 2.0, 401)
+    ln_g = -(energies ** 2)
+    ln_g -= ln_g.min()
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    with pytest.raises(NotBimodalError, match="bimodal"):
+        equal_area_temperature(dos)
 
 
 def test_equal_area_temperature_on_lattice_like_dos():

@@ -145,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "latent_heat": result.latent_heat,
         "barrier_height": result.barrier_height,
         "weight_imbalance": result.weight_imbalance,
-        "n_bisection_steps": result.n_bisection_steps,
+        "n_iterations": result.n_iterations,
     }
 
     if args.format == "json":

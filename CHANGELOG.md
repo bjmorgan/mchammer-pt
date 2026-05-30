@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ``mchammer_pt.analysis.coexistence.equal_area_temperature``
+  replaces its kT-scale-heuristic auto-bracket with a Cv-peak-seeded
+  walk-outward bracket finder. The previous bracket built a
+  log-spaced T scan over a wide kT-scale range and looked for any
+  adjacent pair where ``imbalance(T)`` changed sign; on real REWL
+  output with narrow first-order bimodal-``P(E|T)`` windows
+  (~tens of K), the scan grid was too coarse to land two adjacent
+  Ts inside the window and the bracket finder failed even when a
+  coexistence Tc existed. The new flow computes the heat-capacity
+  peak from the same stitched DOS (a closed-form integral, no extra
+  data needed), seeds at the peak — guaranteed to lie inside the
+  bimodal window for a first-order DOS — and walks outward in T
+  along the direction implied by the sign of ``imbalance(T_seed)``
+  until the sign flips. The walk stays domain-aware: hitting the
+  bimodal-window edge before a sign change is a hard failure with
+  a meaningful diagnostic ("imbalance stays <0/>0 throughout the
+  bimodal window; the DOS does not exhibit equal-area coexistence
+  in this T range"), distinct from "Cv peak is not inside a
+  bimodal window" (signalled separately as ``NotBimodalError``).
+- The inner T-bisection is now ``scipy.optimize.brentq``,
+  exploiting inverse-quadratic interpolation for faster
+  convergence than plain bisection at no API cost. ``scipy`` is
+  declared as an explicit dependency; it was already pulled in
+  transitively by ``ase`` and ``icet``.
+- ``CoexistencePoint.n_bisection_steps`` renamed to
+  ``CoexistencePoint.n_iterations``. The field now reports the
+  number of ``brentq`` iterations (which mix bisection and
+  inverse-quadratic-interpolation steps), so the previous name was
+  misleading. The CLI's JSON/CSV output column is renamed
+  consistently.
+
 ### Fixed
 
 - ``mchammer_pt.analysis.coexistence.find_phase_split`` previously
@@ -18,10 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   estimator was unusable on real REWL output. Phase peaks are now
   correctly located as the two dominant local minima of
   ``phi(E) = beta * E - ln g(E)`` (peaks of ``P(E | T)``), which is
-  temperature-dependent. ``_auto_bracket``'s ``kT_scale`` heuristic,
-  which used the same broken peak detection, is replaced with
-  ``(E_max - E_min) / (ln_g_max - ln_g_min)`` — the average slope of
-  the full DOS, well-defined for monotone ``ln g``.
+  temperature-dependent.
 
 ## [0.16.0] - 2026-05-28
 

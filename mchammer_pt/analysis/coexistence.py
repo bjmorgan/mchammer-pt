@@ -11,12 +11,26 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from ase.units import kB
+from scipy.optimize import brentq
 
 from mchammer_pt.analysis._partition import partition_means, partition_sums
+from mchammer_pt.analysis.dos import reweight_canonical_from_dos
 
-_AUTO_BRACKET_N_T = 60
-_AUTO_BRACKET_KT_LOW_FRAC = 0.05
-_AUTO_BRACKET_KT_HIGH_FRAC = 20.0
+# Cv-peak seed scan: log-spaced T grid over a generous kT-scale range.
+# The range is intentionally wide because the kT-scale heuristic is
+# only a coarse estimate; the Cv peak picks the right T inside it.
+_CV_SEED_N_T = 200
+_CV_SEED_KT_LOW_FRAC = 0.05
+_CV_SEED_KT_HIGH_FRAC = 20.0
+
+# Walk-outward bracket: linear step in K. A first-order bimodal
+# window is typically tens of K wide on lattice systems regardless
+# of where Tc sits, so 1 K samples the window at adequate resolution
+# without depending on T_seed's magnitude. Step budget is generous
+# enough to cross a wide bimodal window or to walk the bracket end
+# to the bracketed sign change.
+_WALK_STEP_K = 1.0
+_WALK_MAX_STEPS = 500
 
 
 class NotBimodalError(ValueError):
@@ -228,37 +242,36 @@ def _two_dominant_peak_indices(phi: np.ndarray) -> np.ndarray:
     return np.array(sorted(int(x) for x in two_smallest), dtype=np.int64)
 
 
-def _auto_bracket(
-    dos: pd.DataFrame,
-    *,
-    min_peak_separation: int = 5,
-) -> tuple[float, float]:
-    """Build a T-bracket for the equal-area bisection.
+def _cv_peak_seed(dos: pd.DataFrame) -> float:
+    """Temperature in K of the heat-capacity peak.
 
-    Derives a kT-scale heuristic as ``(E_max - E_min) / (ln_g_max -
-    ln_g_min)`` — the inverse of the average slope of ``ln g`` across
-    the full DOS, which is the right order of magnitude for the
-    coexistence temperature of a typical lattice system. Scans
-    ``imbalance(T) = w_low(T) - w_high(T)`` on a log-spaced grid
-    spanning ``[_AUTO_BRACKET_KT_LOW_FRAC,
-    _AUTO_BRACKET_KT_HIGH_FRAC] * kT_scale / k_B`` and returns
-    ``(T_lo, T_hi)`` as the first adjacent pair in the scan where
-    imbalance changes sign.
+    Computes ``Cv(T) = Var_T(E) / (k_B * T**2)`` on a log-spaced T
+    grid spanning the kT-scale heuristic range and returns the
+    ``argmax``. ``Cv`` peaks where energy fluctuations are largest;
+    for a first-order DOS, this is inside the bimodal-``P(E|T)``
+    window, making the peak T a physical seed for the walk-outward
+    bracket finder.
+
+    The kT-scale heuristic is ``(E_max - E_min) / (ln_g_max -
+    ln_g_min)``, the inverse of the mean slope of ``ln g``, which
+    is the right order of magnitude for the coexistence temperature
+    of a typical lattice system. The scan range is wide
+    (``[0.05, 20] * kT_scale / k_B``) because we only need the peak
+    to lie inside it, not to centre on it.
 
     Raises:
+        ValueError: if the DOS contains non-finite values.
         ValueError: if ``ln g`` has no variation across the DOS, so
-            no kT scale can be derived. Caller should supply
-            ``T_bracket`` explicitly.
-        NotBimodalError: if no T in the scan range yields a bimodal
-            ``P(E|T)`` (so no sign change can be evaluated).
-        NoBracketError: if the scan was bimodal somewhere but no
-            sign change in ``imbalance(T)`` was found.
+            no kT scale can be derived.
+        ValueError: if the Cv peak sits at the scan-range edge,
+            indicating the true peak lies outside the heuristic
+            range. Caller should supply ``T_bracket`` explicitly.
     """
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
     if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
         raise ValueError(
-            "auto_bracket: dos contains non-finite (NaN/inf) "
+            "cv_peak_seed: dos contains non-finite (NaN/inf) "
             "values in 'energy' or 'entropy' columns"
         )
 
@@ -266,64 +279,131 @@ def _auto_bracket(
     ln_g_range = float(ln_g.max() - ln_g.min())
     if ln_g_range < 1e-10:
         raise ValueError(
-            "auto_bracket: ln g has no variation across the DOS "
+            "cv_peak_seed: ln g has no variation across the DOS "
             f"(range = {ln_g_range:.2g}); cannot derive a kT scale. "
             "Supply T_bracket explicitly."
         )
-    kT_scale = E_range / ln_g_range  # eV — inverse of the average
-    # slope of ln g, ≈ k_B * T at a physical coexistence temperature
-    # for typical lattice systems.
-    T_lo_scan = max(_AUTO_BRACKET_KT_LOW_FRAC * kT_scale / kB, 1.0)
-    T_hi_scan = _AUTO_BRACKET_KT_HIGH_FRAC * kT_scale / kB
-    Ts = np.logspace(
-        np.log10(T_lo_scan), np.log10(T_hi_scan), _AUTO_BRACKET_N_T,
-    )
+    kT_scale = E_range / ln_g_range
+    T_lo = max(_CV_SEED_KT_LOW_FRAC * kT_scale / kB, 1.0)
+    T_hi = _CV_SEED_KT_HIGH_FRAC * kT_scale / kB
+    Ts = np.logspace(np.log10(T_lo), np.log10(T_hi), _CV_SEED_N_T)
+    cv_df = reweight_canonical_from_dos(dos, Ts)
+    cv = cv_df["Cv"].to_numpy()
+    i_peak = int(cv.argmax())
+    if i_peak == 0 or i_peak == _CV_SEED_N_T - 1:
+        raise ValueError(
+            f"cv_peak_seed: Cv peak at scan-range edge "
+            f"(T={Ts[i_peak]:.1f} K, scan range "
+            f"[{T_lo:.1f}, {T_hi:.1f}] K). The true peak likely lies "
+            "outside the kT-scale heuristic range. Supply T_bracket "
+            "explicitly."
+        )
+    return float(Ts[i_peak])
 
-    prev_T: float | None = None
-    prev_f: float | None = None
-    n_valid = 0
-    n_compared = 0
-    for T in Ts:
-        try:
-            split = find_phase_split(
-                dos, T_K=float(T), min_peak_separation=min_peak_separation,
+
+def _walk_outward_bracket(
+    dos: pd.DataFrame,
+    T_seed: float,
+    *,
+    min_peak_separation: int = 5,
+    step_K: float = _WALK_STEP_K,
+    max_steps: int = _WALK_MAX_STEPS,
+) -> tuple[float, float]:
+    """Walk outward from ``T_seed`` until ``imbalance(T)`` changes sign.
+
+    From a ``T_seed`` inside the bimodal-``P(E|T)`` window, step T
+    by ``step_K`` Kelvin per iteration in the direction implied by
+    the sign of ``imbalance(T_seed) = w_low - w_high`` at the seed.
+    Positive imbalance (low-E phase heavier) means heating
+    populates the high-E phase, so walk up; negative means cool.
+    Stop when the sign flips and return the bracket.
+
+    The walk is domain-aware: if a step lands outside the
+    bimodal-``P(E|T)`` window (``find_phase_split`` raises
+    ``NotBimodalError``), the walk terminates with a
+    ``NoBracketError`` whose message names the failure shape.
+    Imbalance not crossing zero before the window edge means the
+    DOS doesn't exhibit equal-area coexistence in this T range —
+    a genuine failure mode, not a bracket-search artefact.
+
+    Args:
+        dos: stitched DOS.
+        T_seed: starting temperature in Kelvin, must be inside the
+            bimodal window. Typically the output of
+            :func:`_cv_peak_seed`.
+        min_peak_separation: forwarded to
+            :func:`find_phase_split`.
+        step_K: linear step size in Kelvin. Default 1 K — first-
+            order bimodal windows on lattice systems are typically
+            tens of K wide, so 1 K samples the window at adequate
+            resolution to detect a sign change or to assert that
+            imbalance is one-signed across the window.
+        max_steps: maximum walk steps before giving up. Default
+            500.
+
+    Returns:
+        ``(T_lo, T_hi)`` with ``imbalance(T_lo) * imbalance(T_hi)
+        <= 0``. Both endpoints are inside the bimodal window.
+
+    Raises:
+        NotBimodalError: if ``find_phase_split`` fails at
+            ``T_seed`` itself.
+        NoBracketError: if the walk hits the bimodal-window edge
+            before imbalance changes sign, or if ``max_steps`` is
+            exceeded.
+    """
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+
+    def imbalance_at(T: float) -> float:
+        split = find_phase_split(
+            dos, T_K=T, min_peak_separation=min_peak_separation,
+        )
+        w_lo, w_hi = partition_sums(energies, ln_g, T, split.E_star)
+        return w_lo - w_hi
+
+    f_seed = imbalance_at(T_seed)  # raises NotBimodalError if seed is bad
+    if f_seed == 0.0:
+        # Exact zero is virtually impossible with floating point, but
+        # if it happens, return a tight bracket around T_seed so the
+        # downstream brentq sees a valid sign-change interval.
+        return T_seed - step_K, T_seed + step_K
+
+    step = step_K if f_seed > 0 else -step_K  # walk up if low-E heavier
+    T = T_seed
+    T_prev = T_seed  # last T at which we successfully sampled f
+    for _ in range(max_steps):
+        T = T + step
+        if T <= 0.0:
+            raise NoBracketError(
+                f"walk_outward_bracket: walked down past T=0 K from "
+                f"T_seed={T_seed:.2f} K without finding a sign change. "
+                "The DOS does not exhibit equal-area coexistence at "
+                "any positive T below the seed."
             )
-        except NotBimodalError:
-            prev_T = None
-            prev_f = None
-            continue
-        w_low, w_high = partition_sums(energies, ln_g, float(T), split.E_star)
-        f = w_low - w_high
-        n_valid += 1
-        if prev_f is not None and prev_T is not None:
-            n_compared += 1
-            if prev_f * f <= 0.0:
-                return float(prev_T), float(T)
-        prev_T = float(T)
-        prev_f = f
+        try:
+            f = imbalance_at(T)
+        except NotBimodalError as exc:
+            raise NoBracketError(
+                f"walk_outward_bracket: hit bimodal-window edge at "
+                f"T={T:.2f} K (walking "
+                f"{'up' if step > 0 else 'down'} from "
+                f"T_seed={T_seed:.2f} K in {step_K:.2f} K steps; last "
+                f"bimodal T sampled was {T_prev:.2f} K) without "
+                f"finding a sign change in imbalance(T). Imbalance "
+                f"stays {'>0' if f_seed > 0 else '<0'} across every "
+                "sampled T in the bimodal window; the DOS does not "
+                "exhibit equal-area coexistence in this T range."
+            ) from exc
+        if f * f_seed <= 0.0:
+            return (T, T_seed) if step < 0 else (T_seed, T)
+        T_prev = T
 
-    if n_valid == 0:
-        raise NotBimodalError(
-            "auto_bracket: shape analysis failed at every scan T in "
-            f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K. The canonical "
-            "distribution P(E|T) appears not to be bimodal anywhere "
-            "in the scan range. Supply T_bracket explicitly if you "
-            "believe a coexistence region exists outside it."
-        )
-    if n_compared == 0:
-        raise NoBracketError(
-            f"auto_bracket: only isolated bimodal scan points in "
-            f"[{T_lo_scan:.1f}, {T_hi_scan:.1f}] K (no two adjacent "
-            f"scan Ts were both bimodal; n_valid={n_valid}). The "
-            "bimodal-P(E|T) range is narrower than the scan grid "
-            "resolution. Supply T_bracket explicitly to bisect inside "
-            "the bimodal region."
-        )
     raise NoBracketError(
-        "auto_bracket: imbalance(T) did not change sign across the "
-        f"scan [{T_lo_scan:.1f}, {T_hi_scan:.1f}] K "
-        f"(kT_scale = {kT_scale:.4g} eV). "
-        "Supply T_bracket explicitly."
+        f"walk_outward_bracket: reached max_steps={max_steps} from "
+        f"T_seed={T_seed:.2f} K (walking "
+        f"{'up' if step > 0 else 'down'} in {step_K:.2f} K steps) "
+        f"without finding a sign change. Final T={T:.2f} K, f={f:.3g}."
     )
 
 
@@ -347,8 +427,9 @@ class CoexistencePoint:
             heights, multiplied by ``k_B * T_c``. Non-negative for a
             genuinely bimodal DOS.
         weight_imbalance: ``|w_low - w_high|`` at the returned
-            temperature, the bisection residual.
-        n_bisection_steps: number of bisection iterations executed.
+            temperature, the solver residual.
+        n_iterations: number of ``scipy.optimize.brentq``
+            iterations executed inside the walk-outward bracket.
 
     The coexistence temperature is exposed as the read-only
     ``T_K`` property, delegating to ``split.T_K``.
@@ -358,7 +439,7 @@ class CoexistencePoint:
     latent_heat: float
     barrier_height: float
     weight_imbalance: float
-    n_bisection_steps: int
+    n_iterations: int
 
     @property
     def T_K(self) -> float:
@@ -375,22 +456,32 @@ def equal_area_temperature(
 ) -> CoexistencePoint:
     """Equal-area coexistence temperature from a stitched DOS.
 
-    Performs a single 1D bisection on temperature where, at each
-    trial T, ``find_phase_split`` is called to locate the dividing
-    energy ``E*(T)`` and ``imbalance(T) = w_low(T) - w_high(T)`` is
-    computed from the count-weighted microstate partition at that
-    ``E*``. The bisection terminates when the bracket has shrunk
-    below ``xtol * T_mid``.
+    Solves for the T at which ``imbalance(T) = w_low(T) -
+    w_high(T) = 0``, where ``w_low``, ``w_high`` are the partition
+    sums on either side of the dividing energy ``E*(T)`` returned
+    by :func:`find_phase_split`. Uses ``scipy.optimize.brentq``
+    inside an adaptive bracket.
+
+    Bracket selection (when ``T_bracket`` is ``None``):
+
+    1. Compute the heat-capacity peak ``T_seed`` from the stitched
+       DOS (see :func:`_cv_peak_seed`). This is guaranteed to lie
+       inside the bimodal-``P(E|T)`` window of a first-order DOS.
+    2. From ``T_seed``, walk outward in T in the direction implied
+       by the sign of ``imbalance(T_seed)`` until the sign flips
+       (see :func:`_walk_outward_bracket`). The walk stays inside
+       the bimodal window; hitting a window edge is a hard failure
+       and surfaces as ``NoBracketError``.
 
     Args:
         dos: stitched DOS as produced by
             ``mchammer_pt.analysis.dos.stitch_entropy``.
-        T_bracket: ``(T_lo, T_hi)`` bracket in Kelvin. If ``None``,
-            built automatically from a kT-scale heuristic derived
-            from the energy and entropy difference of the two
-            dominant DOS peaks; the heuristic scans ``imbalance(T)``
-            on a log-spaced grid to find the first sign change.
-        xtol: relative bisection tolerance on T. Default 1e-4.
+        T_bracket: optional ``(T_lo, T_hi)`` bracket in Kelvin. If
+            supplied, bypasses Cv-peak seeding and walk-outward;
+            the user is responsible for the bracket being valid
+            (positive, ordered, sign-changing, inside the bimodal
+            window).
+        xtol: relative tolerance on T. Default 1e-4.
         min_peak_separation: forwarded to
             :func:`find_phase_split`.
 
@@ -398,13 +489,17 @@ def equal_area_temperature(
         A :class:`CoexistencePoint`.
 
     Raises:
-        ValueError: on invalid inputs.
-        NotBimodalError: if no T in the auto-built scan range
-            yields a bimodal ``P(E|T)`` (only when ``T_bracket`` is
-            ``None``).
-        NoBracketError: if ``imbalance(T)`` does not change sign
-            across the bracket, or if shape analysis fails at any
-            bracket endpoint or mid-bracket trial.
+        ValueError: on invalid inputs, or when the Cv-peak seed
+            cannot be derived (flat ``ln g``, Cv peak at scan-range
+            edge).
+        NotBimodalError: when ``T_bracket`` is ``None`` and the Cv
+            peak temperature is not in the bimodal-``P(E|T)``
+            window — i.e. the DOS does not exhibit first-order
+            coexistence at the Cv-peak temperature.
+        NoBracketError: when the walk-outward search hits a
+            bimodal-window edge before finding a sign change, or
+            when a user-supplied ``T_bracket`` doesn't sign-change
+            or extends outside the bimodal window.
     """
     if dos.empty:
         raise ValueError("dos has no rows; need at least one energy bin")
@@ -414,19 +509,6 @@ def equal_area_temperature(
         raise ValueError(
             f"min_peak_separation must be >= 1; got {min_peak_separation}"
         )
-
-    if T_bracket is None:
-        T_lo, T_hi = _auto_bracket(dos, min_peak_separation=min_peak_separation)
-    else:
-        T_lo, T_hi = T_bracket
-        if T_lo <= 0.0 or T_hi <= 0.0:
-            raise ValueError(
-                f"T_bracket entries must be > 0 K; got ({T_lo}, {T_hi})"
-            )
-        if T_lo >= T_hi:
-            raise ValueError(
-                f"T_bracket must satisfy T_lo < T_hi; got ({T_lo}, {T_hi})"
-            )
 
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
@@ -438,57 +520,62 @@ def equal_area_temperature(
         w_low, w_high = partition_sums(energies, ln_g, T, split.E_star)
         return w_low - w_high
 
-    try:
-        f_lo = imbalance(T_lo)
-        f_hi = imbalance(T_hi)
-    except NotBimodalError as exc:
-        raise NoBracketError(
-            f"shape analysis failed at a bracket endpoint "
-            f"(T_lo={T_lo}, T_hi={T_hi}): {exc}"
-        ) from exc
-    if f_lo * f_hi > 0.0:
-        raise NoBracketError(
-            f"imbalance has same sign at both endpoints "
-            f"(T_lo={T_lo}: {f_lo:.3g}, T_hi={T_hi}: {f_hi:.3g}); "
-            f"extend T_bracket"
-        )
-
-    # Exact root at an endpoint: skip the bisection. With the
-    # sign-product update inside the loop, a zero at the endpoint
-    # would otherwise be discarded — the (f_lo == 0) * f_mid product
-    # is 0, the loop's `< 0` test would be False, and T_lo would
-    # march away from the root.
-    n_steps = 0
-    if f_lo == 0.0:
-        T_c = T_lo
-        f_mid = f_lo
-    elif f_hi == 0.0:
-        T_c = T_hi
-        f_mid = f_hi
+    if T_bracket is None:
+        T_seed = _cv_peak_seed(dos)
+        try:
+            T_lo, T_hi = _walk_outward_bracket(
+                dos, T_seed, min_peak_separation=min_peak_separation,
+            )
+        except NotBimodalError as exc:
+            raise NotBimodalError(
+                f"Cv peak at T={T_seed:.2f} K, but P(E|T) is not "
+                f"bimodal there: {exc}. The DOS does not exhibit "
+                "first-order coexistence at the Cv-peak temperature."
+            ) from exc
     else:
-        while True:
-            T_mid = 0.5 * (T_lo + T_hi)
-            try:
-                f_mid = imbalance(T_mid)
-            except NotBimodalError as exc:
-                raise NoBracketError(
-                    f"shape analysis failed at mid-bracket T={T_mid}; "
-                    f"the bracket extends outside the bimodal region: "
-                    f"{exc}"
-                ) from exc
-            n_steps += 1
-            if f_mid == 0.0:
-                T_c = T_mid
-                break
-            if f_lo * f_mid < 0.0:
-                T_hi = T_mid
-                f_hi = f_mid
-            else:
-                T_lo = T_mid
-                f_lo = f_mid
-            if (T_hi - T_lo) < xtol * T_mid:
-                T_c = T_mid
-                break
+        T_lo, T_hi = T_bracket
+        if T_lo <= 0.0 or T_hi <= 0.0:
+            raise ValueError(
+                f"T_bracket entries must be > 0 K; got ({T_lo}, {T_hi})"
+            )
+        if T_lo >= T_hi:
+            raise ValueError(
+                f"T_bracket must satisfy T_lo < T_hi; got ({T_lo}, {T_hi})"
+            )
+
+    def imbalance_for_brentq(T: float) -> float:
+        # brentq evaluates strictly inside [T_lo, T_hi]. If shape
+        # analysis fails mid-bracket, the bracket extends outside
+        # the bimodal region — surface as NoBracketError so the
+        # caller sees a meaningful diagnostic instead of an opaque
+        # scipy exception.
+        try:
+            return imbalance(T)
+        except NotBimodalError as exc:
+            raise NoBracketError(
+                f"shape analysis failed at mid-bracket T={T:.4f} K; "
+                f"the bracket extends outside the bimodal region: {exc}"
+            ) from exc
+
+    try:
+        T_c, result = brentq(
+            imbalance_for_brentq, T_lo, T_hi,
+            xtol=xtol * 0.5 * (T_lo + T_hi),
+            full_output=True, disp=True,
+        )
+    except ValueError as exc:
+        # brentq raises ValueError("f(a) and f(b) must have different signs")
+        # when the user-supplied bracket doesn't sign-change. The walk-outward
+        # path always returns a valid sign-changing bracket, so this only
+        # fires for a bad user-supplied T_bracket.
+        if "different signs" in str(exc).lower():
+            raise NoBracketError(
+                f"imbalance has same sign at both endpoints "
+                f"(T_lo={T_lo}, T_hi={T_hi}); extend T_bracket"
+            ) from exc
+        raise
+    n_steps = int(result.iterations)
+    f_mid = imbalance(T_c)
 
     final_split = find_phase_split(
         dos, T_K=T_c, min_peak_separation=min_peak_separation,
@@ -527,5 +614,5 @@ def equal_area_temperature(
         latent_heat=float(latent_heat),
         barrier_height=barrier_height,
         weight_imbalance=float(abs(f_mid)),
-        n_bisection_steps=n_steps,
+        n_iterations=n_steps,
     )

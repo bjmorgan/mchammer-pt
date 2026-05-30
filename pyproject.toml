@@ -16,6 +16,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "pandas",
+    "scipy",
     "ase",
     # The patched icet fork adds the WL `schedule` parameter, `_phase`,
     # and `_window_entry_step` that mchammer-pt's coordinator reads
