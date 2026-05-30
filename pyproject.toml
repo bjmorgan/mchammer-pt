@@ -42,6 +42,7 @@ dev = [
     "mypy",
     "ruff",
     "pandas-stubs",
+    "scipy-stubs",
     "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
 ]
 plot = ["matplotlib"]
