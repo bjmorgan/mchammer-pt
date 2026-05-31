@@ -53,7 +53,7 @@ def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
     if sigma < 0.0:
         raise ValueError(f"sigma must be >= 0; got {sigma!r}")
     if sigma == 0.0:
-        return ln_g
+        return ln_g.copy()
     return gaussian_filter1d(ln_g, sigma=sigma, mode="nearest")
 
 

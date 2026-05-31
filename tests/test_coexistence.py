@@ -548,7 +548,8 @@ def test_smooth_ln_g_positive_sigma_smooths():
     assert out.shape == ln_g.shape
     # Interior values shift toward neighbours but stay bounded.
     assert 0.5 < out[1] < 2.0
-    # Endpoints remain close to input under reflective boundary handling.
+    # Endpoints remain close to input under nearest-value extrapolation
+    # at the boundary.
     assert abs(out[0] - ln_g[0]) < 1.0
 
 
