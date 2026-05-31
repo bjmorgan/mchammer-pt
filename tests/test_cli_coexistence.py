@@ -198,3 +198,42 @@ def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     assert rc != 0
     err = capsys.readouterr().err
     assert "uniform" in err
+
+
+def test_cli_emits_stderr_warning_when_not_converged(
+    tmp_path, capsys, monkeypatch,
+):
+    """When ``self_consistent_converged`` is False, the CLI emits a
+    warning to stderr explaining the truncation. We monkeypatch the
+    solver to force the non-converged branch — the CLI doesn't
+    expose tolerance flags directly, so this isolates the CLI's
+    emission logic from the solver's iteration behaviour."""
+    import mchammer_pt.cli.coexistence as cli_module
+    from mchammer_pt.analysis.coexistence import (
+        CoexistencePoint,
+        PhaseSplit,
+    )
+
+    fake_result = CoexistencePoint(
+        split=PhaseSplit(
+            E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=1160.0,
+        ),
+        latent_heat=2.0,
+        barrier_height=0.1,
+        weight_imbalance=1e-4,
+        n_brentq_iterations=12,
+        n_self_consistent_iter=20,
+        self_consistent_converged=False,
+    )
+    monkeypatch.setattr(
+        cli_module, "equal_area_temperature", lambda *a, **kw: fake_result,
+    )
+
+    dos_csv = tmp_path / "dos.csv"
+    out_json = tmp_path / "result.json"
+    _write_dos(dos_csv, _coexistence_dos())
+    rc = main([str(dos_csv), "--output", str(out_json)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "warning" in err.lower()
+    assert "self-consistency" in err.lower() or "converge" in err.lower()

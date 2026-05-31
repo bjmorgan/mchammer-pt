@@ -562,18 +562,12 @@ def test_equal_area_temperature_on_lattice_like_dos():
     )
     assert T_bimodal_lo < result.T_K < T_bimodal_hi
     assert abs(result.T_K - T_c_analytic) / T_c_analytic < 0.01
-    # weight_imbalance is in the same (unnormalised) units as
-    # partition_sums, so we check it relative to the total partition
-    # weight at the converged Tc. Default xtol=1e-4 narrows T to a
-    # window ~0.1 K wide; for this fixture the imbalance(T) slope is
-    # steep, giving an absolute residual ~0.3 against a total ~1930
-    # (relative ~1.4e-4).
-    energies = dos["energy"].to_numpy()
-    ln_g = dos["entropy"].to_numpy()
-    w_low, w_high = _partition_sums(
-        energies, ln_g, result.T_K, result.split.E_star,
-    )
-    assert result.weight_imbalance / (w_low + w_high) < 1e-3
+    # weight_imbalance is the normalised residual
+    # |w_low - w_high| / (w_low + w_high) at the converged
+    # (Tc, E_star). Default xtol=1e-4 narrows T to ~0.1 K; for this
+    # fixture the imbalance(T) slope is steep, so the residual is
+    # well below 1e-3.
+    assert result.weight_imbalance < 1e-3
     assert result.latent_heat > 0.0
     # Returned PhaseSplit must be self-consistent: re-running
     # find_phase_split at result.T_K must reproduce the same split.
@@ -596,13 +590,9 @@ def test_equal_area_temperature_auto_bracket_on_lattice_like_dos():
     T_bimodal_lo = 1.0 / (kB * 11.54)
     T_bimodal_hi = 1.0 / (kB * 8.46)
     assert T_bimodal_lo < result.T_K < T_bimodal_hi
-    # See bracketed-case note above on weight_imbalance vs. xtol.
-    energies = dos["energy"].to_numpy()
-    ln_g = dos["entropy"].to_numpy()
-    w_low, w_high = _partition_sums(
-        energies, ln_g, result.T_K, result.split.E_star,
-    )
-    assert result.weight_imbalance / (w_low + w_high) < 1e-3
+    # weight_imbalance is the normalised residual; see bracketed-case
+    # test above for the rationale on the 1e-3 bound.
+    assert result.weight_imbalance < 1e-3
     assert result.latent_heat > 0.0
 
 
@@ -711,3 +701,56 @@ def test_smooth_ln_g_positive_sigma_smooths():
 def test_smooth_ln_g_rejects_negative_sigma():
     with pytest.raises(ValueError, match="sigma"):
         _smooth_ln_g(np.array([0.0, 1.0]), sigma=-0.5)
+
+
+def test_equal_area_temperature_reports_not_converged_when_iteration_truncated():
+    """If the iteration exhausts ``max_self_consistent_iter`` without
+    meeting ``self_consistent_tol_K``, the result reports
+    ``self_consistent_converged=False``."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    # Tight tolerance + tiny budget guarantees truncation: a single
+    # pass cannot drive |Δ Tc| below 1e-12 K.
+    result = equal_area_temperature(
+        dos,
+        max_self_consistent_iter=1,
+        self_consistent_tol_K=1e-12,
+    )
+    assert result.self_consistent_converged is False
+
+
+def test_equal_area_temperature_weight_imbalance_is_normalised():
+    """The reported ``weight_imbalance`` is the dimensionless
+    normalised residual ``|w_low - w_high| / (w_low + w_high)``."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    result = equal_area_temperature(dos)
+    assert 0.0 <= result.weight_imbalance < 1e-3, (
+        f"normalised residual {result.weight_imbalance} unexpectedly "
+        f"large on a clean lattice_like_dos; suggests Tc is not a "
+        f"true root"
+    )
+
+
+def test_equal_area_temperature_final_brentq_pins_tc_to_real_root():
+    """After convergence, the reported ``Tc`` must be a zero of
+    ``imbalance(T; E_star)`` for the converged ``E_star`` — not the
+    damped blend from the last iteration step. We recompute the
+    normalised residual at the returned ``(Tc, split.E_star)`` and
+    require it below ``xtol``."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    result = equal_area_temperature(dos)
+    assert result.self_consistent_converged is True
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_lo, w_hi = _partition_sums(
+        energies, ln_g, result.T_K, result.split.E_star,
+    )
+    assert abs(w_lo - w_hi) / (w_lo + w_hi) < 1e-4

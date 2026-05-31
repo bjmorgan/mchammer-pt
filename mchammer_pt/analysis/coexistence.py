@@ -433,9 +433,10 @@ def _walk_for_sign_change(
         return float(w_lo - w_hi)
 
     f_start = f(T_start)
-    if f_start == 0.0:
-        return (T_start - step_K, T_start + step_K)
-    direction = +1 if f_start > 0 else -1
+    # An f == 0 at T_start is handled implicitly by the loop: the
+    # next sample satisfies f_T * f_prev <= 0.0 and we return that
+    # bracket. brentq accepts an endpoint where f == 0 (it's a root).
+    direction = +1 if f_start >= 0 else -1
     T_max = T_start * T_max_factor
 
     T_prev = T_start
@@ -449,7 +450,7 @@ def _walk_for_sign_change(
                 f"scan edge at T={T:.2f} K)"
             )
         f_T = f(T)
-        if f_T * f_prev < 0.0:
+        if f_T * f_prev <= 0.0:
             return (T_prev, T) if direction > 0 else (T, T_prev)
         T_prev = T
         f_prev = f_T
@@ -479,8 +480,10 @@ class CoexistencePoint:
             ``P(E_star | T_c)`` to the larger of the two phase-peak
             heights, multiplied by ``k_B * T_c``. Non-negative for a
             genuinely bimodal DOS.
-        weight_imbalance: ``|w_low - w_high|`` at the returned
-            temperature, the solver residual.
+        weight_imbalance: normalised solver residual
+            ``|w_low - w_high| / (w_low + w_high)`` at the converged
+            temperature, evaluated against the converged ``E_star``.
+            Dimensionless; near-zero for a well-solved Tc.
         n_brentq_iterations: total number of
             ``scipy.optimize.brentq`` iterations summed across all
             self-consistency passes.
@@ -671,21 +674,23 @@ def equal_area_temperature(
         w_lo, w_hi = partition_sums(energies, ln_g_raw, T, E_star_fixed)
         return float(w_lo - w_hi)
 
-    # First brentq.
-    try:
-        Tc, brentq_result = brentq(
-            lambda T: imbalance(T, E_star),
-            T_lo, T_hi,
-            xtol=xtol * 0.5 * (T_lo + T_hi),
-            full_output=True, disp=True,
+    # First brentq. Explicit precheck on bracket sign-change, so we
+    # don't have to string-match scipy's ValueError text.
+    f_lo = imbalance(T_lo, E_star)
+    f_hi = imbalance(T_hi, E_star)
+    if f_lo * f_hi > 0.0:
+        raise NoBracketError(
+            f"imbalance has same sign at both endpoints "
+            f"(T_lo={T_lo}, f_lo={f_lo:.3e}; T_hi={T_hi}, "
+            f"f_hi={f_hi:.3e}); the bracket does not straddle a "
+            f"coexistence Tc"
         )
-    except ValueError as exc:
-        if "different signs" in str(exc).lower():
-            raise NoBracketError(
-                f"imbalance has same sign at both endpoints "
-                f"(T_lo={T_lo}, T_hi={T_hi}); extend T_bracket"
-            ) from exc
-        raise
+    Tc, brentq_result = brentq(
+        lambda T: imbalance(T, E_star),
+        T_lo, T_hi,
+        xtol=xtol * 0.5 * (T_lo + T_hi),
+        full_output=True, disp=True,
+    )
     n_brentq_total = int(brentq_result.iterations)
 
     # Self-consistency iteration on (Tc, E_star).
@@ -710,23 +715,21 @@ def equal_area_temperature(
         except NoBracketError:
             # Re-bracket failed; keep current Tc.
             break
-        try:
-            Tc_raw, br = brentq(
-                lambda T, E=E_star_new: imbalance(T, E),
-                T_lo_i, T_hi_i,
-                xtol=xtol * 0.5 * (T_lo_i + T_hi_i),
-                full_output=True, disp=True,
-            )
-        except ValueError as exc:
-            if "different signs" in str(exc).lower():
-                # _walk_for_sign_change returned a bracket whose
-                # imbalance values at the endpoints don't actually
-                # straddle zero — a numerical edge case (e.g.
-                # f(T_prev) == 0 exactly). Stop iterating with the
-                # current (Tc, E_star); self_consistent_converged
-                # stays False to signal truncation.
-                break
-            raise
+        # Explicit precheck on the inner-loop bracket. If
+        # _walk_for_sign_change returned a bracket whose imbalance
+        # endpoints don't straddle zero, stop iterating with the
+        # current (Tc, E_star); self_consistent_converged stays
+        # False to signal truncation.
+        f_lo_i = imbalance(T_lo_i, E_star_new)
+        f_hi_i = imbalance(T_hi_i, E_star_new)
+        if f_lo_i * f_hi_i > 0.0:
+            break
+        Tc_raw, br = brentq(
+            lambda T, E=E_star_new: imbalance(T, E),
+            T_lo_i, T_hi_i,
+            xtol=xtol * 0.5 * (T_lo_i + T_hi_i),
+            full_output=True, disp=True,
+        )
         n_brentq_total += int(br.iterations)
         Tc_damped = (1.0 - damping) * Tc + damping * Tc_raw
         E_star_damped = (1.0 - damping) * E_star + damping * E_star_new
@@ -738,6 +741,34 @@ def equal_area_temperature(
         Tc = Tc_damped
         E_star = E_star_damped
 
+    # Final un-damped brentq pass: pin the reported Tc to the true
+    # zero of imbalance(T; E_star) for the converged E_star. The
+    # damped iteration converges to (Tc, E_star), but the last
+    # assignment of Tc is a linear blend that is not itself a root.
+    if self_consistent_converged and max_self_consistent_iter > 0:
+        try:
+            T_lo_final, T_hi_final = _walk_for_sign_change(
+                energies, ln_g_raw, Tc, E_star,
+            )
+            f_lo_final = imbalance(T_lo_final, E_star)
+            f_hi_final = imbalance(T_hi_final, E_star)
+            if f_lo_final * f_hi_final > 0.0:
+                raise NoBracketError(
+                    "final un-damped re-bracket did not straddle zero"
+                )
+            Tc, br_final = brentq(
+                lambda T: imbalance(T, E_star),
+                T_lo_final, T_hi_final,
+                xtol=xtol * 0.5 * (T_lo_final + T_hi_final),
+                full_output=True, disp=True,
+            )
+            n_brentq_total += int(br_final.iterations)
+        except (NoBracketError, ValueError):
+            # If the un-damped re-solve fails, the damped Tc was
+            # the best estimate. Flag as not converged so callers
+            # know the reported triple isn't a clean root.
+            self_consistent_converged = False
+
     # Final phase split at converged Tc (uses smoothing_sigma for the
     # reported peak positions).
     final_split = find_phase_split(
@@ -748,7 +779,22 @@ def equal_area_temperature(
         energies, ln_g_raw, Tc, final_split.E_star,
     )
     latent_heat = float(mean_high - mean_low)
-    f_mid = imbalance(Tc, final_split.E_star)
+
+    # Normalised residual at the converged (Tc, E_star) — the
+    # quantity brentq actually solved. Dimensionless; near-zero for
+    # a well-solved Tc. Uses E_star (the converged saddle), NOT
+    # final_split.E_star (a re-detected saddle on smoothed phi at
+    # the converged Tc, which would differ subtly).
+    w_lo_final, w_hi_final = partition_sums(
+        energies, ln_g_raw, Tc, E_star,
+    )
+    total_final = w_lo_final + w_hi_final
+    if total_final > 0.0:
+        weight_imbalance = float(
+            abs(w_lo_final - w_hi_final) / total_final
+        )
+    else:
+        weight_imbalance = float("nan")
 
     # Barrier height (raw phi at smoothed peak/saddle positions).
     beta_c = 1.0 / (kB * Tc)
@@ -776,7 +822,7 @@ def equal_area_temperature(
         split=final_split,
         latent_heat=latent_heat,
         barrier_height=barrier_height,
-        weight_imbalance=float(abs(f_mid)),
+        weight_imbalance=weight_imbalance,
         n_brentq_iterations=n_brentq_total,
         n_self_consistent_iter=n_sc_iter,
         self_consistent_converged=self_consistent_converged,

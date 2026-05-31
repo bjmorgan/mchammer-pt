@@ -154,6 +154,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    if not result.self_consistent_converged:
+        print(
+            "warning: self-consistency iteration did not converge "
+            "within 20 passes; reported T_K may differ from the "
+            "true fixed point by more than self_consistent_tol_K. "
+            "Consider re-running with a different --smooth-sigma "
+            "or inspecting the DOS for data-quality issues.",
+            file=sys.stderr,
+        )
+
     row = {
         "T_K": result.T_K,
         "E_peak_low": result.split.E_peak_low,
