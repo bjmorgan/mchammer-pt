@@ -710,12 +710,23 @@ def equal_area_temperature(
         except NoBracketError:
             # Re-bracket failed; keep current Tc.
             break
-        Tc_raw, br = brentq(
-            lambda T, E=E_star_new: imbalance(T, E),
-            T_lo_i, T_hi_i,
-            xtol=xtol * 0.5 * (T_lo_i + T_hi_i),
-            full_output=True, disp=True,
-        )
+        try:
+            Tc_raw, br = brentq(
+                lambda T, E=E_star_new: imbalance(T, E),
+                T_lo_i, T_hi_i,
+                xtol=xtol * 0.5 * (T_lo_i + T_hi_i),
+                full_output=True, disp=True,
+            )
+        except ValueError as exc:
+            if "different signs" in str(exc).lower():
+                # _walk_for_sign_change returned a bracket whose
+                # imbalance values at the endpoints don't actually
+                # straddle zero — a numerical edge case (e.g.
+                # f(T_prev) == 0 exactly). Stop iterating with the
+                # current (Tc, E_star); self_consistent_converged
+                # stays False to signal truncation.
+                break
+            raise
         n_brentq_total += int(br.iterations)
         Tc_damped = (1.0 - damping) * Tc + damping * Tc_raw
         E_star_damped = (1.0 - damping) * E_star + damping * E_star_new

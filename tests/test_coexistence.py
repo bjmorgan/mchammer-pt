@@ -606,17 +606,22 @@ def test_equal_area_temperature_auto_bracket_on_lattice_like_dos():
     assert result.latent_heat > 0.0
 
 
-def test_equal_area_temperature_raises_no_bracket_on_bad_user_range():
+def test_equal_area_temperature_raises_not_bimodal_on_unimodal_user_range():
+    """A user-supplied ``T_bracket`` whose midpoint is far outside the
+    bimodal window surfaces as ``NotBimodalError`` rather than
+    ``NoBracketError``: saddle detection at the bracket midpoint runs
+    before any sign-change walk, and the smoothed phi has only one peak
+    there, so the bimodality check fails first."""
     dos = lattice_like_dos(
         a=1.0, beta_c=10.0, c=1.0,
         E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
     # T well above the bimodal window (beta ~ 1-2, far below beta_c):
-    # P is unimodal, find_phase_split fails at the bracket endpoint,
-    # surfaced as NoBracketError.
+    # phi is unimodal at the bracket midpoint, so the saddle-detection
+    # seed step raises NotBimodalError.
     T_too_hot_lo = 1.0 / (kB * 2.0)
     T_too_hot_hi = 1.0 / (kB * 1.0)
-    with pytest.raises(NoBracketError):
+    with pytest.raises(NotBimodalError, match="smoothed phi not bimodal"):
         equal_area_temperature(dos, T_bracket=(T_too_hot_lo, T_too_hot_hi))
 
 
@@ -658,7 +663,10 @@ def test_equal_area_temperature_self_consistent_iteration_logged():
         E_min=-1.5, E_max=1.5, energy_spacing=0.005,
     )
     res = equal_area_temperature(dos)
-    assert res.n_self_consistent_iter >= 1
+    assert 1 <= res.n_self_consistent_iter <= 10, (
+        f"iteration took {res.n_self_consistent_iter} passes; "
+        f"expected <= 10 on a clean lattice_like_dos"
+    )
     assert res.n_brentq_iterations >= 1
     assert res.self_consistent_converged is True
 
