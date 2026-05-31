@@ -13,6 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``CoexistencePoint.self_consistent_converged`` fields, exposing the
   number of self-consistent E_star refinement iterations performed at
   the final brentq evaluation and whether that refinement converged.
+- ``smoothing_sigma`` keyword on ``find_phase_split`` (default
+  ``0.0``), which applies a Gaussian smoothing of ``ln g(E)`` along
+  the energy axis before locating the phi-minima. Opt-in for direct
+  callers; the coexistence top-level entry point enables it by
+  default.
+- ``smoothing_sigma`` (default ``2.0``),
+  ``max_self_consistent_iter`` (default ``20``), ``damping``
+  (default ``0.5``), and ``self_consistent_tol_K`` (default
+  ``1e-3``) keywords on ``equal_area_temperature``, controlling the
+  one-shot ``ln g`` smoothing and the ``(Tc, E_star)``
+  self-consistency loop respectively.
+- ``mchammer-pt-coexistence`` gains ``--smooth-sigma`` (forwarded as
+  ``smoothing_sigma``) and ``--no-self-consistent`` (sets
+  ``max_self_consistent_iter=0``, freezing ``E_star`` at its initial
+  seed value) command-line flags.
 
 ### Deprecated
 
@@ -23,36 +38,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- ``mchammer_pt.analysis.coexistence.equal_area_temperature``
-  replaces its kT-scale-heuristic auto-bracket with a Cv-peak-seeded
-  walk-outward bracket finder. The previous bracket built a
-  log-spaced T scan over a wide kT-scale range and looked for any
-  adjacent pair where ``imbalance(T)`` changed sign; on real REWL
-  output with narrow first-order bimodal-``P(E|T)`` windows
-  (~tens of K), the scan grid was too coarse to land two adjacent
-  Ts inside the window and the bracket finder failed even when a
-  coexistence Tc existed. The new flow computes the heat-capacity
-  peak from the same stitched DOS (a closed-form integral, no extra
-  data needed), seeds at the peak — guaranteed to lie inside the
-  bimodal window for a first-order DOS — and walks outward in T
-  along the direction implied by the sign of ``imbalance(T_seed)``
-  until the sign flips. The walk stays domain-aware: hitting the
-  bimodal-window edge before a sign change is a hard failure with
-  a meaningful diagnostic ("imbalance stays <0/>0 throughout the
-  bimodal window; the DOS does not exhibit equal-area coexistence
-  in this T range"), distinct from "Cv peak is not inside a
-  bimodal window" (signalled separately as ``NotBimodalError``).
-- The inner T-bisection is now ``scipy.optimize.brentq``,
-  exploiting inverse-quadratic interpolation for faster
-  convergence than plain bisection at no API cost. ``scipy`` is
-  declared as an explicit dependency; it was already pulled in
-  transitively by ``ase`` and ``icet``.
-- ``CoexistencePoint.n_bisection_steps`` renamed to
-  ``CoexistencePoint.n_brentq_iterations``. The field reports the
-  number of ``brentq`` iterations (which mix bisection and
-  inverse-quadratic-interpolation steps), so the previous name was
-  misleading. The CLI's JSON/CSV output column is renamed
-  consistently.
+- ``mchammer_pt.analysis.coexistence.equal_area_temperature`` is
+  re-architected around a fixed dividing energy with an outer
+  self-consistency loop, replacing the previous design that
+  recomputed the phi-minima phase split at every trial temperature
+  inside the root-finder. The new flow smooths ``ln g(E)`` once
+  (controlled by ``smoothing_sigma``) to stabilise the topology
+  detection, seeds ``E_star`` at the heat-capacity peak inferred
+  from the stitched DOS, runs ``scipy.optimize.brentq`` on the
+  equal-area imbalance with that ``E_star`` held fixed, then
+  refreshes ``E_star`` at the resulting Tc and iterates the
+  ``(Tc, E_star)`` pair under damped updates until the temperature
+  change between successive iterations falls below
+  ``self_consistent_tol_K``. The previous in-loop peak detection
+  was defeated by shot-noise dimples in real REWL ``ln g(E)`` —
+  brentq's intermediate trial temperatures landed on T values
+  whose ``P(E | T)`` was momentarily unimodal under the raw curve,
+  collapsing the bracket. Smoothing the topology detection once
+  and removing per-T peak detection from the root-finder gives a
+  bracket-finding and root-finding pipeline that is robust on
+  realistically noisy input. The auto-bracket helper is replaced
+  by ``_walk_for_sign_change``, which integrates the raw
+  fixed-``E_star`` imbalance outward from the Cv-peak seed until
+  the sign flips; window-edge exits raise an informative
+  diagnostic distinct from the unimodal-midpoint case.
+- A user-supplied ``T_bracket`` whose midpoint temperature is
+  unimodal under the smoothed ``ln g`` now raises
+  ``NotBimodalError`` rather than ``NoBracketError``. The
+  diagnostic identifies the root cause (the bracket does not
+  enclose a bimodal region) rather than reporting a generic
+  bracket failure.
+- The inner T root-finder is ``scipy.optimize.brentq``, exploiting
+  inverse-quadratic interpolation for faster convergence than
+  plain bisection at no API cost. ``scipy`` is declared as an
+  explicit dependency; it was already pulled in transitively by
+  ``ase`` and ``icet``. ``CoexistencePoint.n_bisection_steps`` is
+  renamed to ``CoexistencePoint.n_brentq_iterations`` to reflect
+  that the iteration count mixes bisection and
+  inverse-quadratic-interpolation steps; the CLI's JSON/CSV output
+  column is renamed consistently.
 
 ### Fixed
 
