@@ -373,6 +373,51 @@ def test_find_phase_split_raises_outside_bimodal_window():
         find_phase_split(dos, T_K=T_above)
 
 
+def test_find_phase_split_with_smoothing_ignores_narrow_dimples():
+    """A ln g that's smooth except for a single-bin dimple should
+    still give the same phase peaks as the dimple-free version when
+    smoothing_sigma > 0.
+    """
+    dos_clean = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    # Find the bin that sits between the two phase peaks and add a
+    # narrow dimple to ln g there.
+    dos_dimpled = dos_clean.copy()
+    mid_idx = len(dos_dimpled) // 2
+    dos_dimpled.loc[mid_idx - 1:mid_idx + 1, "entropy"] += 0.4
+
+    T_test = 1.0 / (10.0 * 8.617e-5)  # roughly the design Tc
+    # Without smoothing, the dimple perturbs the saddle location, so
+    # E_star on the dimpled DOS differs from the clean version.
+    split_dimpled = find_phase_split(dos_dimpled, T_K=T_test)
+    split_clean = find_phase_split(dos_clean, T_K=T_test)
+    bin_width = float(dos_clean.loc[1, "energy"] - dos_clean.loc[0, "energy"])
+    assert abs(split_dimpled.E_star - split_clean.E_star) > 0.0  # sanity
+    # With smoothing on the dimpled data, peak positions should
+    # match the clean version to within a bin width.
+    split_smoothed = find_phase_split(
+        dos_dimpled, T_K=T_test, smoothing_sigma=2.0,
+    )
+    assert abs(split_smoothed.E_peak_low - split_clean.E_peak_low) < bin_width
+    assert abs(split_smoothed.E_peak_high - split_clean.E_peak_high) < bin_width
+
+
+def test_find_phase_split_zero_sigma_unchanged():
+    """smoothing_sigma=0 must reproduce the existing behaviour exactly."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    T_test = 1.0 / (10.0 * 8.617e-5)
+    s0 = find_phase_split(dos, T_K=T_test, smoothing_sigma=0.0)
+    s_default = find_phase_split(dos, T_K=T_test)  # default sigma should be 0
+    assert s0.E_peak_low == s_default.E_peak_low
+    assert s0.E_peak_high == s_default.E_peak_high
+    assert s0.E_star == s_default.E_star
+
+
 def test_cv_peak_seed_lands_inside_bimodal_window():
     # The Cv peak must sit inside the bimodal-P(E|T) window — that's
     # the entire physical justification for using it as a bracket

@@ -156,6 +156,7 @@ def find_phase_split(
     T_K: float,
     *,
     min_peak_separation: int = 5,
+    smoothing_sigma: float = 0.0,
 ) -> PhaseSplit:
     """Locate the two phase peaks and the dividing energy at T_K.
 
@@ -172,6 +173,12 @@ def find_phase_split(
             located.
         min_peak_separation: minimum number of bins required between
             the two phase peaks. Default 5.
+        smoothing_sigma: Gaussian standard deviation in bins applied to
+            ``ln g`` before computing ``phi`` for topology detection.
+            ``0.0`` (default) disables smoothing and reproduces the
+            pre-smoothing behaviour exactly. Positive values smooth out
+            bin-scale shot-noise dimples that can defeat the local-minima
+            detection on under-converged DOS data.
 
     Returns:
         ``PhaseSplit`` with sub-bin-refined peak and valley positions
@@ -199,8 +206,9 @@ def find_phase_split(
             "find_phase_split: dos contains non-finite (NaN/inf) "
             "values in 'energy' or 'entropy' columns"
         )
+    ln_g_for_topology = _smooth_ln_g(ln_g, sigma=smoothing_sigma)
     beta = 1.0 / (kB * T_K)
-    phi = beta * energies - ln_g
+    phi = beta * energies - ln_g_for_topology
 
     try:
         peak_idx = _two_dominant_peak_indices(phi)
