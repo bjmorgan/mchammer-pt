@@ -17,6 +17,7 @@ from mchammer_pt.analysis.coexistence import (
     PhaseSplit,
     _cv_peak_seed,
     _parabolic_vertex,
+    _smooth_ln_g,
     _two_dominant_peak_indices,
     _walk_outward_bracket,
     equal_area_temperature,
@@ -531,3 +532,26 @@ def test_equal_area_temperature_raises_no_bracket_on_bad_user_range():
     T_too_hot_hi = 1.0 / (kB * 1.0)
     with pytest.raises(NoBracketError):
         equal_area_temperature(dos, T_bracket=(T_too_hot_lo, T_too_hot_hi))
+
+
+def test_smooth_ln_g_zero_sigma_returns_input():
+    ln_g = np.array([0.0, 1.0, 4.0, 9.0, 16.0])
+    out = _smooth_ln_g(ln_g, sigma=0.0)
+    np.testing.assert_array_equal(out, ln_g)
+
+
+def test_smooth_ln_g_positive_sigma_smooths():
+    ln_g = np.array([0.0, 1.0, 4.0, 9.0, 16.0])
+    out = _smooth_ln_g(ln_g, sigma=1.0)
+    # Gaussian filter preserves endpoints approximately under mode='nearest'
+    # and brings interior values toward neighbouring mean.
+    assert out.shape == ln_g.shape
+    # Interior values shift toward neighbours but stay bounded.
+    assert 0.5 < out[1] < 2.0
+    # Endpoints remain close to input under reflective boundary handling.
+    assert abs(out[0] - ln_g[0]) < 1.0
+
+
+def test_smooth_ln_g_rejects_negative_sigma():
+    with pytest.raises(ValueError, match="sigma"):
+        _smooth_ln_g(np.array([0.0, 1.0]), sigma=-0.5)

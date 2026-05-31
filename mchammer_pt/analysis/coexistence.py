@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from ase.units import kB
+from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import brentq
 
 from mchammer_pt.analysis._partition import partition_means, partition_sums
@@ -31,6 +32,29 @@ _CV_SEED_KT_HIGH_FRAC = 20.0
 # to the bracketed sign change.
 _WALK_STEP_K = 1.0
 _WALK_MAX_STEPS = 500
+
+
+def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian-smooth ``ln g`` for topology-detection purposes.
+
+    Wraps ``scipy.ndimage.gaussian_filter1d`` with ``mode='nearest'``
+    (constant extrapolation at the boundary). Used only for finding
+    phase peaks and the saddle; all weight integrals downstream
+    consume raw ``ln g``.
+
+    Args:
+        ln_g: 1-D array of entropy values per bin.
+        sigma: Gaussian standard deviation in bins. Must be >= 0.
+            ``sigma=0`` returns the input unchanged.
+
+    Returns:
+        Smoothed array with the same shape as ``ln_g``.
+    """
+    if sigma < 0.0:
+        raise ValueError(f"sigma must be >= 0; got {sigma!r}")
+    if sigma == 0.0:
+        return ln_g
+    return gaussian_filter1d(ln_g, sigma=sigma, mode="nearest")
 
 
 class NotBimodalError(ValueError):
