@@ -19,7 +19,7 @@ from mchammer_pt.analysis.coexistence import (
     _parabolic_vertex,
     _smooth_ln_g,
     _two_dominant_peak_indices,
-    _walk_outward_bracket,
+    _walk_for_sign_change,
     equal_area_temperature,
     find_phase_split,
 )
@@ -501,43 +501,31 @@ def test_cv_peak_seed_raises_value_error_on_flat_ln_g():
         _cv_peak_seed(dos)
 
 
-def test_walk_outward_bracket_returns_sign_changing_pair():
-    # From a seed inside the bimodal window, walk_outward_bracket
-    # must return (T_lo, T_hi) with imbalance(T_lo) and
-    # imbalance(T_hi) of opposite sign (or one zero). Both endpoints
-    # must still yield a valid PhaseSplit.
+def test_walk_for_sign_change_returns_sign_changing_pair():
+    # From a T_start inside the bimodal window with a fixed E_star,
+    # _walk_for_sign_change must return (T_lo, T_hi) with the
+    # fixed-E_star imbalance of opposite sign (or one zero) at the
+    # two endpoints.
     dos = lattice_like_dos(
         a=1.0, beta_c=10.0, c=1.0,
         E_min=-1.5, E_max=1.5, energy_spacing=0.001,
     )
     T_seed = _cv_peak_seed(dos)
-    T_lo, T_hi = _walk_outward_bracket(dos, T_seed)
-    assert T_lo > 0.0
-    assert T_hi > T_lo
-    split_lo = find_phase_split(dos, T_K=T_lo)
-    split_hi = find_phase_split(dos, T_K=T_hi)
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
+    split = find_phase_split(dos, T_K=T_seed)
+    T_lo, T_hi = _walk_for_sign_change(
+        energies, ln_g, T_seed, split.E_star,
+    )
+    assert T_lo > 0.0
+    assert T_hi > T_lo
     w_lo_lo, w_hi_lo = _partition_sums(
-        energies, ln_g, T_K=T_lo, E_star=split_lo.E_star,
+        energies, ln_g, T_K=T_lo, E_star=split.E_star,
     )
     w_lo_hi, w_hi_hi = _partition_sums(
-        energies, ln_g, T_K=T_hi, E_star=split_hi.E_star,
+        energies, ln_g, T_K=T_hi, E_star=split.E_star,
     )
     assert (w_lo_lo - w_hi_lo) * (w_lo_hi - w_hi_hi) <= 0
-
-
-def test_walk_outward_bracket_raises_not_bimodal_at_bad_seed():
-    # A seed outside the bimodal window must surface as
-    # NotBimodalError immediately, not as a wandering walk.
-    energies = np.linspace(-2.0, 2.0, 401)
-    ln_g = -(energies ** 2)
-    ln_g -= ln_g.min()
-    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
-    # T = 100 K is well inside the kT-scale range for this DOS but
-    # P(E|T) is unimodal, so find_phase_split must fail.
-    with pytest.raises(NotBimodalError):
-        _walk_outward_bracket(dos, T_seed=100.0)
 
 
 def test_equal_area_temperature_raises_not_bimodal_on_unimodal_dos():
@@ -630,6 +618,67 @@ def test_equal_area_temperature_raises_no_bracket_on_bad_user_range():
     T_too_hot_hi = 1.0 / (kB * 1.0)
     with pytest.raises(NoBracketError):
         equal_area_temperature(dos, T_bracket=(T_too_hot_lo, T_too_hot_hi))
+
+
+def test_equal_area_temperature_smoothing_default_works_on_clean_dos():
+    """Default smoothing_sigma=2.0 must converge to a Tc near the
+    design value on a clean lattice_like_dos fixture."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    result = equal_area_temperature(dos)
+    expected_Tc = 1.0 / (10.0 * 8.617e-5)  # ~1160 K
+    assert abs(result.T_K - expected_Tc) < 1.0  # within 1 K
+    assert result.self_consistent_converged is True
+
+
+def test_equal_area_temperature_tolerates_shot_noise_dimples():
+    """A clean DOS with random gaussian dimples in the valley should
+    still resolve to the same Tc within 1% of the dimple-free answer."""
+    rng = np.random.default_rng(seed=42)
+    dos_clean = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    dos_dimpled = dos_clean.copy()
+    mid = len(dos_dimpled) // 2
+    valley_slice = slice(mid - 30, mid + 30)
+    entropy_col = dos_dimpled.columns.get_loc("entropy")
+    dos_dimpled.iloc[valley_slice, entropy_col] += rng.normal(0, 0.3, size=60)
+
+    res_clean = equal_area_temperature(dos_clean)
+    res_dimpled = equal_area_temperature(dos_dimpled)
+    assert abs(res_dimpled.T_K - res_clean.T_K) / res_clean.T_K < 0.01
+
+
+def test_equal_area_temperature_self_consistent_iteration_logged():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    res = equal_area_temperature(dos)
+    assert res.n_self_consistent_iter >= 1
+    assert res.n_brentq_iterations >= 1
+    assert res.self_consistent_converged is True
+
+
+def test_equal_area_temperature_disabled_iteration():
+    """max_self_consistent_iter=0 disables the iteration; result
+    should still be in the same ballpark on clean DOS (the iteration
+    refines E_star at Tc rather than provides order-of-magnitude
+    correction)."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    res_iter = equal_area_temperature(dos)
+    res_no_iter = equal_area_temperature(dos, max_self_consistent_iter=0)
+    assert res_no_iter.n_self_consistent_iter == 0
+    # Un-iterated answer uses E_star detected at the seed T, not at
+    # Tc; on this symmetric fixture the seed/Tc mismatch produces a
+    # few-K offset that the iteration removes.
+    assert abs(res_iter.T_K - res_no_iter.T_K) < 5.0
 
 
 def test_smooth_ln_g_zero_sigma_returns_input():
