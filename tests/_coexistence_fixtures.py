@@ -46,7 +46,7 @@ def lattice_like_dos(
     range where the cubic term has not yet overtaken the linear
     ``beta_c * E`` term. The boundary of that range is the real root
     of ``E ** 3 - c ** 2 * E - beta_c / (4 * a) = 0``. For
-    ``c = 1, beta_c = 10, a = 1`` this root is at ``E ≈ 1.65``, so a
+    ``c = 1, beta_c = 10, a = 1`` this root is at ``E ≈ 1.60``, so a
     safe energy range is ``[E_min, E_max] = [-1.5, 1.5]``.
 
     Returned DataFrame: ``energy`` (eV) and ``entropy`` (``ln g``)

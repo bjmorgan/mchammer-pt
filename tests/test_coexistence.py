@@ -263,7 +263,7 @@ def test_public_surface_reexported_from_analysis():
 
 def test_lattice_like_dos_is_monotone_in_energy():
     # For a=1, beta_c=10, c=1 the boundary of monotonicity is the
-    # real root of E**3 - E - 2.5 = 0 at E ~ 1.65; [-1.5, 1.5] is
+    # real root of E**3 - E - 2.5 = 0 at E ~ 1.60; [-1.5, 1.5] is
     # comfortably inside.
     dos = lattice_like_dos(
         a=1.0, beta_c=10.0, c=1.0,
@@ -754,3 +754,82 @@ def test_equal_area_temperature_final_brentq_pins_tc_to_real_root():
         energies, ln_g, result.T_K, result.split.E_star,
     )
     assert abs(w_lo - w_hi) / (w_lo + w_hi) < 1e-4
+
+
+def test_equal_area_temperature_non_default_damping_converges():
+    """The damped iteration converges across a range of damping
+    factors on a clean DOS. Pins the damping kwarg's behaviour at
+    non-default values. ``damping=1.0`` (no damping) is excluded:
+    undamped fixed-point iteration can oscillate on shallow-bimodal
+    maps, which is precisely why the default damping is < 1."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    results = {}
+    for damping in (0.25, 0.5, 0.75):
+        results[damping] = equal_area_temperature(dos, damping=damping)
+    # All converge.
+    for damping, res in results.items():
+        assert res.self_consistent_converged, (
+            f"damping={damping} did not converge on clean DOS"
+        )
+    # All find roughly the same Tc (within 50 mK across damping
+    # values on this symmetric fixture).
+    Tcs = [r.T_K for r in results.values()]
+    assert max(Tcs) - min(Tcs) < 0.05, (
+        f"Tc varies > 50 mK across damping values: {Tcs}"
+    )
+
+
+def test_equal_area_temperature_tight_tol_takes_more_iterations():
+    """Tighter self_consistent_tol_K requires more iteration passes
+    to converge. Pins the tol_K kwarg behaviour."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    res_loose = equal_area_temperature(dos, self_consistent_tol_K=1e-1)
+    res_tight = equal_area_temperature(dos, self_consistent_tol_K=1e-5)
+    # Tighter tol -> more passes (or equal, never fewer).
+    assert res_tight.n_self_consistent_iter >= res_loose.n_self_consistent_iter
+
+
+def test_equal_area_temperature_validates_smoothing_sigma_negative():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    with pytest.raises(ValueError, match="smoothing_sigma"):
+        equal_area_temperature(dos, smoothing_sigma=-1.0)
+
+
+def test_equal_area_temperature_validates_damping_range():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    with pytest.raises(ValueError, match="damping"):
+        equal_area_temperature(dos, damping=0.0)
+    with pytest.raises(ValueError, match="damping"):
+        equal_area_temperature(dos, damping=1.5)
+
+
+def test_equal_area_temperature_validates_max_iter_non_negative():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    with pytest.raises(ValueError, match="max_self_consistent_iter"):
+        equal_area_temperature(dos, max_self_consistent_iter=-1)
+
+
+def test_equal_area_temperature_validates_tol_positive():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    with pytest.raises(ValueError, match="self_consistent_tol_K"):
+        equal_area_temperature(dos, self_consistent_tol_K=0.0)
+    with pytest.raises(ValueError, match="self_consistent_tol_K"):
+        equal_area_temperature(dos, self_consistent_tol_K=-1e-3)

@@ -39,9 +39,9 @@ def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
     """Gaussian-smooth ``ln g`` for topology-detection purposes.
 
     Wraps ``scipy.ndimage.gaussian_filter1d`` with ``mode='nearest'``
-    (constant extrapolation at the boundary). Used only for finding
-    phase peaks and the saddle; all weight integrals downstream
-    consume raw ``ln g``.
+    (the boundary sample value is replicated for samples beyond the
+    array edge). Used only for finding phase peaks and the saddle;
+    all weight integrals downstream consume raw ``ln g``.
 
     Args:
         ln_g: 1-D array of entropy values per bin.
@@ -68,12 +68,16 @@ class NotBimodalError(ValueError):
 
 
 class NoBracketError(ValueError):
-    """Raised when bisection cannot proceed.
+    """Raised when ``imbalance(T)`` cannot be bracketed for brentq.
 
-    Either ``imbalance(T)`` does not change sign across the supplied
-    or auto-built ``T_bracket``, or shape analysis failed at one of
-    the bracket endpoints (or mid-bracket — the bracket extends
-    outside the bimodal region).
+    Two failure modes share this exception:
+
+    - The outward walk from the Cv-peak seed hits the T scan range
+      edge before ``imbalance(T)`` changes sign (the DOS does not
+      exhibit equal-area coexistence within the scanned T range).
+    - A user-supplied ``T_bracket`` evaluates to the same sign of
+      ``imbalance`` at both endpoints (the bracket does not
+      straddle a coexistence Tc).
     """
 
 
@@ -491,12 +495,18 @@ class CoexistencePoint:
             (T_c, E_star) fixed-point iteration. Each pass is one
             brentq solve plus one re-detection of the saddle at the
             candidate T_c.
-        self_consistent_converged: ``True`` if the iteration met
-            the configured tolerance within the budget. ``False``
-            indicates the iteration was truncated and the reported
-            ``T_K`` may differ from the true fixed point by more
-            than the tolerance — typically a signal of over-smoothing
-            on shallow-bimodal data.
+        self_consistent_converged: ``True`` if the (T_c, E_star)
+            fixed-point iteration met ``self_consistent_tol_K``
+            within ``max_self_consistent_iter`` passes. When
+            ``max_self_consistent_iter=0`` (iteration disabled),
+            this is ``True`` by convention — there is no
+            convergence question to defer. ``False`` indicates the
+            iteration was truncated (budget exhausted or a
+            break-path triggered, e.g. saddle re-detection failed);
+            the reported ``T_K`` may differ from the true fixed
+            point by more than ``self_consistent_tol_K`` —
+            typically a signal of over-smoothing on shallow-bimodal
+            data.
 
     The coexistence temperature is exposed as the read-only
     ``T_K`` property, delegating to ``split.T_K``.
@@ -697,6 +707,9 @@ def equal_area_temperature(
     self_consistent_converged = (max_self_consistent_iter == 0)
     n_sc_iter = 0
     for iter_idx in range(1, max_self_consistent_iter + 1):
+        # Reset each pass so the flag can't be left stale by a future
+        # break-path edit that forgets to clear an earlier True.
+        self_consistent_converged = False
         n_sc_iter = iter_idx
         try:
             E_star_new, _, _ = _find_saddle_at(
