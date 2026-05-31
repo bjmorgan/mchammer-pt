@@ -67,6 +67,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "Default: 5."
         ),
     )
+    p.add_argument(
+        "--smooth-sigma", type=float, default=2.0,
+        help=(
+            "Gaussian standard deviation in bins applied to ln g for "
+            "topology detection only. Default 2.0. Set to 0 to disable "
+            "smoothing."
+        ),
+    )
+    p.add_argument(
+        "--no-self-consistent", action="store_true",
+        help=(
+            "Disable the (T_c, E_star) self-consistency iteration "
+            "(single-pass solve). Default off; iteration runs."
+        ),
+    )
     return p
 
 
@@ -132,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
             T_bracket=T_bracket,
             xtol=args.xtol,
             min_peak_separation=args.min_peak_separation,
+            smoothing_sigma=args.smooth_sigma,
+            max_self_consistent_iter=0 if args.no_self_consistent else 20,
         )
     except (NotBimodalError, NoBracketError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)

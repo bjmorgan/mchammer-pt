@@ -139,6 +139,54 @@ def test_cli_rejects_non_finite_values(tmp_path, capsys):
     assert "non-finite" in err or "NaN" in err
 
 
+def test_cli_accepts_smooth_sigma_flag(tmp_path):
+    dos_csv = tmp_path / "dos.csv"
+    out_json = tmp_path / "result.json"
+    _write_dos(dos_csv, _coexistence_dos())
+    rc = main([
+        str(dos_csv),
+        "--output", str(out_json),
+        "--smooth-sigma", "2.5",
+    ])
+    assert rc == 0
+    data = json.loads(out_json.read_text())
+    # The result should still expose the new diagnostic fields
+    # (already covered by other tests) and produce a valid T_K
+    # under non-default smoothing.
+    assert "T_K" in data
+    assert data["T_K"] > 0
+
+
+def test_cli_no_self_consistent_flag(tmp_path):
+    dos_csv = tmp_path / "dos.csv"
+    out_json = tmp_path / "result.json"
+    _write_dos(dos_csv, _coexistence_dos())
+    rc = main([
+        str(dos_csv),
+        "--output", str(out_json),
+        "--no-self-consistent",
+    ])
+    assert rc == 0
+    data = json.loads(out_json.read_text())
+    # With iteration disabled, n_self_consistent_iter must be 0
+    # and self_consistent_converged is True (degenerate convergence
+    # — see equal_area_temperature semantics).
+    assert data["n_self_consistent_iter"] == 0
+    assert data["self_consistent_converged"] is True
+
+
+def test_cli_rejects_negative_smooth_sigma(tmp_path):
+    dos_csv = tmp_path / "dos.csv"
+    out_json = tmp_path / "result.json"
+    _write_dos(dos_csv, _coexistence_dos())
+    rc = main([
+        str(dos_csv),
+        "--output", str(out_json),
+        "--smooth-sigma", "-1.0",
+    ])
+    assert rc != 0
+
+
 def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     # Construct a DOS whose energy column has a clearly non-uniform
     # spacing (one bin shifted). The CLI's grid check should fire.
