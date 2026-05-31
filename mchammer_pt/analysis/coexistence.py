@@ -6,6 +6,7 @@ either side of the free-energy minimum E*(T) between its two peaks.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -495,7 +496,6 @@ class CoexistencePoint:
     @property
     def n_iterations(self) -> int:
         """Deprecated alias for :attr:`n_brentq_iterations`."""
-        import warnings
         warnings.warn(
             "CoexistencePoint.n_iterations is deprecated; use "
             "n_brentq_iterations instead.",

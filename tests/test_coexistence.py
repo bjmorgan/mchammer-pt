@@ -203,10 +203,9 @@ def test_coexistence_point_has_self_consistent_fields():
 
 def test_coexistence_point_n_iterations_alias_deprecated():
     """``n_iterations`` is a backward-compat alias for
-    ``n_brentq_iterations`` and emits DeprecationWarning.
+    ``n_brentq_iterations`` and emits DeprecationWarning naming the
+    replacement attribute.
     """
-    import warnings
-
     from mchammer_pt.analysis.coexistence import (
         CoexistencePoint,
         PhaseSplit,
@@ -222,14 +221,8 @@ def test_coexistence_point_n_iterations_alias_deprecated():
         n_self_consistent_iter=3,
         self_consistent_converged=True,
     )
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        n = pt.n_iterations
-        assert n == 7
-        assert any(
-            issubclass(warning.category, DeprecationWarning)
-            for warning in w
-        )
+    with pytest.warns(DeprecationWarning, match="n_brentq_iterations"):
+        assert pt.n_iterations == 7
 
 
 def test_equal_area_temperature_rejects_bad_bracket():

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``CoexistencePoint.n_self_consistent_iter`` and
+  ``CoexistencePoint.self_consistent_converged`` fields, exposing the
+  number of self-consistent E_star refinement iterations performed at
+  the final brentq evaluation and whether that refinement converged.
+
+### Deprecated
+
+- ``CoexistencePoint.n_iterations`` is a backward-compatibility
+  ``@property`` alias for ``n_brentq_iterations`` and emits a
+  ``DeprecationWarning`` on access. Use ``n_brentq_iterations``
+  directly.
+
 ### Changed
 
 - ``mchammer_pt.analysis.coexistence.equal_area_temperature``
@@ -34,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared as an explicit dependency; it was already pulled in
   transitively by ``ase`` and ``icet``.
 - ``CoexistencePoint.n_bisection_steps`` renamed to
-  ``CoexistencePoint.n_iterations``. The field now reports the
+  ``CoexistencePoint.n_brentq_iterations``. The field reports the
   number of ``brentq`` iterations (which mix bisection and
   inverse-quadratic-interpolation steps), so the previous name was
   misleading. The CLI's JSON/CSV output column is renamed
