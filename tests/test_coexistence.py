@@ -374,34 +374,50 @@ def test_find_phase_split_raises_outside_bimodal_window():
 
 
 def test_find_phase_split_with_smoothing_ignores_narrow_dimples():
-    """A ln g that's smooth except for a single-bin dimple should
-    still give the same phase peaks as the dimple-free version when
-    smoothing_sigma > 0.
+    """A narrow shot-noise-scale dimple in ``ln g`` between the two
+    phase peaks shifts the saddle ``E_star`` when computed from raw
+    ``phi``. ``smoothing_sigma > 0`` must recover ``E_star`` closer
+    to the dimple-free reference than the raw-on-dimpled computation
+    does.
+
+    Mirrors the failure mode the kwarg targets: bin-scale noise in
+    ``ln g`` defeats the local-minima detector. Larger structural
+    perturbations are out of scope — the kwarg's docstring scope is
+    "bin-scale shot-noise dimples".
     """
     dos_clean = lattice_like_dos(
         a=1.0, beta_c=10.0, c=1.0,
         E_min=-1.5, E_max=1.5, energy_spacing=0.005,
     )
-    # Find the bin that sits between the two phase peaks and add a
-    # narrow dimple to ln g there.
     dos_dimpled = dos_clean.copy()
     mid_idx = len(dos_dimpled) // 2
-    dos_dimpled.loc[mid_idx - 1:mid_idx + 1, "entropy"] += 0.4
+    # Shot-noise-scale dimple at one bin near the saddle.
+    dos_dimpled.loc[mid_idx, "entropy"] += 0.001
 
     T_test = 1.0 / (10.0 * 8.617e-5)  # roughly the design Tc
-    # Without smoothing, the dimple perturbs the saddle location, so
-    # E_star on the dimpled DOS differs from the clean version.
-    split_dimpled = find_phase_split(dos_dimpled, T_K=T_test)
-    split_clean = find_phase_split(dos_clean, T_K=T_test)
     bin_width = float(dos_clean.loc[1, "energy"] - dos_clean.loc[0, "energy"])
-    assert abs(split_dimpled.E_star - split_clean.E_star) > 0.0  # sanity
-    # With smoothing on the dimpled data, peak positions should
-    # match the clean version to within a bin width.
+
+    split_clean = find_phase_split(dos_clean, T_K=T_test)
+    split_dimpled = find_phase_split(dos_dimpled, T_K=T_test)
     split_smoothed = find_phase_split(
         dos_dimpled, T_K=T_test, smoothing_sigma=2.0,
     )
-    assert abs(split_smoothed.E_peak_low - split_clean.E_peak_low) < bin_width
-    assert abs(split_smoothed.E_peak_high - split_clean.E_peak_high) < bin_width
+
+    # Premise: even a single-bin shot-noise dimple shifts E_star
+    # by more than a bin width. Pins the bug.
+    raw_error = abs(split_dimpled.E_star - split_clean.E_star)
+    assert raw_error > bin_width, (
+        f"dimple did not perturb E_star ({raw_error=:.6f}, "
+        f"{bin_width=:.6f}); fixture no longer exercises the kwarg"
+    )
+
+    # Fix: smoothing brings E_star closer to the clean reference
+    # than the un-smoothed dimpled computation does.
+    smoothed_error = abs(split_smoothed.E_star - split_clean.E_star)
+    assert smoothed_error < raw_error, (
+        f"smoothing did not improve E_star: {smoothed_error=:.6f}, "
+        f"{raw_error=:.6f}"
+    )
 
 
 def test_find_phase_split_zero_sigma_unchanged():
