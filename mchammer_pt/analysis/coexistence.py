@@ -445,7 +445,8 @@ class CoexistencePoint:
 
     Returned by :func:`equal_area_temperature`. Bundles the phase
     split at coexistence with the diagnostics that only make sense
-    there (latent heat, barrier height).
+    there (latent heat, barrier height) and the iteration counters
+    that report on solver behaviour.
 
     Attributes:
         split: :class:`PhaseSplit` at the coexistence temperature;
@@ -460,8 +461,19 @@ class CoexistencePoint:
             genuinely bimodal DOS.
         weight_imbalance: ``|w_low - w_high|`` at the returned
             temperature, the solver residual.
-        n_iterations: number of ``scipy.optimize.brentq``
-            iterations executed inside the walk-outward bracket.
+        n_brentq_iterations: total number of
+            ``scipy.optimize.brentq`` iterations summed across all
+            self-consistency passes.
+        n_self_consistent_iter: number of passes through the
+            (T_c, E_star) fixed-point iteration. Each pass is one
+            brentq solve plus one re-detection of the saddle at the
+            candidate T_c.
+        self_consistent_converged: ``True`` if the iteration met
+            the configured tolerance within the budget. ``False``
+            indicates the iteration was truncated and the reported
+            ``T_K`` may differ from the true fixed point by more
+            than the tolerance — typically a signal of over-smoothing
+            on shallow-bimodal data.
 
     The coexistence temperature is exposed as the read-only
     ``T_K`` property, delegating to ``split.T_K``.
@@ -471,12 +483,25 @@ class CoexistencePoint:
     latent_heat: float
     barrier_height: float
     weight_imbalance: float
-    n_iterations: int
+    n_brentq_iterations: int
+    n_self_consistent_iter: int
+    self_consistent_converged: bool
 
     @property
     def T_K(self) -> float:
         """The equal-area coexistence temperature, in Kelvin."""
         return self.split.T_K
+
+    @property
+    def n_iterations(self) -> int:
+        """Deprecated alias for :attr:`n_brentq_iterations`."""
+        import warnings
+        warnings.warn(
+            "CoexistencePoint.n_iterations is deprecated; use "
+            "n_brentq_iterations instead.",
+            DeprecationWarning, stacklevel=2,
+        )
+        return self.n_brentq_iterations
 
 
 def equal_area_temperature(
@@ -646,5 +671,7 @@ def equal_area_temperature(
         latent_heat=float(latent_heat),
         barrier_height=barrier_height,
         weight_imbalance=float(abs(f_mid)),
-        n_iterations=n_steps,
+        n_brentq_iterations=n_steps,
+        n_self_consistent_iter=0,
+        self_consistent_converged=False,
     )

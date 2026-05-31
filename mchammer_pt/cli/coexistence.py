@@ -145,7 +145,9 @@ def main(argv: list[str] | None = None) -> int:
         "latent_heat": result.latent_heat,
         "barrier_height": result.barrier_height,
         "weight_imbalance": result.weight_imbalance,
-        "n_iterations": result.n_iterations,
+        "n_brentq_iterations": result.n_brentq_iterations,
+        "n_self_consistent_iter": result.n_self_consistent_iter,
+        "self_consistent_converged": result.self_consistent_converged,
     }
 
     if args.format == "json":

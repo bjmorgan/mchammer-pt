@@ -167,7 +167,8 @@ def test_coexistence_point_is_frozen_dataclass():
     cp = CoexistencePoint(
         split=split,
         latent_heat=2.0, barrier_height=0.1,
-        weight_imbalance=1e-9, n_iterations=18,
+        weight_imbalance=1e-9, n_brentq_iterations=18,
+        n_self_consistent_iter=0, self_consistent_converged=False,
     )
     with pytest.raises(FrozenInstanceError):
         cp.latent_heat = 3.0  # type: ignore[misc]
@@ -180,12 +181,55 @@ def test_coexistence_point_T_K_delegates_to_split():
     cp = CoexistencePoint(
         split=split,
         latent_heat=2.0, barrier_height=0.1,
-        weight_imbalance=1e-9, n_iterations=18,
+        weight_imbalance=1e-9, n_brentq_iterations=18,
+        n_self_consistent_iter=0, self_consistent_converged=False,
     )
     assert cp.T_K == 500.0
     # T_K is a read-only property; no separate field to assign.
     with pytest.raises(AttributeError):
         cp.T_K = 600.0  # type: ignore[misc]
+
+
+def test_coexistence_point_has_self_consistent_fields():
+    """The struct must expose self-consistency iteration counts and
+    a convergence flag for downstream callers."""
+    import dataclasses
+
+    from mchammer_pt.analysis.coexistence import CoexistencePoint
+    fields = {f.name for f in dataclasses.fields(CoexistencePoint)}
+    assert "n_self_consistent_iter" in fields
+    assert "self_consistent_converged" in fields
+
+
+def test_coexistence_point_n_iterations_alias_deprecated():
+    """``n_iterations`` is a backward-compat alias for
+    ``n_brentq_iterations`` and emits DeprecationWarning.
+    """
+    import warnings
+
+    from mchammer_pt.analysis.coexistence import (
+        CoexistencePoint,
+        PhaseSplit,
+    )
+    pt = CoexistencePoint(
+        split=PhaseSplit(
+            E_peak_low=-1.0, E_peak_high=1.0, E_star=0.0, T_K=100.0,
+        ),
+        latent_heat=2.0,
+        barrier_height=0.5,
+        weight_imbalance=1e-6,
+        n_brentq_iterations=7,
+        n_self_consistent_iter=3,
+        self_consistent_converged=True,
+    )
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        n = pt.n_iterations
+        assert n == 7
+        assert any(
+            issubclass(warning.category, DeprecationWarning)
+            for warning in w
+        )
 
 
 def test_equal_area_temperature_rejects_bad_bracket():
