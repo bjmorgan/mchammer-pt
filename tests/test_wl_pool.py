@@ -656,6 +656,49 @@ def test_merge_per_window_stats_propagates_1_over_t_phase():
     assert out["phase"] == "1_over_t"
 
 
+def test_merge_per_window_stats_adds_filled_and_breakdown():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    slot_stats = [
+        {
+            "fill_factor": 1.0, "halvings": 0,
+            "histogram": {0: 1, 1: 4, 2: 0},
+            "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
+            "converged": False, "phase": "halving",
+            "visited_bins": [0, 1],
+        },
+        {
+            "fill_factor": 1.0, "halvings": 0,
+            "histogram": {0: 3, 1: 0, 2: 7},
+            "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
+            "converged": False, "phase": "halving",
+            "visited_bins": [0, 2],
+        },
+    ]
+    merged = _merge_per_window_stats(slot_stats, "per_walker")
+    assert merged["bins_filled"] == 1            # intersection {0}
+    assert merged["per_walker_breakdown"] == [
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+    ]
+    pooled = _merge_per_window_stats(slot_stats, "pooled")
+    assert pooled["bins_filled"] == 3            # union {0,1,2}
+
+
+def test_merge_per_window_stats_single_walker_carries_bins_filled():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    slot_stats = [{
+        "fill_factor": 1.0, "halvings": 0,
+        "histogram": {0: 1, 1: 0},
+        "bins_visited": 1, "bins_filled": 1, "bins_known": 2,
+        "converged": False, "phase": "halving",
+        "visited_bins": [0],
+    }]
+    merged = _merge_per_window_stats(slot_stats, "pooled")
+    assert merged["bins_filled"] == 1
+    assert "per_walker_breakdown" not in merged
+    assert "visited_bins" not in merged
+
+
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
     """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
     from tests._in_process_pool import make_in_process_wl_pool

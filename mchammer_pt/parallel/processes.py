@@ -38,6 +38,8 @@ from ..wl_coordinator import (
     Schedule,
     SlotView,
     WalkerPostBlockState,
+    _compute_filled_bins,
+    _compute_per_walker_breakdown,
     _compute_per_walker_flat_min,
     _validate_flatness_mode,
     _validate_merge_cadence,
@@ -628,8 +630,10 @@ def _merge_per_window_stats(
     For multi-walker slots, builds a summed histogram and a union of
     MC-visited bins across walkers (from the ``visited_bins`` field
     that the worker attaches to every WL_STATS reply), reports
-    ``bins_visited`` and ``bins_known`` from those unions, and adds
-    the per-walker flat-min plus the slot's flatness mode.
+    ``bins_visited`` and ``bins_known`` from those unions, reports
+    ``bins_filled`` (union of positive bins for pooled flatness,
+    intersection for per-walker), and adds the per-walker flat-min,
+    a ``per_walker_breakdown`` list, plus the slot's flatness mode.
     Single-walker slots are returned unchanged apart from stripping
     the internal ``visited_bins`` field.
 
@@ -641,22 +645,23 @@ def _merge_per_window_stats(
         return merged
     combined_hist: dict[int, int] = {}
     visited_union: set[int] = set()
+    histograms = [s["histogram"] for s in slot_stats]
     for s in slot_stats:
         for k, v in s["histogram"].items():
             combined_hist[k] = combined_hist.get(k, 0) + v
         visited_union.update(s.get("visited_bins", ()))
-    per_walker_flat_min = _compute_per_walker_flat_min(
-        [s["histogram"] for s in slot_stats]
-    )
+    per_walker_flat_min = _compute_per_walker_flat_min(histograms)
     return {
         "fill_factor": slot_stats[0]["fill_factor"],
         "halvings": slot_stats[0]["halvings"],
         "histogram": combined_hist,
         "bins_visited": len(visited_union),
+        "bins_filled": _compute_filled_bins(histograms, flatness_mode),
         "bins_known": len(combined_hist),
         "converged": all(s["converged"] for s in slot_stats),
         "flatness_mode": flatness_mode,
         "per_walker_flat_min": per_walker_flat_min,
+        "per_walker_breakdown": _compute_per_walker_breakdown(histograms),
         "phase": slot_stats[0]["phase"],
     }
 
