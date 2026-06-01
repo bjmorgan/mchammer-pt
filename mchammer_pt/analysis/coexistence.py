@@ -401,6 +401,12 @@ def _find_saddle_at(
                     f"and {i_hi} are within {min_peak_separation} "
                     f"bins of each other at T={T} K"
                 )
+            # The saddle is strictly between the two peaks: _two_dominant_peak_indices
+            # returns strict local minima of phi, which can never be adjacent (that
+            # would need phi[k] < phi[k+1] and phi[k+1] < phi[k] at once), so i_hi >=
+            # i_lo + 2 and the inclusive slice has an interior. The endpoints are
+            # minima, so their inward neighbours exceed them and argmax lands strictly
+            # inside — never on a peak bin, regardless of min_peak_separation.
             i_valley = int(np.argmax(phi[i_lo : i_hi + 1])) + i_lo
             E_peak_low = _parabolic_vertex(
                 energies[i_lo - 1], energies[i_lo], energies[i_lo + 1],
