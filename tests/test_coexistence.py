@@ -787,6 +787,41 @@ def test_equal_area_temperature_reports_not_converged_when_iteration_truncated()
     assert result.self_consistent_converged is False
 
 
+def test_equal_area_temperature_seed_fallback_when_final_saddle_not_bimodal(
+    monkeypatch,
+):
+    """If saddle re-detection fails at the converged Tc (even with its
+    nearby-T fallback sweep), the iterated path reports the seed split
+    and flags non-convergence, rather than raising ``NotBimodalError``
+    and never returning a flagged result."""
+    import mchammer_pt.analysis.coexistence as coexistence
+
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    real_find_saddle = coexistence._find_saddle_at
+    calls = {"n": 0}
+
+    def flaky_find_saddle(*args, **kwargs):
+        calls["n"] += 1
+        # With max_self_consistent_iter=1 the helper runs three times:
+        # the seed detection, the single loop pass, and the final
+        # post-loop re-detection. Let the first two succeed and force
+        # the third (post-loop) call to fail.
+        if calls["n"] >= 3:
+            raise coexistence.NotBimodalError("forced post-loop failure")
+        return real_find_saddle(*args, **kwargs)
+
+    monkeypatch.setattr(coexistence, "_find_saddle_at", flaky_find_saddle)
+    result = coexistence.equal_area_temperature(
+        dos, max_self_consistent_iter=1,
+    )
+    assert result.self_consistent_converged is False
+    assert result.T_K > 0.0
+    assert np.isfinite(result.split.E_star)
+
+
 def test_equal_area_temperature_weight_imbalance_is_normalised():
     """The reported ``weight_imbalance`` is the dimensionless
     normalised residual ``|w_low - w_high| / (w_low + w_high)``."""

@@ -835,14 +835,24 @@ def equal_area_temperature(
     else:
         # Iterated: re-detect the saddle at the converged Tc and pin Tc
         # to the true root for that saddle, so the reported split, its
-        # E_star, and the residual are mutually consistent.
-        final_split = find_phase_split(
-            dos, T_K=Tc, min_peak_separation=min_peak_separation,
-            smoothing_sigma=smoothing_sigma,
-        )
-        E_star_report = final_split.E_star
-        peak_low_report = final_split.E_peak_low
-        peak_high_report = final_split.E_peak_high
+        # E_star, and the residual are mutually consistent. Use
+        # _find_saddle_at (with its nearby-T fallback) rather than a bare
+        # find_phase_split at Tc: when the loop truncated because the
+        # saddle was not bimodal at Tc, an un-fallback detection would
+        # raise and stop us returning a flagged result. If even the
+        # fallback sweep fails, report the seed split and flag
+        # non-convergence.
+        try:
+            E_star_report, peak_low_report, peak_high_report = (
+                _find_saddle_at(
+                    energies, ln_g_sm, Tc, min_peak_separation,
+                )
+            )
+        except NotBimodalError:
+            E_star_report = E_star
+            peak_low_report = E_peak_low_seed
+            peak_high_report = E_peak_high_seed
+            self_consistent_converged = False
 
         # Final un-damped brentq pass: pin the reported Tc to the true
         # zero of imbalance(T; E_star_report). The damped iteration
