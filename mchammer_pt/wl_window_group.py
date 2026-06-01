@@ -14,6 +14,8 @@ from .wl_coordinator import (
     Phase,
     Schedule,
     WalkerPostBlockState,
+    _compute_filled_bins,
+    _compute_per_walker_breakdown,
     _compute_per_walker_flat_min,
     merge_entropies,
 )
@@ -243,26 +245,37 @@ class WangLandauWindowGroup:
             walker to be converged; ``per_walker_flat_min`` is min
             over walkers of ``min(H_k) / mean(H_k)``, or ``None`` if
             any walker has not yet built a histogram.
+            ``bins_filled_pooled`` and ``bins_filled_per_walker`` are
+            the two candidate filled-bin counts (union vs. intersection
+            of walkers' positive-count bins); the pool picks one
+            according to its ``flatness_mode`` rather than the group
+            resolving a single ``bins_filled`` here.
+            ``per_walker_breakdown`` is a per-walker list of
+            ``{"filled", "known", "flat_min"}``.
             ``flatness_mode`` is not included here; the pool injects
             it (pool-level policy). ``phase`` is the current WL phase
             (``"halving"`` or ``"1_over_t"``), taken from the first
             replica (all walkers in a group share the same phase).
         """
         e0 = self._replicas[0].ensemble
+        histograms = [r.ensemble._histogram for r in self._replicas]
         combined_hist: dict[int, int] = {}
         visited_union: set[int] = set()
-        for r in self._replicas:
-            for k, v in r.ensemble._histogram.items():
+        for r, h in zip(self._replicas, histograms, strict=True):
+            for k, v in h.items():
                 combined_hist[k] = combined_hist.get(k, 0) + v
             visited_union |= r.ensemble._visited_bins
-        per_walker_flat_min = _compute_per_walker_flat_min(
-            [r.ensemble._histogram for r in self._replicas]
-        )
+        per_walker_flat_min = _compute_per_walker_flat_min(histograms)
         return {
             "fill_factor": float(e0._fill_factor),
             "halvings": max(0, len(e0._fill_factor_history) - 1),
             "histogram": combined_hist,
             "bins_visited": len(visited_union),
+            "bins_filled_pooled": _compute_filled_bins(histograms, "pooled"),
+            "bins_filled_per_walker": _compute_filled_bins(
+                histograms, "per_walker"
+            ),
+            "per_walker_breakdown": _compute_per_walker_breakdown(histograms),
             "bins_known": len(combined_hist),
             "converged": self.converged,
             "per_walker_flat_min": per_walker_flat_min,

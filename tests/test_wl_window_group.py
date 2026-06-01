@@ -678,6 +678,27 @@ def test_window_stats_per_walker_flat_min_none_when_walker_has_no_histogram():
     assert stats["per_walker_flat_min"] is None
 
 
+def test_window_stats_exposes_filled_candidates_and_breakdown():
+    """window_stats exposes both pooled/per-walker filled counts and a
+    per-walker breakdown, leaving the final bins_filled choice to the pool."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group._replicas[0].ensemble._histogram = {0: 1, 1: 4, 2: 0}
+    group._replicas[1].ensemble._histogram = {0: 3, 1: 0, 2: 7}
+    stats = group.window_stats()
+
+    # union of positives = {0,1,2} -> 3; intersection = {0} -> 1
+    assert stats["bins_filled_pooled"] == 3
+    assert stats["bins_filled_per_walker"] == 1
+    assert stats["per_walker_breakdown"] == [
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+    ]
+    assert "bins_filled" not in stats  # resolved later, by the pool
+
+
 def test_window_stats_reports_phase():
     """Multi-walker group exposes phase from the first replica.
 
