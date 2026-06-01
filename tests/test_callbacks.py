@@ -84,17 +84,19 @@ def test_exchange_printer_interval_zero_disables_output(capsys):
     assert out == ""
 
 
-def test_wl_progress_printer_shows_bins_visited_over_known():
-    """The WL progress printer's bins column displays 'visited/known'."""
+def test_wl_progress_printer_shows_bins_filled_over_known():
+    """The WL progress printer's bins column displays 'filled/known'."""
 
     class _FakePool:
+        windows = [(None, None)]
+
         def per_window_stats(self):
             return [
                 {
                     "fill_factor": 1.0,
                     "halvings": 0,
                     "histogram": {0: 0, 1: 5, 2: 0},
-                    "bins_visited": 1,
+                    "bins_filled": 1,
                     "bins_known": 3,
                     "converged": False,
                     "phase": "halving",
@@ -111,11 +113,68 @@ def test_wl_progress_printer_shows_bins_visited_over_known():
         swap_attempted=np.zeros(0, dtype=int),
         swap_accepted=np.zeros(0, dtype=int),
     )
-    # Cycle 0 starts the timer; cycle 0 with n_cycles=1 also emits.
     printer.on_cycle_end(0, 1, history)
     output = out.getvalue()
-
-    # Header reflects the new column name.
-    assert "bins (vis/known)" in output
-    # The row uses the slash format with the fake pool's values.
+    assert "bins (fill/known)" in output
     assert "1/3" in output
+
+
+def _wl_history():
+    return ExchangeHistory(
+        energies_per_cycle=np.zeros((1, 1)),
+        replica_labels_per_cycle=np.zeros((1, 1), dtype=int),
+        swap_attempted=np.zeros(0, dtype=int),
+        swap_accepted=np.zeros(0, dtype=int),
+    )
+
+
+class _DetailPool:
+    windows = [(None, None), (None, None)]
+
+    def per_window_stats(self):
+        return [
+            {
+                "fill_factor": 1.0, "halvings": 0, "histogram": {},
+                "bins_filled": 4, "bins_known": 4, "converged": False,
+                "phase": "halving",
+            },
+            {
+                "fill_factor": 1.0, "halvings": 0, "histogram": {},
+                "bins_filled": 3, "bins_known": 4, "converged": False,
+                "phase": "halving",
+                "per_walker_breakdown": [
+                    {"filled": 4, "known": 4, "flat_min": 0.91},
+                    {"filled": 3, "known": 4, "flat_min": 0.0},
+                ],
+            },
+        ]
+
+
+def test_per_walker_detail_emits_sub_rows_for_selected_window():
+    out = io.StringIO()
+    printer = WangLandauProgressPrinter(
+        _DetailPool(), interval=1, show_swap_rates=False,
+        per_walker_detail=[1], file=out,
+    )
+    printer.on_cycle_end(0, 1, _wl_history())
+    output = out.getvalue()
+    assert "w0" in output and "w1" in output
+    assert "4/4" in output and "3/4" in output
+    assert "0.910" in output
+
+
+def test_per_walker_detail_default_emits_no_sub_rows():
+    out = io.StringIO()
+    printer = WangLandauProgressPrinter(
+        _DetailPool(), interval=1, show_swap_rates=False, file=out,
+    )
+    printer.on_cycle_end(0, 1, _wl_history())
+    assert "w0" not in out.getvalue()
+
+
+def test_per_walker_detail_out_of_range_raises_at_construction():
+    import pytest
+    with pytest.raises(IndexError):
+        WangLandauProgressPrinter(
+            _DetailPool(), interval=1, per_walker_detail=[5],
+        )
