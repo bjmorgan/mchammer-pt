@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``smoothing_sigma``) and ``--no-self-consistent`` (sets
   ``max_self_consistent_iter=0``, freezing ``E_star`` at its initial
   seed value) command-line flags.
+- ``find_phase_split`` and ``equal_area_temperature`` accept
+  ``ln g(E)`` curves containing ``-inf`` entries (``g = 0``, the
+  forbidden energies of a discrete spectrum) as zero-weight bins,
+  while rejecting ``NaN`` and ``+inf``. ``equal_area_temperature``
+  additionally requires the ``energy`` column to lie on a uniform
+  grid. This supports complete-histogram DOS input that records
+  unreachable energies explicitly rather than omitting their rows.
 
 ### Deprecated
 
@@ -86,7 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   estimator was unusable on real REWL output. Phase peaks are now
   correctly located as the two dominant local minima of
   ``phi(E) = beta * E - ln g(E)`` (peaks of ``P(E | T)``), which is
-  temperature-dependent.
+  temperature-dependent. The reported peak and dividing-energy
+  positions are bin centres of the energy grid, and the dividing
+  energy is the highest *populated* ``phi`` bin between the peaks, so
+  a ``g = 0`` bin in a forbidden-energy gap is never selected as the
+  saddle; when every bin between the peaks is ``g = 0`` the dividing
+  energy falls back to the peak midpoint and the free-energy barrier
+  is reported as infinite.
 
 ## [0.16.0] - 2026-05-28
 
