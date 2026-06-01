@@ -39,6 +39,12 @@ _WALK_MAX_STEPS = 500
 # the literal.
 DEFAULT_MAX_SELF_CONSISTENT_ITER = 20
 
+# Lower bound on the relative tolerance forwarded to
+# ``scipy.optimize.brentq`` as ``rtol``. scipy rejects ``rtol`` below
+# ``4 * eps`` with a ValueError, so reject it here with a clearer
+# message.
+_RTOL_FLOOR = 4.0 * np.finfo(float).eps
+
 
 def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
     """Gaussian-smooth ``ln g`` for topology-detection purposes.
@@ -584,7 +590,11 @@ def equal_area_temperature(
             The user is responsible for the bracket being valid
             (positive, ordered, sign-changing for the fixed
             ``E*``).
-        xtol: relative tolerance on T for brentq. Default 1e-4.
+        xtol: relative tolerance on the coexistence temperature,
+            forwarded to ``scipy.optimize.brentq`` as its ``rtol``
+            argument (scaled off the current root estimate). Must be
+            at least ``4 * eps`` (scipy's ``rtol`` floor). Default
+            1e-4.
         min_peak_separation: minimum bin separation between the
             two phase peaks. Default 5.
         smoothing_sigma: Gaussian standard deviation in bins
@@ -617,6 +627,11 @@ def equal_area_temperature(
         raise ValueError("dos has no rows; need at least one energy bin")
     if xtol <= 0.0:
         raise ValueError(f"xtol must be > 0; got {xtol}")
+    if xtol < _RTOL_FLOOR:
+        raise ValueError(
+            f"xtol must be >= {_RTOL_FLOOR:.2e} (scipy.optimize.brentq's "
+            f"rtol floor); got {xtol}"
+        )
     if min_peak_separation < 1:
         raise ValueError(
             f"min_peak_separation must be >= 1; got {min_peak_separation}"
@@ -708,7 +723,7 @@ def equal_area_temperature(
     Tc, brentq_result = brentq(
         lambda T: imbalance(T, E_star),
         T_lo, T_hi,
-        xtol=xtol * 0.5 * (T_lo + T_hi),
+        rtol=xtol,
         full_output=True, disp=True,
     )
     n_brentq_total = int(brentq_result.iterations)
@@ -750,7 +765,7 @@ def equal_area_temperature(
         Tc_raw, br = brentq(
             lambda T, E=E_star_new: imbalance(T, E),
             T_lo_i, T_hi_i,
-            xtol=xtol * 0.5 * (T_lo_i + T_hi_i),
+            rtol=xtol,
             full_output=True, disp=True,
         )
         n_brentq_total += int(br.iterations)
@@ -795,7 +810,7 @@ def equal_area_temperature(
             Tc, br_final = brentq(
                 lambda T: imbalance(T, E_star_report),
                 T_lo_final, T_hi_final,
-                xtol=xtol * 0.5 * (T_lo_final + T_hi_final),
+                rtol=xtol,
                 full_output=True, disp=True,
             )
             n_brentq_total += int(br_final.iterations)

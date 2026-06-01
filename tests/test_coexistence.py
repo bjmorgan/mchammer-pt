@@ -247,6 +247,15 @@ def test_equal_area_temperature_rejects_bad_xtol():
         equal_area_temperature(dos, T_bracket=(100.0, 200000.0), xtol=-1.0)
 
 
+def test_equal_area_temperature_rejects_xtol_below_rtol_floor():
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    with pytest.raises(ValueError, match="xtol"):
+        equal_area_temperature(dos, xtol=1e-18)
+
+
 def test_public_surface_reexported_from_analysis():
     import mchammer_pt.analysis as analysis
 

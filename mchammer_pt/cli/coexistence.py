@@ -4,7 +4,7 @@ Reads a stitched DOS CSV (columns ``energy``, ``entropy``, with
 ``entropy`` treated as ``ln g(E)``) and writes a one-row result
 containing the equal-area coexistence temperature, the phase peak
 locations, the dividing energy, latent heat, barrier height and
-bisection diagnostics.
+root-finder diagnostics.
 """
 from __future__ import annotations
 
@@ -53,13 +53,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--T-bracket", type=float, nargs=2, metavar=("T_LO", "T_HI"),
         default=None,
         help=(
-            "Optional temperature bracket (K) for the bisection. "
-            "If omitted, built from a coarse imbalance scan."
+            "Optional temperature bracket (K) for the brentq "
+            "root-find. If omitted, built from a Cv-peak seed and an "
+            "outward walk to the imbalance sign change."
         ),
     )
     p.add_argument(
         "--xtol", type=float, default=1e-4,
-        help="Relative bisection tolerance on T. Default: 1e-4.",
+        help=(
+            "Relative tolerance on the coexistence temperature "
+            "(passed to brentq's rtol). Default: 1e-4."
+        ),
     )
     p.add_argument(
         "--min-peak-separation", type=int, default=5,
@@ -161,11 +165,11 @@ def main(argv: list[str] | None = None) -> int:
     if not result.self_consistent_converged:
         print(
             f"warning: self-consistency iteration did not converge "
-            f"within {DEFAULT_MAX_SELF_CONSISTENT_ITER} passes; "
+            f"within {DEFAULT_MAX_SELF_CONSISTENT_ITER} passes; the "
             f"reported T_K may differ from the true fixed point by "
-            f"more than self_consistent_tol_K. Consider re-running "
-            f"with a different --smooth-sigma or inspecting the DOS "
-            f"for data-quality issues.",
+            f"more than the solver's convergence tolerance. Consider "
+            f"re-running with a different --smooth-sigma or inspecting "
+            f"the DOS for data-quality issues.",
             file=sys.stderr,
         )
 
