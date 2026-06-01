@@ -40,6 +40,85 @@ def test_stitch_entropy_two_windows_aligns_in_overlap():
     assert np.isclose(at_overlap, rebased_a[-1])
 
 
+def test_stitch_entropy_fills_interior_gap_with_neg_inf():
+    # Two windows that align on a 0.5 grid but together leave one
+    # interior bin (-7.5) unpopulated: window A covers [-8.0, -7.0]
+    # but is missing its -7.5 bin, and window B starts at -7.0. The
+    # stitched output must be a complete uniform grid with -inf at the
+    # forbidden bin.
+    df_a = pd.DataFrame({
+        "energy": np.array([-8.0, -7.0]),
+        "entropy": np.array([0.0, 1.0]),
+    })
+    df_b = pd.DataFrame({
+        "energy": np.array([-7.0, -6.5, -6.0]),
+        "entropy": np.array([1.0, 1.2, 1.5]),
+    })
+    stitched, _ = stitch_entropy([df_a, df_b], 0.5)
+
+    # Complete grid from -8.0 to -6.0 in 0.5 steps: 5 bins.
+    expected_energies = np.array([-8.0, -7.5, -7.0, -6.5, -6.0])
+    assert np.allclose(stitched["energy"].to_numpy(), expected_energies)
+    # Uniform spacing throughout.
+    assert np.allclose(np.diff(stitched["energy"].to_numpy()), 0.5)
+    # The unpopulated interior bin carries -inf; the rest are finite.
+    gap = stitched.loc[np.isclose(stitched["energy"], -7.5), "entropy"].item()
+    assert gap == -np.inf
+    assert np.isfinite(
+        stitched.loc[~np.isclose(stitched["energy"], -7.5), "entropy"]
+    ).all()
+
+
+def test_stitch_entropy_no_frontier_extrapolation():
+    # The complete grid spans only the populated range -- no -inf bins
+    # below the lowest or above the highest populated energy.
+    df_a = pd.DataFrame({
+        "energy": np.array([-8.0, -7.5, -7.0]),
+        "entropy": np.array([0.0, 0.5, 1.0]),
+    })
+    df_b = pd.DataFrame({
+        "energy": np.array([-7.0, -6.5, -6.0]),
+        "entropy": np.array([1.0, 1.2, 1.5]),
+    })
+    stitched, _ = stitch_entropy([df_a, df_b], 0.5)
+
+    assert stitched["energy"].min() == -8.0
+    assert stitched["energy"].max() == -6.0
+    # Fully populated, contiguous range -> no -inf anywhere.
+    assert np.isfinite(stitched["entropy"]).all()
+    assert stitched["entropy"].iloc[0] == 0.0
+
+
+def test_stitch_entropy_neg_inf_round_trips_through_csv(tmp_path):
+    # A stitched DOS with a -inf gap must survive a CSV write/read so
+    # downstream tools (mchammer-pt-coexistence) see g=0 bins intact.
+    df_a = pd.DataFrame({
+        "energy": np.array([-8.0, -7.0]),
+        "entropy": np.array([0.0, 1.0]),
+    })
+    df_b = pd.DataFrame({
+        "energy": np.array([-7.0, -6.5, -6.0]),
+        "entropy": np.array([1.0, 1.2, 1.5]),
+    })
+    stitched, _ = stitch_entropy([df_a, df_b], 0.5)
+
+    path = tmp_path / "stitched_dos.csv"
+    stitched.to_csv(path, index=False)
+    reloaded = pd.read_csv(path)
+
+    assert reloaded.loc[
+        np.isclose(reloaded["energy"], -7.5), "entropy"
+    ].item() == -np.inf
+    assert np.allclose(
+        reloaded["energy"].to_numpy(), stitched["energy"].to_numpy()
+    )
+    finite = np.isfinite(stitched["entropy"].to_numpy())
+    assert np.allclose(
+        reloaded["entropy"].to_numpy()[finite],
+        stitched["entropy"].to_numpy()[finite],
+    )
+
+
 def test_stitch_entropy_robust_to_ulp_drift():
     # Two windows on the same logical 0.5-eV grid, but each computed by
     # an independent process so the shared bins differ at the ULP level.

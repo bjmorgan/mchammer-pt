@@ -45,6 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ``mchammer_pt.analysis.dos.stitch_entropy`` now returns a complete
+  histogram on the ``energy_spacing`` grid: every integer-multiple bin
+  from the lowest to the highest populated energy is emitted, with
+  interior bins that no window reached carried as ``entropy = -inf``
+  (``g = 0``) instead of being dropped. The output grid is therefore
+  uniform and self-describing, so downstream tools recover the true bin
+  width from ``energies[1] - energies[0]`` even across forbidden-energy
+  gaps in a discrete spectrum. The window merge, additive shifting, and
+  overlap-error reporting are unchanged; the ``-inf`` fills are added
+  only for unpopulated interior positions, and no frontier
+  extrapolation is done beyond the populated range.
+- ``mchammer-pt-coexistence`` no longer re-validates the DOS grid in
+  the CLI. The row-count, finiteness, and uniform-grid checks are
+  delegated to ``equal_area_temperature`` (which accepts ``-inf``
+  ``g = 0`` bins), removing a duplicated check whose copy wrongly
+  rejected the ``-inf`` bins of a complete-histogram DOS.
 - ``mchammer_pt.analysis.coexistence.equal_area_temperature`` is
   re-architected around a fixed dividing energy with an outer
   self-consistency loop, replacing the previous design that
