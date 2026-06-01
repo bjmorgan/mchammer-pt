@@ -688,6 +688,25 @@ def test_equal_area_temperature_disabled_iteration():
     assert abs(res_iter.T_K - res_no_iter.T_K) < 5.0
 
 
+def test_equal_area_temperature_no_self_consistent_triple_is_consistent():
+    """With max_self_consistent_iter=0 (frozen E_star), the reported
+    Tc is the root for the seed saddle, so weight_imbalance (computed
+    against the reported split.E_star) is near zero — i.e. the
+    returned (T_K, split.E_star, weight_imbalance) triple is a
+    solved root, and E_star is the frozen seed value.
+    """
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    )
+    res = equal_area_temperature(dos, max_self_consistent_iter=0)
+    assert res.n_self_consistent_iter == 0
+    # The reported residual must be small: split.E_star is the frozen
+    # seed saddle that Tc was solved for. (Before the frozen-mode fix
+    # this used a re-detected saddle and the residual was inconsistent.)
+    assert res.weight_imbalance < 1e-4
+
+
 def test_smooth_ln_g_zero_sigma_returns_input():
     ln_g = np.array([0.0, 1.0, 4.0, 9.0, 16.0])
     out = _smooth_ln_g(ln_g, sigma=0.0)

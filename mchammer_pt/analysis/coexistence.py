@@ -682,7 +682,7 @@ def equal_area_temperature(
 
     # Initial E_star at the seed.
     try:
-        E_star, _, _ = _find_saddle_at(
+        E_star, E_peak_low_seed, E_peak_high_seed = _find_saddle_at(
             energies, ln_g_sm, T_seed, min_peak_separation,
         )
     except NotBimodalError as exc:
@@ -779,53 +779,63 @@ def equal_area_temperature(
         Tc = Tc_damped
         E_star = E_star_damped
 
-    # Final phase split at the converged Tc, on smoothed phi. This
-    # saddle (final_split.E_star) is the single source of truth for
-    # the reported split, the residual, and the final root-find — so
-    # the returned (T_K, split.E_star, weight_imbalance) triple is
-    # internally consistent.
-    final_split = find_phase_split(
-        dos, T_K=Tc, min_peak_separation=min_peak_separation,
-        smoothing_sigma=smoothing_sigma,
-    )
-    E_star_report = final_split.E_star
+    # Final reporting. Two modes, distinguished by whether the
+    # self-consistency loop was permitted to run at all.
+    if max_self_consistent_iter == 0:
+        # Frozen single-pass (--no-self-consistent): Tc from the first
+        # brentq is already the root for the seed E_star. Report that
+        # saddle and its seed-temperature peaks unchanged — freezing
+        # E_star at its initial value, as documented. The reported
+        # (T_K, split.E_star) pair is therefore a solved root and
+        # weight_imbalance below is consistent with the returned split.
+        E_star_report = E_star
+        peak_low_report = E_peak_low_seed
+        peak_high_report = E_peak_high_seed
+    else:
+        # Iterated: re-detect the saddle at the converged Tc and pin Tc
+        # to the true root for that saddle, so the reported split, its
+        # E_star, and the residual are mutually consistent.
+        final_split = find_phase_split(
+            dos, T_K=Tc, min_peak_separation=min_peak_separation,
+            smoothing_sigma=smoothing_sigma,
+        )
+        E_star_report = final_split.E_star
+        peak_low_report = final_split.E_peak_low
+        peak_high_report = final_split.E_peak_high
 
-    # Final un-damped brentq pass: pin the reported Tc to the true
-    # zero of imbalance(T; E_star_report). The damped iteration
-    # converges to (Tc, E_star), but the last Tc assignment is a
-    # linear blend that is not itself a root; and we pin against the
-    # *reported* saddle so the residual below is a faithful solved
-    # root for the split we return.
-    if self_consistent_converged and max_self_consistent_iter > 0:
-        try:
-            T_lo_final, T_hi_final = _walk_for_sign_change(
-                energies, ln_g_raw, Tc, E_star_report,
-            )
-            f_lo_final = imbalance(T_lo_final, E_star_report)
-            f_hi_final = imbalance(T_hi_final, E_star_report)
-            if f_lo_final * f_hi_final > 0.0:
-                raise NoBracketError(
-                    "final un-damped re-bracket did not straddle zero"
+        # Final un-damped brentq pass: pin the reported Tc to the true
+        # zero of imbalance(T; E_star_report). The damped iteration
+        # converges to (Tc, E_star), but the last Tc assignment is a
+        # linear blend that is not itself a root; and we pin against
+        # the *reported* saddle so the residual below is a faithful
+        # solved root for the split we return.
+        if self_consistent_converged:
+            try:
+                T_lo_final, T_hi_final = _walk_for_sign_change(
+                    energies, ln_g_raw, Tc, E_star_report,
                 )
-            Tc, br_final = brentq(
-                lambda T: imbalance(T, E_star_report),
-                T_lo_final, T_hi_final,
-                rtol=xtol,
-                full_output=True, disp=True,
-            )
-            n_brentq_total += int(br_final.iterations)
-        except (NoBracketError, ValueError):
-            # If the un-damped re-solve fails, the damped Tc was
-            # the best estimate. Flag as not converged so callers
-            # know the reported triple isn't a clean root.
-            self_consistent_converged = False
+                f_lo_final = imbalance(T_lo_final, E_star_report)
+                f_hi_final = imbalance(T_hi_final, E_star_report)
+                if f_lo_final * f_hi_final > 0.0:
+                    raise NoBracketError(
+                        "final un-damped re-bracket did not straddle zero"
+                    )
+                Tc, br_final = brentq(
+                    lambda T: imbalance(T, E_star_report),
+                    T_lo_final, T_hi_final,
+                    rtol=xtol,
+                    full_output=True, disp=True,
+                )
+                n_brentq_total += int(br_final.iterations)
+            except (NoBracketError, ValueError):
+                # If the un-damped re-solve fails, the damped Tc was
+                # the best estimate. Flag as not converged so callers
+                # know the reported triple isn't a clean root.
+                self_consistent_converged = False
 
-    # The pin moves Tc by < self_consistent_tol_K, so final_split's
-    # peaks/saddle (detected at the pre-pin Tc) remain valid; rebuild
-    # the split only to carry the pinned T_K.
     split = PhaseSplit(
-        E_peak_low=final_split.E_peak_low,
-        E_peak_high=final_split.E_peak_high,
+        E_peak_low=peak_low_report,
+        E_peak_high=peak_high_report,
         E_star=E_star_report,
         T_K=Tc,
     )
