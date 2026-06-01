@@ -309,6 +309,8 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
 
     Raises:
         ValueError: if the DOS contains non-finite values.
+        ValueError: if the energy column has no variation across the
+            DOS, so no kT scale can be derived.
         ValueError: if ``ln g`` has no variation across the DOS, so
             no kT scale can be derived.
         ValueError: if the Cv peak sits at the scan-range edge,
@@ -325,6 +327,12 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
 
     E_range = float(energies.max() - energies.min())
     ln_g_range = float(ln_g.max() - ln_g.min())
+    if E_range <= 0.0:
+        raise ValueError(
+            "cv_peak_seed: energy column has no variation "
+            f"(range = {E_range:.2g}); cannot derive a kT scale. "
+            "Supply T_bracket explicitly."
+        )
     if ln_g_range < 1e-10:
         raise ValueError(
             "cv_peak_seed: ln g has no variation across the DOS "
@@ -631,9 +639,9 @@ def equal_area_temperature(
         A :class:`CoexistencePoint`.
 
     Raises:
-        ValueError: on invalid inputs, or when the Cv-peak seed
-            cannot be derived (flat ``ln g``, Cv peak at scan-range
-            edge).
+        ValueError: on invalid inputs (including a ``dos`` with fewer
+            than two energy bins), or when the Cv-peak seed cannot be
+            derived (flat ``ln g``, Cv peak at scan-range edge).
         NotBimodalError: when no T near the seed yields a bimodal
             smoothed phi.
         NoBracketError: when the walk-outward search hits the scan
@@ -642,6 +650,11 @@ def equal_area_temperature(
     """
     if dos.empty:
         raise ValueError("dos has no rows; need at least one energy bin")
+    if len(dos) < 2:
+        raise ValueError(
+            f"equal_area_temperature: dos has {len(dos)} row(s); need at "
+            f"least two energy bins to define a grid"
+        )
     if xtol <= 0.0:
         raise ValueError(f"xtol must be > 0; got {xtol}")
     if xtol < _RTOL_FLOOR:

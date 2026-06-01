@@ -521,6 +521,23 @@ def test_cv_peak_seed_raises_value_error_on_flat_ln_g():
         _cv_peak_seed(dos)
 
 
+def test_equal_area_temperature_rejects_single_row_dos():
+    dos = pd.DataFrame({"energy": [0.0], "entropy": [0.0]})
+    with pytest.raises(ValueError, match="at least two"):
+        equal_area_temperature(dos)
+
+
+def test_cv_peak_seed_rejects_zero_energy_range():
+    # All energies equal -> E_range == 0; ln g varies so the existing
+    # ln_g check doesn't fire first.
+    dos = pd.DataFrame({
+        "energy": [1.0, 1.0, 1.0],
+        "entropy": [0.0, 1.0, 2.0],
+    })
+    with pytest.raises(ValueError, match="energy column has no variation"):
+        _cv_peak_seed(dos)
+
+
 def test_walk_for_sign_change_returns_sign_changing_pair():
     # From a T_start inside the bimodal window with a fixed E_star,
     # _walk_for_sign_change must return (T_lo, T_hi) with the
