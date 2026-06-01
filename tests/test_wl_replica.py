@@ -742,6 +742,21 @@ def test_window_stats_reports_bins_visited_and_bins_known():
     assert stats["bins_known"] == 3
 
 
+def test_window_stats_reports_bins_filled():
+    """window_stats counts histogram bins with a positive count.
+
+    Unlike monotone ``bins_visited``, ``bins_filled`` reflects the
+    current histogram, which is zeroed on every halving.
+    """
+    replica = _make_wl_replica()
+    replica.ensemble._histogram = {0: 3, 1: 0, 2: 5}
+
+    stats = replica.window_stats()
+
+    assert stats["bins_filled"] == 2
+    assert stats["bins_known"] == 3
+
+
 def test_init_leaves_visited_bins_empty():
     """`_visited_bins` is empty after construction.
 
