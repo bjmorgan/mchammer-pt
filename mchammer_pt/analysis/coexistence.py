@@ -318,6 +318,8 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
         ValueError: if the ``energy`` column contains non-finite values
             or the ``entropy`` column contains ``NaN`` or ``+inf``
             (``-inf`` entries, ``g = 0``, are accepted).
+        ValueError: if every ``entropy`` value is ``-inf`` (all bins
+            have ``g = 0``), so no finite ``ln g`` range exists.
         ValueError: if the energy column has no variation across the
             DOS, so no kT scale can be derived.
         ValueError: if ``ln g`` has no variation across the DOS, so

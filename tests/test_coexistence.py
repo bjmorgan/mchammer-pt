@@ -538,6 +538,17 @@ def test_cv_peak_seed_rejects_zero_energy_range():
         _cv_peak_seed(dos)
 
 
+def test_cv_peak_seed_rejects_all_g_zero():
+    # Every bin g=0 (entropy all -inf) -> no finite ln g range exists,
+    # so no kT scale can be derived.
+    dos = pd.DataFrame({
+        "energy": [0.0, 1.0, 2.0, 3.0],
+        "entropy": [-np.inf, -np.inf, -np.inf, -np.inf],
+    })
+    with pytest.raises(ValueError, match="no finite values"):
+        _cv_peak_seed(dos)
+
+
 def test_walk_for_sign_change_returns_sign_changing_pair():
     # From a T_start inside the bimodal window with a fixed E_star,
     # _walk_for_sign_change must return (T_lo, T_hi) with the
