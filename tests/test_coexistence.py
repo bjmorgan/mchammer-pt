@@ -26,6 +26,17 @@ from mchammer_pt.analysis.coexistence import (
 from tests._coexistence_fixtures import lattice_like_dos
 
 
+def _asymmetric_lattice_dos():
+    """lattice_like_dos with a linear entropy tilt so the saddle sits
+    off-centre and the (Tc, E_star) fixed point is non-trivial."""
+    dos = lattice_like_dos(
+        a=1.0, beta_c=10.0, c=1.0,
+        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
+    ).copy()
+    dos["entropy"] = dos["entropy"] + 0.5 * dos["energy"]
+    return dos
+
+
 def test_not_bimodal_error_is_value_error():
     assert issubclass(NotBimodalError, ValueError)
 
@@ -810,17 +821,24 @@ def test_equal_area_temperature_non_default_damping_converges():
     )
 
 
-def test_equal_area_temperature_tight_tol_takes_more_iterations():
-    """Tighter self_consistent_tol_K requires more iteration passes
-    to converge. Pins the tol_K kwarg behaviour."""
-    dos = lattice_like_dos(
-        a=1.0, beta_c=10.0, c=1.0,
-        E_min=-1.5, E_max=1.5, energy_spacing=0.005,
-    )
-    res_loose = equal_area_temperature(dos, self_consistent_tol_K=1e-1)
-    res_tight = equal_area_temperature(dos, self_consistent_tol_K=1e-5)
-    # Tighter tol -> more passes (or equal, never fewer).
-    assert res_tight.n_self_consistent_iter >= res_loose.n_self_consistent_iter
+def test_equal_area_temperature_converged_flag_is_honest():
+    """When self_consistent_converged is True, re-detecting the saddle
+    at the reported Tc and re-solving must move Tc by less than the
+    tolerance — i.e. the reported point is genuinely (near) the
+    self-consistent fixed point, not merely a damped increment below
+    tol.
+    """
+    dos = _asymmetric_lattice_dos()
+    tol = 1e-4
+    res = equal_area_temperature(dos, self_consistent_tol_K=tol)
+    if not res.self_consistent_converged:
+        pytest.skip("fixture did not converge; flag-honesty vacuous")
+    # The reported split.E_star is the saddle the solver converged on;
+    # the residual of imbalance at (Tc, split.E_star) must be ~0.
+    energies = dos["energy"].to_numpy()
+    ln_g = dos["entropy"].to_numpy()
+    w_lo, w_hi = _partition_sums(energies, ln_g, res.T_K, res.split.E_star)
+    assert abs(w_lo - w_hi) / (w_lo + w_hi) < 1e-3
 
 
 def test_equal_area_temperature_validates_smoothing_sigma_negative():

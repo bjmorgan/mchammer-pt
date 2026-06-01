@@ -577,8 +577,8 @@ def equal_area_temperature(
        bracket.
     5. Re-detect ``E*`` at the converged ``Tc`` and re-solve, with
        linear damping (``damping`` parameter) to stabilise the
-       fixed-point map on shallow-bimodal data, until
-       ``|Δ Tc| < self_consistent_tol_K`` or
+       fixed-point map on shallow-bimodal data, until the undamped
+       residual ``|Tc_raw - Tc| < self_consistent_tol_K`` or
        ``max_self_consistent_iter`` is reached.
 
     Args:
@@ -602,13 +602,30 @@ def equal_area_temperature(
             detection step only. Weight integrals consume raw
             ``ln g``. Default 2.0.
         max_self_consistent_iter: maximum (Tc, E*) re-iterations
-            after the initial brentq solve. 0 disables iteration.
-            Default 20.
-        damping: linear-mixing factor for the (Tc, E*) update;
-            must satisfy ``0 < damping <= 1``. ``damping=1`` is no
-            damping. Default 0.5.
-        self_consistent_tol_K: convergence tolerance on |Δ Tc|
-            between iterations, in K. Default 1e-3.
+            after the initial brentq solve. 0 disables iteration
+            (frozen mode). In frozen mode the reported split (peaks
+            and E*) is the seed-temperature saddle detection —
+            possibly at a fallback temperature near the seed if the
+            exact seed T was not bimodal — while ``T_K`` is the
+            single-pass equal-area root for that frozen saddle; the
+            reported peaks may therefore correspond to a temperature
+            slightly different from ``T_K``. Default 20.
+        damping: linear-mixing factor for the (Tc, E*) update; must
+            satisfy ``0 < damping <= 1``. ``damping=1`` is no
+            damping. Besides stabilising the iteration (the undamped
+            map can oscillate), it influences where on the
+            saddle-detection plateau the iteration settles, and
+            therefore has a small (~discretisation-scale) effect on
+            the delivered Tc. Default 0.5.
+        self_consistent_tol_K: convergence tolerance on the undamped
+            fixed-point residual ``|Tc_raw - Tc|`` between successive
+            self-consistency passes, in K. The achievable Tc accuracy
+            is bounded below by the saddle-detection discretisation —
+            the smoothed-phi argmax is piecewise-constant in T over a
+            small plateau — so tightening this tolerance past that
+            plateau does not refine Tc further. It controls when
+            convergence is *declared*, not the ultimate accuracy.
+            Default 1e-3.
 
     Returns:
         A :class:`CoexistencePoint`.
@@ -743,9 +760,6 @@ def equal_area_temperature(
         except NotBimodalError:
             # Saddle detection failed at Tc; keep the previous E_star.
             break
-        if abs(E_star_new - E_star) < 1e-9:
-            self_consistent_converged = True
-            break
         try:
             T_lo_i, T_hi_i = _walk_for_sign_change(
                 energies, ln_g_raw, Tc, E_star_new,
@@ -769,15 +783,16 @@ def equal_area_temperature(
             full_output=True, disp=True,
         )
         n_brentq_total += int(br.iterations)
-        Tc_damped = (1.0 - damping) * Tc + damping * Tc_raw
-        E_star_damped = (1.0 - damping) * E_star + damping * E_star_new
-        if abs(Tc_damped - Tc) < self_consistent_tol_K:
+        # Honest fixed-point residual: how far Tc is from the equal-area
+        # root for the freshly-detected saddle. Damping stabilises the Tc
+        # trajectory below; it must not deflate this convergence measure
+        # (testing the damped increment would inflate the effective
+        # tolerance by 1/damping).
+        residual = abs(Tc_raw - Tc)
+        Tc = (1.0 - damping) * Tc + damping * Tc_raw
+        if residual < self_consistent_tol_K:
             self_consistent_converged = True
-            Tc = Tc_damped
-            E_star = E_star_damped
             break
-        Tc = Tc_damped
-        E_star = E_star_damped
 
     # Final reporting. Two modes, distinguished by whether the
     # self-consistency loop was permitted to run at all.
