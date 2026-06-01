@@ -201,7 +201,10 @@ def find_phase_split(
         and the supplied ``T_K``.
 
     Raises:
-        ValueError: if ``dos`` is empty or ``T_K <= 0``.
+        ValueError: if ``dos`` is empty, ``T_K <= 0``, the ``energy``
+            column contains non-finite values, or the ``entropy`` column
+            contains ``NaN`` or ``+inf``. ``-inf`` entries (``g = 0``)
+            are accepted as zero-weight bins.
         NotBimodalError: if ``P(E | T_K)`` is not bimodal (fewer than
             two local minima of ``phi``, or the two deepest within
             ``min_peak_separation`` bins of each other).
@@ -217,10 +220,14 @@ def find_phase_split(
 
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
-    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
+    if not np.isfinite(energies).all():
         raise ValueError(
-            "find_phase_split: dos contains non-finite (NaN/inf) "
-            "values in 'energy' or 'entropy' columns"
+            "find_phase_split: 'energy' column contains non-finite values"
+        )
+    if np.isnan(ln_g).any() or np.isposinf(ln_g).any():
+        raise ValueError(
+            "find_phase_split: 'entropy' column contains NaN or +inf; only "
+            "finite values and -inf (g=0) are permitted"
         )
     ln_g_for_topology = _smooth_ln_g(ln_g, sigma=smoothing_sigma)
     beta = 1.0 / (kB * T_K)
@@ -308,7 +315,9 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
     to lie inside it, not to centre on it.
 
     Raises:
-        ValueError: if the DOS contains non-finite values.
+        ValueError: if the ``energy`` column contains non-finite values
+            or the ``entropy`` column contains ``NaN`` or ``+inf``
+            (``-inf`` entries, ``g = 0``, are accepted).
         ValueError: if the energy column has no variation across the
             DOS, so no kT scale can be derived.
         ValueError: if ``ln g`` has no variation across the DOS, so
@@ -319,14 +328,28 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
     """
     energies = dos["energy"].to_numpy()
     ln_g = dos["entropy"].to_numpy()
-    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
+    if not np.isfinite(energies).all():
         raise ValueError(
-            "cv_peak_seed: dos contains non-finite (NaN/inf) "
-            "values in 'energy' or 'entropy' columns"
+            "cv_peak_seed: 'energy' column contains non-finite values"
+        )
+    if np.isnan(ln_g).any() or np.isposinf(ln_g).any():
+        raise ValueError(
+            "cv_peak_seed: 'entropy' column contains NaN or +inf; only "
+            "finite values and -inf (g=0) are permitted"
         )
 
     E_range = float(energies.max() - energies.min())
-    ln_g_range = float(ln_g.max() - ln_g.min())
+    # g=0 bins carry ln g = -inf; they hold no weight and must not
+    # define the entropy span used for the kT-scale heuristic. Take the
+    # range over finite entries only.
+    finite_ln_g = ln_g[np.isfinite(ln_g)]
+    if finite_ln_g.size == 0:
+        raise ValueError(
+            "cv_peak_seed: 'entropy' column has no finite values "
+            "(every bin is g=0); cannot derive a kT scale. "
+            "Supply T_bracket explicitly."
+        )
+    ln_g_range = float(finite_ln_g.max() - finite_ln_g.min())
     if E_range <= 0.0:
         raise ValueError(
             "cv_peak_seed: energy column has no variation "
@@ -653,8 +676,12 @@ def equal_area_temperature(
 
     Raises:
         ValueError: on invalid inputs (including a ``dos`` with fewer
-            than two energy bins), or when the Cv-peak seed cannot be
-            derived (flat ``ln g``, Cv peak at scan-range edge).
+            than two energy bins; an ``energy`` column with non-finite
+            values or not on a uniform grid; an ``entropy`` column with
+            ``NaN`` or ``+inf`` — ``-inf`` entries, ``g = 0``, are
+            accepted as zero-weight bins), or when the Cv-peak seed
+            cannot be derived (flat ``ln g``, Cv peak at scan-range
+            edge).
         NotBimodalError: when no T near the seed yields a bimodal
             smoothed phi.
         NoBracketError: when the walk-outward search hits the scan
@@ -699,10 +726,22 @@ def equal_area_temperature(
 
     energies = dos["energy"].to_numpy()
     ln_g_raw = dos["entropy"].to_numpy()
-    if not (np.isfinite(energies).all() and np.isfinite(ln_g_raw).all()):
+    if not np.isfinite(energies).all():
         raise ValueError(
-            "equal_area_temperature: dos contains non-finite values "
-            "in 'energy' or 'entropy' columns"
+            "equal_area_temperature: 'energy' column contains non-finite "
+            "values"
+        )
+    if np.isnan(ln_g_raw).any() or np.isposinf(ln_g_raw).any():
+        raise ValueError(
+            "equal_area_temperature: 'entropy' column contains NaN or +inf; "
+            "only finite values and -inf (g=0) are permitted"
+        )
+    diffs = np.diff(energies)
+    spacing = float(diffs[0])
+    if spacing <= 0.0 or not np.allclose(diffs, spacing, rtol=1e-6, atol=0.0):
+        raise ValueError(
+            "equal_area_temperature: 'energy' is not on a uniform grid; "
+            "the coexistence analysis requires a complete stitched DOS"
         )
     ln_g_sm = _smooth_ln_g(ln_g_raw, sigma=smoothing_sigma)
 

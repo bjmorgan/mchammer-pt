@@ -896,3 +896,32 @@ def test_equal_area_temperature_validates_tol_positive():
         equal_area_temperature(dos, self_consistent_tol_K=0.0)
     with pytest.raises(ValueError, match="self_consistent_tol_K"):
         equal_area_temperature(dos, self_consistent_tol_K=-1e-3)
+
+
+def test_equal_area_temperature_accepts_neg_inf_entropy():
+    """-inf entropy (g=0) must not be rejected as 'non-finite'."""
+    dos = _asymmetric_lattice_dos()
+    dos.loc[0, "entropy"] = -np.inf  # a g=0 bin at the low edge
+    try:
+        equal_area_temperature(dos)
+    except ValueError as e:
+        msg = str(e).lower()
+        assert "non-finite" not in msg and "nan" not in msg, (
+            f"-inf wrongly rejected: {e}"
+        )
+    # (Convergence/bimodality outcome is not asserted here — only that
+    # -inf is not rejected as invalid input.)
+
+
+def test_equal_area_temperature_rejects_nan_and_posinf():
+    for bad in (np.nan, np.inf):
+        dos = _asymmetric_lattice_dos()
+        dos.loc[5, "entropy"] = bad
+        with pytest.raises(ValueError):
+            equal_area_temperature(dos)
+
+
+def test_equal_area_temperature_rejects_non_uniform_grid():
+    dos = _asymmetric_lattice_dos().drop(index=10).reset_index(drop=True)
+    with pytest.raises(ValueError, match="uniform"):
+        equal_area_temperature(dos)
