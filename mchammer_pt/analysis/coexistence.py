@@ -49,24 +49,38 @@ _RTOL_FLOOR = 4.0 * np.finfo(float).eps
 def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
     """Gaussian-smooth ``ln g`` for topology-detection purposes.
 
-    Wraps ``scipy.ndimage.gaussian_filter1d`` with ``mode='nearest'``
-    (the boundary sample value is replicated for samples beyond the
-    array edge). Used only for finding phase peaks and the saddle;
-    all weight integrals downstream consume raw ``ln g``.
+    Smooths with a normalised (masked) Gaussian convolution: empty
+    (``-inf``, ``g = 0``) bins are excluded from the kernel and remain
+    ``-inf`` in the output, so they do not poison their finite
+    neighbours. ``mode='nearest'`` replicates the boundary sample value
+    for samples beyond the array edge. On all-finite input the
+    denominator is 1 everywhere and the result reduces exactly to a
+    plain ``scipy.ndimage.gaussian_filter1d``. Used only for finding
+    phase peaks and the saddle; all weight integrals downstream consume
+    raw ``ln g``.
 
     Args:
-        ln_g: 1-D array of entropy values per bin.
+        ln_g: 1-D array of entropy values per bin. ``-inf`` entries
+            (``g = 0``) are treated as empty and excluded from the
+            kernel.
         sigma: Gaussian standard deviation in bins. Must be >= 0.
             ``sigma=0`` returns the input unchanged.
 
     Returns:
-        Smoothed array with the same shape as ``ln_g``.
+        Smoothed array with the same shape as ``ln_g``; empty bins are
+        ``-inf``.
     """
     if sigma < 0.0:
         raise ValueError(f"sigma must be >= 0; got {sigma!r}")
     if sigma == 0.0:
         return ln_g.copy()
-    return gaussian_filter1d(ln_g, sigma=sigma, mode="nearest")
+    finite = np.isfinite(ln_g)
+    filled = np.where(finite, ln_g, 0.0)
+    num = gaussian_filter1d(filled, sigma=sigma, mode="nearest")
+    den = gaussian_filter1d(finite.astype(float), sigma=sigma, mode="nearest")
+    out = np.divide(num, den, out=np.full_like(ln_g, -np.inf), where=den > 0)
+    out[~finite] = -np.inf
+    return out
 
 
 class NotBimodalError(ValueError):

@@ -936,3 +936,45 @@ def test_equal_area_temperature_rejects_non_uniform_grid():
     dos = _asymmetric_lattice_dos().drop(index=10).reset_index(drop=True)
     with pytest.raises(ValueError, match="uniform"):
         equal_area_temperature(dos)
+
+
+def test_smooth_ln_g_masks_neg_inf_bins():
+    ln_g = np.array([1.0, 2.0, -np.inf, 4.0, 5.0])
+    out = _smooth_ln_g(ln_g, sigma=1.0)
+    assert out[2] == -np.inf  # empty bin stays empty
+    assert np.all(np.isfinite(out[[0, 1, 3, 4]]))  # neighbours not poisoned
+
+
+def test_smooth_ln_g_all_finite_matches_plain_gaussian():
+    from scipy.ndimage import gaussian_filter1d
+
+    ln_g = np.array([0.0, 1.0, 4.0, 9.0, 16.0, 9.0, 4.0])
+    np.testing.assert_allclose(
+        _smooth_ln_g(ln_g, sigma=1.5),
+        gaussian_filter1d(ln_g, sigma=1.5, mode="nearest"),
+        rtol=1e-12,
+    )
+
+
+def test_partition_sums_neg_inf_bin_contributes_zero():
+    """A -inf (g=0) bin contributes exactly zero weight: partition over a
+    DOS with a bin set to -inf equals the partition over the DOS with that
+    bin's weight removed."""
+    energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    ln_g = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    # T chosen so kB*T is of order the energy span: every bin carries a
+    # weight resolvable in float64, so dropping bin 1 produces a visible
+    # change rather than a sub-eps perturbation of the dominant bin.
+    T_K = 1.0e5
+    # E_star at 2.5 so the modified bin (index 1, energy 1.0) is wholly low.
+    w_lo_full, w_hi_full = _partition_sums(energies, ln_g, T_K=T_K, E_star=2.5)
+    ln_g_hole = ln_g.copy()
+    ln_g_hole[1] = -np.inf
+    w_lo_hole, w_hi_hole = _partition_sums(
+        energies, ln_g_hole, T_K=T_K, E_star=2.5
+    )
+    # High side identical (bin 1 is on the low side); low side drops by
+    # exactly bin 1's weight; total strictly less.
+    assert abs(w_hi_hole - w_hi_full) < 1e-12 * max(1.0, w_hi_full)
+    assert w_lo_hole < w_lo_full
+    assert np.isfinite(w_lo_hole) and np.isfinite(w_hi_hole)
