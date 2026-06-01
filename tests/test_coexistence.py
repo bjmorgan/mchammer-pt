@@ -431,7 +431,7 @@ def test_find_phase_split_with_smoothing_ignores_narrow_dimples():
     # Shot-noise-scale dimple at one bin near the saddle.
     dos_dimpled.loc[mid_idx, "entropy"] += 0.001
 
-    T_test = 1.0 / (10.0 * 8.617e-5)  # roughly the design Tc
+    T_test = 1.0 / (10.0 * kB)  # roughly the design Tc
     bin_width = float(dos_clean.loc[1, "energy"] - dos_clean.loc[0, "energy"])
 
     split_clean = find_phase_split(dos_clean, T_K=T_test)
@@ -463,7 +463,7 @@ def test_find_phase_split_zero_sigma_unchanged():
         a=1.0, beta_c=10.0, c=1.0,
         E_min=-1.5, E_max=1.5, energy_spacing=0.005,
     )
-    T_test = 1.0 / (10.0 * 8.617e-5)
+    T_test = 1.0 / (10.0 * kB)
     s0 = find_phase_split(dos, T_K=T_test, smoothing_sigma=0.0)
     s_default = find_phase_split(dos, T_K=T_test)  # default sigma should be 0
     assert s0.E_peak_low == s_default.E_peak_low
@@ -611,7 +611,7 @@ def test_equal_area_temperature_raises_not_bimodal_on_unimodal_user_range():
     # seed step raises NotBimodalError.
     T_too_hot_lo = 1.0 / (kB * 2.0)
     T_too_hot_hi = 1.0 / (kB * 1.0)
-    with pytest.raises(NotBimodalError, match="smoothed phi not bimodal"):
+    with pytest.raises(NotBimodalError, match="not bimodal"):
         equal_area_temperature(dos, T_bracket=(T_too_hot_lo, T_too_hot_hi))
 
 
@@ -623,7 +623,7 @@ def test_equal_area_temperature_smoothing_default_works_on_clean_dos():
         E_min=-1.5, E_max=1.5, energy_spacing=0.005,
     )
     result = equal_area_temperature(dos)
-    expected_Tc = 1.0 / (10.0 * 8.617e-5)  # ~1160 K
+    expected_Tc = 1.0 / (10.0 * kB)  # ~1160 K
     assert abs(result.T_K - expected_Tc) < 1.0  # within 1 K
     assert result.self_consistent_converged is True
 

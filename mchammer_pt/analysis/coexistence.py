@@ -34,6 +34,11 @@ _CV_SEED_KT_HIGH_FRAC = 20.0
 _WALK_STEP_K = 1.0
 _WALK_MAX_STEPS = 500
 
+# Default cap on (Tc, E_star) self-consistency passes. Exposed as a
+# module constant so the CLI can reference it without duplicating
+# the literal.
+DEFAULT_MAX_SELF_CONSISTENT_ITER = 20
+
 
 def _smooth_ln_g(ln_g: np.ndarray, sigma: float) -> np.ndarray:
     """Gaussian-smooth ``ln g`` for topology-detection purposes.
@@ -543,7 +548,7 @@ def equal_area_temperature(
     xtol: float = 1e-4,
     min_peak_separation: int = 5,
     smoothing_sigma: float = 2.0,
-    max_self_consistent_iter: int = 20,
+    max_self_consistent_iter: int = DEFAULT_MAX_SELF_CONSISTENT_ITER,
     damping: float = 0.5,
     self_consistent_tol_K: float = 1e-3,
 ) -> CoexistencePoint:
@@ -666,10 +671,15 @@ def equal_area_temperature(
             energies, ln_g_sm, T_seed, min_peak_separation,
         )
     except NotBimodalError as exc:
+        seed_desc = (
+            f"T_bracket midpoint T={T_seed:.2f} K"
+            if T_bracket is not None
+            else f"Cv-peak seed T={T_seed:.2f} K"
+        )
         raise NotBimodalError(
-            f"Cv/seed at T={T_seed:.2f} K, but smoothed phi is not "
-            f"bimodal there or at nearby T: {exc}. The DOS does not "
-            "exhibit first-order coexistence at the seed temperature."
+            f"smoothed phi is not bimodal at the {seed_desc} nor at "
+            f"nearby T: {exc}. The DOS does not exhibit first-order "
+            "coexistence near this temperature."
         ) from exc
 
     # Bracket: user-supplied or walk-derived (fixed-E_star).
@@ -754,23 +764,36 @@ def equal_area_temperature(
         Tc = Tc_damped
         E_star = E_star_damped
 
+    # Final phase split at the converged Tc, on smoothed phi. This
+    # saddle (final_split.E_star) is the single source of truth for
+    # the reported split, the residual, and the final root-find — so
+    # the returned (T_K, split.E_star, weight_imbalance) triple is
+    # internally consistent.
+    final_split = find_phase_split(
+        dos, T_K=Tc, min_peak_separation=min_peak_separation,
+        smoothing_sigma=smoothing_sigma,
+    )
+    E_star_report = final_split.E_star
+
     # Final un-damped brentq pass: pin the reported Tc to the true
-    # zero of imbalance(T; E_star) for the converged E_star. The
-    # damped iteration converges to (Tc, E_star), but the last
-    # assignment of Tc is a linear blend that is not itself a root.
+    # zero of imbalance(T; E_star_report). The damped iteration
+    # converges to (Tc, E_star), but the last Tc assignment is a
+    # linear blend that is not itself a root; and we pin against the
+    # *reported* saddle so the residual below is a faithful solved
+    # root for the split we return.
     if self_consistent_converged and max_self_consistent_iter > 0:
         try:
             T_lo_final, T_hi_final = _walk_for_sign_change(
-                energies, ln_g_raw, Tc, E_star,
+                energies, ln_g_raw, Tc, E_star_report,
             )
-            f_lo_final = imbalance(T_lo_final, E_star)
-            f_hi_final = imbalance(T_hi_final, E_star)
+            f_lo_final = imbalance(T_lo_final, E_star_report)
+            f_hi_final = imbalance(T_hi_final, E_star_report)
             if f_lo_final * f_hi_final > 0.0:
                 raise NoBracketError(
                     "final un-damped re-bracket did not straddle zero"
                 )
             Tc, br_final = brentq(
-                lambda T: imbalance(T, E_star),
+                lambda T: imbalance(T, E_star_report),
                 T_lo_final, T_hi_final,
                 xtol=xtol * 0.5 * (T_lo_final + T_hi_final),
                 full_output=True, disp=True,
@@ -782,24 +805,26 @@ def equal_area_temperature(
             # know the reported triple isn't a clean root.
             self_consistent_converged = False
 
-    # Final phase split at converged Tc (uses smoothing_sigma for the
-    # reported peak positions).
-    final_split = find_phase_split(
-        dos, T_K=Tc, min_peak_separation=min_peak_separation,
-        smoothing_sigma=smoothing_sigma,
+    # The pin moves Tc by < self_consistent_tol_K, so final_split's
+    # peaks/saddle (detected at the pre-pin Tc) remain valid; rebuild
+    # the split only to carry the pinned T_K.
+    split = PhaseSplit(
+        E_peak_low=final_split.E_peak_low,
+        E_peak_high=final_split.E_peak_high,
+        E_star=E_star_report,
+        T_K=Tc,
     )
+
     mean_low, mean_high = partition_means(
-        energies, ln_g_raw, Tc, final_split.E_star,
+        energies, ln_g_raw, Tc, E_star_report,
     )
     latent_heat = float(mean_high - mean_low)
 
-    # Normalised residual at the converged (Tc, E_star) — the
-    # quantity brentq actually solved. Dimensionless; near-zero for
-    # a well-solved Tc. Uses E_star (the converged saddle), NOT
-    # final_split.E_star (a re-detected saddle on smoothed phi at
-    # the converged Tc, which would differ subtly).
+    # Normalised residual at the reported (Tc, E_star_report) pair.
+    # Dimensionless; near-zero for a well-solved Tc and consistent
+    # with the returned split by construction.
     w_lo_final, w_hi_final = partition_sums(
-        energies, ln_g_raw, Tc, E_star,
+        energies, ln_g_raw, Tc, E_star_report,
     )
     total_final = w_lo_final + w_hi_final
     if total_final > 0.0:
@@ -824,15 +849,15 @@ def equal_area_temperature(
         ))
 
     phi_peak_min = min(
-        phi_at(final_split.E_peak_low),
-        phi_at(final_split.E_peak_high),
+        phi_at(split.E_peak_low),
+        phi_at(split.E_peak_high),
     )
     barrier_height = float(
-        kB * Tc * (phi_at(final_split.E_star) - phi_peak_min)
+        kB * Tc * (phi_at(split.E_star) - phi_peak_min)
     )
 
     return CoexistencePoint(
-        split=final_split,
+        split=split,
         latent_heat=latent_heat,
         barrier_height=barrier_height,
         weight_imbalance=weight_imbalance,

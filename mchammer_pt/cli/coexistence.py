@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from mchammer_pt.analysis.coexistence import (
+    DEFAULT_MAX_SELF_CONSISTENT_ITER,
     NoBracketError,
     NotBimodalError,
     equal_area_temperature,
@@ -148,7 +149,10 @@ def main(argv: list[str] | None = None) -> int:
             xtol=args.xtol,
             min_peak_separation=args.min_peak_separation,
             smoothing_sigma=args.smooth_sigma,
-            max_self_consistent_iter=0 if args.no_self_consistent else 20,
+            max_self_consistent_iter=(
+                0 if args.no_self_consistent
+                else DEFAULT_MAX_SELF_CONSISTENT_ITER
+            ),
         )
     except (NotBimodalError, NoBracketError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -156,11 +160,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not result.self_consistent_converged:
         print(
-            "warning: self-consistency iteration did not converge "
-            "within 20 passes; reported T_K may differ from the "
-            "true fixed point by more than self_consistent_tol_K. "
-            "Consider re-running with a different --smooth-sigma "
-            "or inspecting the DOS for data-quality issues.",
+            f"warning: self-consistency iteration did not converge "
+            f"within {DEFAULT_MAX_SELF_CONSISTENT_ITER} passes; "
+            f"reported T_K may differ from the true fixed point by "
+            f"more than self_consistent_tol_K. Consider re-running "
+            f"with a different --smooth-sigma or inspecting the DOS "
+            f"for data-quality issues.",
             file=sys.stderr,
         )
 
