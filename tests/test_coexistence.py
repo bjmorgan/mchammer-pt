@@ -16,7 +16,6 @@ from mchammer_pt.analysis.coexistence import (
     NotBimodalError,
     PhaseSplit,
     _cv_peak_seed,
-    _parabolic_vertex,
     _smooth_ln_g,
     _two_dominant_peak_indices,
     _walk_for_sign_change,
@@ -50,37 +49,6 @@ def test_exceptions_carry_messages():
     e2 = NoBracketError("imbalance has same sign at both endpoints")
     assert "300" in str(e1)
     assert "imbalance" in str(e2)
-
-
-def test_parabolic_vertex_recovers_known_minimum():
-    # y = 2*(x - 3.5)**2 + 1  -> vertex at x = 3.5
-    xs = np.array([3.0, 4.0, 5.0])
-    ys = 2.0 * (xs - 3.5) ** 2 + 1.0
-    x_vertex = _parabolic_vertex(xs[0], xs[1], xs[2], ys[0], ys[1], ys[2])
-    assert abs(x_vertex - 3.5) < 1e-12
-
-
-def test_parabolic_vertex_recovers_known_maximum():
-    # y = -3*(x - 7.25)**2 + 5  -> vertex at x = 7.25
-    xs = np.array([7.0, 8.0, 9.0])
-    ys = -3.0 * (xs - 7.25) ** 2 + 5.0
-    x_vertex = _parabolic_vertex(xs[0], xs[1], xs[2], ys[0], ys[1], ys[2])
-    assert abs(x_vertex - 7.25) < 1e-12
-
-
-def test_parabolic_vertex_falls_back_to_centre_when_linear():
-    # Three points with distinct x but collinear in y: the local fit
-    # is linear (a == 0), no parabolic vertex exists, fallback to x_c.
-    xs = np.array([1.0, 2.0, 3.0])
-    ys = np.array([10.0, 20.0, 30.0])
-    x_vertex = _parabolic_vertex(xs[0], xs[1], xs[2], ys[0], ys[1], ys[2])
-    assert x_vertex == 2.0
-
-
-def test_parabolic_vertex_falls_back_to_centre_on_coincident_x():
-    # Two x-values coincide: denominator vanishes; fallback to x_c.
-    x_vertex = _parabolic_vertex(2.0, 2.0, 3.0, 1.0, 2.0, 5.0)
-    assert x_vertex == 2.0
 
 
 def test_phase_split_is_frozen_dataclass():
@@ -394,20 +362,50 @@ def test_find_phase_split_on_lattice_like_dos_at_design_beta():
     assert abs(split.E_star) < 0.005
 
 
-def test_find_phase_split_sub_bin_refinement_on_lattice_like_dos():
+def test_find_phase_split_positions_are_bin_centres():
     # Choose c slightly off a bin centre so the analytic peak
     # positions (E = +/- c = +/- 1.0007) fall between bins of the
-    # 0.001-spaced grid. Parabolic refinement must recover the
-    # sub-bin positions to better than energy_spacing / 10.
+    # 0.001-spaced grid. The reported positions are bin centres: each
+    # is an actual grid energy within half a bin width of the analytic
+    # value.
     c = 1.0007
+    spacing = 0.001
     dos = lattice_like_dos(
         a=1.0, beta_c=10.0, c=c,
-        E_min=-1.5, E_max=1.5, energy_spacing=0.001,
+        E_min=-1.5, E_max=1.5, energy_spacing=spacing,
     )
+    grid = dos["energy"].to_numpy()
     T_K = 1.0 / (kB * 10.0)
     split = find_phase_split(dos, T_K=T_K)
-    assert abs(split.E_peak_low - (-c)) < 1e-4
-    assert abs(split.E_peak_high - c) < 1e-4
+    for E in (split.E_peak_low, split.E_peak_high, split.E_star):
+        assert np.isclose(grid, E).any(), f"{E} is not a grid bin centre"
+    assert abs(split.E_peak_low - (-c)) <= spacing / 2 + 1e-9
+    assert abs(split.E_peak_high - c) <= spacing / 2 + 1e-9
+
+
+def test_find_phase_split_saddle_skips_g_zero_interior_bin():
+    # A g=0 bin (ln g = -inf) between the peaks carries phi = +inf and
+    # would win a naive argmax. The saddle must be the highest
+    # *populated* bin instead. At beta = 1, phi = E - ln g; minima sit
+    # at E = 1 and E = 5; the interior holds a -inf bin at E = 3 and
+    # finite bins at E = 2 (phi=2) and E = 4 (phi=3), so the saddle is
+    # the populated maximum at E = 4.
+    energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    ln_g = np.array([-5.0, 1.0, 0.0, -np.inf, 1.0, 5.0, 1.0])
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    split = find_phase_split(dos, T_K=1.0 / kB, min_peak_separation=2)
+    assert split.E_star == 4.0
+
+
+def test_find_phase_split_all_g_zero_valley_uses_peak_midpoint():
+    # Every bin strictly between the peaks is g=0 (a forbidden-energy
+    # gap), so no populated saddle bin exists. E_star falls back to the
+    # midpoint of the two peaks (E = 1 and E = 3 -> 2.0).
+    energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    ln_g = np.array([-5.0, 1.0, -np.inf, 3.0, -1.0])
+    dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
+    split = find_phase_split(dos, T_K=1.0 / kB, min_peak_separation=2)
+    assert split.E_star == 2.0
 
 
 def test_find_phase_split_raises_outside_bimodal_window():
@@ -460,16 +458,17 @@ def test_find_phase_split_with_smoothing_ignores_narrow_dimples():
         dos_dimpled, T_K=T_test, smoothing_sigma=2.0,
     )
 
-    # Premise: even a single-bin shot-noise dimple shifts E_star
-    # by more than a bin width. Pins the bug.
+    # Premise: a single-bin shot-noise dimple shifts the discrete
+    # saddle bin off the clean position by at least one bin. Pins the
+    # bug.
     raw_error = abs(split_dimpled.E_star - split_clean.E_star)
-    assert raw_error > bin_width, (
+    assert raw_error >= bin_width, (
         f"dimple did not perturb E_star ({raw_error=:.6f}, "
         f"{bin_width=:.6f}); fixture no longer exercises the kwarg"
     )
 
-    # Fix: smoothing brings E_star closer to the clean reference
-    # than the un-smoothed dimpled computation does.
+    # Fix: smoothing averages out the dimple so the saddle bin returns
+    # to the clean reference.
     smoothed_error = abs(split_smoothed.E_star - split_clean.E_star)
     assert smoothed_error < raw_error, (
         f"smoothing did not improve E_star: {smoothed_error=:.6f}, "

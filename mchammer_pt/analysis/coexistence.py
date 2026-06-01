@@ -106,57 +106,30 @@ class NoBracketError(ValueError):
     """
 
 
-def _parabolic_vertex(
-    x_l: float, x_c: float, x_r: float,
-    y_l: float, y_c: float, y_r: float,
-) -> float:
-    """Return the x-coordinate of the parabolic vertex through three samples.
+def _phase_positions(
+    energies: np.ndarray, phi: np.ndarray, i_lo: int, i_hi: int,
+) -> tuple[float, float, float]:
+    """Bin-centre peak and saddle energies from phi and the peak indices.
 
-    Fits ``y = a x^2 + b x + c`` by Lagrange interpolation and returns
-    ``-b / (2 a)``. Typical use: three points centred on an extremum
-    bin of ``phi(E)`` on the DOS energy grid; the return is the sub-bin
-    refined extremum position.
-
-    Returns ``x_c`` when the parabola degenerates: ``a == 0``
-    (collinear samples) or coincident x-values.
+    Returns ``(E_star, E_peak_low, E_peak_high)``. The two peak
+    energies are the bin centres of the phi minima at ``i_lo`` and
+    ``i_hi``. The saddle ``E_star`` is the bin centre of the highest
+    *populated* bin strictly between them: bins with ``g = 0``
+    (``phi = +inf``) carry no weight and must be excluded, or the
+    argmax would lock onto an empty bin in the forbidden-energy gap of
+    a discrete spectrum. If every interior bin is ``g = 0``, the saddle
+    falls back to the midpoint of the two peaks (its barrier is then
+    infinite, computed by the caller from the bin grid).
     """
-    denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
-    if denom == 0.0:
-        return x_c
-    a = (
-        x_r * (y_c - y_l)
-        + x_c * (y_l - y_r)
-        + x_l * (y_r - y_c)
-    ) / denom
-    b = (
-        x_r * x_r * (y_l - y_c)
-        + x_c * x_c * (y_r - y_l)
-        + x_l * x_l * (y_c - y_r)
-    ) / denom
-    if a == 0.0:
-        return x_c
-    return -b / (2.0 * a)
-
-
-def _parabolic_value_at(
-    x_l: float, x_c: float, x_r: float,
-    y_l: float, y_c: float, y_r: float,
-    x: float,
-) -> float:
-    """Evaluate the Lagrange parabola through three samples at ``x``.
-
-    Used to read sub-bin values of a quantity sampled on the bin grid
-    (e.g. ``phi`` at the sub-bin peak and valley positions returned
-    by ``find_phase_split``). Returns ``y_c`` if the three x-values
-    are coincident.
-    """
-    denom = (x_l - x_c) * (x_l - x_r) * (x_c - x_r)
-    if denom == 0.0:
-        return y_c
-    w_l = (x - x_c) * (x - x_r) / ((x_l - x_c) * (x_l - x_r))
-    w_c = (x - x_l) * (x - x_r) / ((x_c - x_l) * (x_c - x_r))
-    w_r = (x - x_l) * (x - x_c) / ((x_r - x_l) * (x_r - x_c))
-    return w_l * y_l + w_c * y_c + w_r * y_r
+    E_peak_low = float(energies[i_lo])
+    E_peak_high = float(energies[i_hi])
+    phi_interior = phi[i_lo + 1 : i_hi]
+    finite = np.isfinite(phi_interior)
+    if not finite.any():
+        return 0.5 * (E_peak_low + E_peak_high), E_peak_low, E_peak_high
+    populated = np.flatnonzero(finite)
+    i_valley = int(populated[np.argmax(phi_interior[populated])]) + i_lo + 1
+    return float(energies[i_valley]), E_peak_low, E_peak_high
 
 
 @dataclass(frozen=True)
@@ -164,13 +137,13 @@ class PhaseSplit:
     """The two phase peaks and the free-energy minimum between them.
 
     Attributes:
-        E_peak_low: low-energy phase peak position in eV, sub-bin
-            refined from the two deepest local minima of
+        E_peak_low: low-energy phase peak position in eV — the bin
+            centre of the lower of the two deepest local minima of
             ``phi(E) = beta * E - ln g(E)`` at ``T_K``.
-        E_peak_high: high-energy phase peak position in eV, sub-bin
-            refined.
-        E_star: dividing energy in eV — the maximum of ``phi``
-            between the two peaks at ``T_K``, sub-bin refined.
+        E_peak_high: high-energy phase peak position in eV — the bin
+            centre of the upper minimum.
+        E_star: dividing energy in eV — the bin centre of the highest
+            populated ``phi`` bin between the two peaks at ``T_K``.
         T_K: temperature in Kelvin at which the peaks and valley
             were located.
     """
@@ -193,8 +166,8 @@ def find_phase_split(
     The two phase peak positions ``E_peak_low`` and ``E_peak_high``
     are the two deepest local minima of
     ``phi(E) = beta * E - ln g(E)``. ``E_star`` is the maximum of
-    ``phi`` between them. All three positions are refined to
-    sub-bin precision by three-point parabolic fits.
+    ``phi`` between them. All three positions are bin centres of the
+    DOS energy grid.
 
     Args:
         dos: DataFrame with ``energy`` (eV) and ``entropy`` (``ln g``)
@@ -261,30 +234,13 @@ def find_phase_split(
             f"{min_peak_separation} bins of each other at T={T_K} K"
         )
 
-    # Sub-bin refinement of each phase peak (minimum of phi).
-    E_peak_low = _parabolic_vertex(
-        energies[i_left - 1], energies[i_left], energies[i_left + 1],
-        phi[i_left - 1], phi[i_left], phi[i_left + 1],
+    E_star, E_peak_low, E_peak_high = _phase_positions(
+        energies, phi, i_left, i_right,
     )
-    E_peak_high = _parabolic_vertex(
-        energies[i_right - 1], energies[i_right], energies[i_right + 1],
-        phi[i_right - 1], phi[i_right], phi[i_right + 1],
-    )
-
-    interior = slice(i_left, i_right + 1)
-    # i_valley is strictly between i_left and i_right: both are local
-    # minima of phi (strict interior minima), so phi at either endpoint
-    # of the slice is smaller than at least one neighbour inside the slice.
-    i_valley = int(np.argmax(phi[interior])) + i_left
-    E_star = _parabolic_vertex(
-        energies[i_valley - 1], energies[i_valley], energies[i_valley + 1],
-        phi[i_valley - 1], phi[i_valley], phi[i_valley + 1],
-    )
-
     return PhaseSplit(
-        E_peak_low=float(E_peak_low),
-        E_peak_high=float(E_peak_high),
-        E_star=float(E_star),
+        E_peak_low=E_peak_low,
+        E_peak_high=E_peak_high,
+        E_star=E_star,
         T_K=float(T_K),
     )
 
@@ -425,8 +381,7 @@ def _find_saddle_at(
             order if the primary T is not bimodal.
 
     Returns:
-        ``(E_star, E_peak_low, E_peak_high)`` — sub-bin refined
-        positions.
+        ``(E_star, E_peak_low, E_peak_high)`` — bin-centre positions.
     """
     candidate_Ts = (T_K,) + tuple(T_K * f for f in fallback_T_factors)
     last_exc: NotBimodalError | None = None
@@ -442,27 +397,11 @@ def _find_saddle_at(
                     f"and {i_hi} are within {min_peak_separation} "
                     f"bins of each other at T={T} K"
                 )
-            # The saddle is strictly between the two peaks: _two_dominant_peak_indices
-            # returns strict local minima of phi, which can never be adjacent (that
-            # would need phi[k] < phi[k+1] and phi[k+1] < phi[k] at once), so i_hi >=
-            # i_lo + 2 and the inclusive slice has an interior. The endpoints are
-            # minima, so their inward neighbours exceed them and argmax lands strictly
-            # inside — never on a peak bin, regardless of min_peak_separation.
-            i_valley = int(np.argmax(phi[i_lo : i_hi + 1])) + i_lo
-            E_peak_low = _parabolic_vertex(
-                energies[i_lo - 1], energies[i_lo], energies[i_lo + 1],
-                phi[i_lo - 1], phi[i_lo], phi[i_lo + 1],
-            )
-            E_peak_high = _parabolic_vertex(
-                energies[i_hi - 1], energies[i_hi], energies[i_hi + 1],
-                phi[i_hi - 1], phi[i_hi], phi[i_hi + 1],
-            )
-            E_star = _parabolic_vertex(
-                energies[i_valley - 1], energies[i_valley],
-                energies[i_valley + 1],
-                phi[i_valley - 1], phi[i_valley], phi[i_valley + 1],
-            )
-            return float(E_star), float(E_peak_low), float(E_peak_high)
+            # _two_dominant_peak_indices returns strict local minima of phi,
+            # which can never be adjacent (that would need phi[k] < phi[k+1]
+            # and phi[k+1] < phi[k] at once), so i_hi >= i_lo + 2 and the
+            # strict interior between the peaks is non-empty.
+            return _phase_positions(energies, phi, i_lo, i_hi)
         except NotBimodalError as exc:
             last_exc = exc
             continue
@@ -957,19 +896,18 @@ def equal_area_temperature(
     else:
         weight_imbalance = float("nan")
 
-    # Barrier height (raw phi at smoothed peak/saddle positions).
+    # Barrier height from raw phi read directly at the bin centres of the
+    # peak and saddle positions. An all-g=0 valley puts E_star at the
+    # peak midpoint, whose nearest bin is g=0 (phi = +inf), so the barrier
+    # is correctly infinite there.
     beta_c = 1.0 / (kB * Tc)
     phi = beta_c * energies - ln_g_raw
     energy_spacing = float(energies[1] - energies[0])
 
     def phi_at(E: float) -> float:
         i = int(round((E - energies[0]) / energy_spacing))
-        i = max(1, min(i, len(energies) - 2))
-        return float(_parabolic_value_at(
-            energies[i - 1], energies[i], energies[i + 1],
-            phi[i - 1], phi[i], phi[i + 1],
-            E,
-        ))
+        i = max(0, min(i, len(energies) - 1))
+        return float(phi[i])
 
     phi_peak_min = min(
         phi_at(split.E_peak_low),
