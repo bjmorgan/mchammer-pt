@@ -479,6 +479,54 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
     assert np.array_equal(pool.current_occupations(1), occ0_before)
 
 
+def test_serial_pool_resolves_bins_filled_by_mode():
+    """per_window_stats collapses the candidate counts into ``bins_filled``.
+
+    A multi-walker slot's ``window_stats`` returns ``bins_filled_pooled``
+    and ``bins_filled_per_walker`` but no singular ``bins_filled``. The
+    serial pool resolves these against its ``flatness_mode``, leaving a
+    single ``bins_filled`` and stripping the candidates.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    group = WangLandauWindowGroup(
+        [
+            WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=e0 - 100.0,
+                energy_limit_right=e0 + 100.0,
+                random_seed=j,
+            )
+            for j in range(2)
+        ],
+        random_seed=0,
+    )
+    pool = SerialWangLandauPool(
+        [group], energy_spacing=0.1, flatness_mode="per_walker"
+    )
+
+    pool.advance_all(10)
+    stats = pool.per_window_stats()
+    s = stats[0]
+    assert "bins_filled" in s
+    assert "bins_filled_pooled" not in s
+    assert "bins_filled_per_walker" not in s
+    assert isinstance(s["bins_filled"], int)
+    assert s["flatness_mode"] == "per_walker"
+
+
 def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
     """n_walkers_per_window=2 creates 2 workers per slot."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
