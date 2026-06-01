@@ -171,6 +171,77 @@ def _compute_per_walker_flat_min(
     return min(per_walker) if per_walker else None
 
 
+def _compute_filled_bins(
+    histograms: list[dict[int, int]],
+    mode: FlatnessMode,
+) -> int:
+    """Count gate-covered bins in the current histogram for ``mode``.
+
+    A bin is "covered" when it has a positive count. Under
+    ``"pooled"`` the union across walkers is taken (a bin counts if
+    any walker has sampled it, matching the summed-histogram gate);
+    under ``"per_walker"`` the intersection is taken (a bin counts
+    only if every walker has sampled it, matching the
+    every-walker-flat gate). For a single histogram the two modes
+    coincide. Returns 0 for empty input.
+    """
+    positive_sets = [
+        {b for b, c in h.items() if c > 0} for h in histograms
+    ]
+    if not positive_sets:
+        return 0
+    if mode == "per_walker":
+        return len(set.intersection(*positive_sets))
+    return len(set.union(*positive_sets))
+
+
+def _compute_per_walker_breakdown(
+    histograms: list[dict[int, int]],
+) -> list[dict[str, Any]]:
+    """Per-walker ``filled``/``known``/``flat_min`` triples.
+
+    ``filled`` is the count of bins with a positive count, ``known``
+    the number of bins present, and ``flat_min`` is
+    ``min(counts) / mean(counts)`` (``None`` for an empty or
+    zero-mean histogram).
+    """
+    breakdown: list[dict[str, Any]] = []
+    for h in histograms:
+        flat_min: float | None
+        if h:
+            counts = np.array(list(h.values()), dtype=float)
+            mean_c = float(counts.mean())
+            flat_min = (
+                float(counts.min() / mean_c) if mean_c > 0 else None
+            )
+        else:
+            flat_min = None
+        breakdown.append(
+            {
+                "filled": sum(1 for c in h.values() if c > 0),
+                "known": len(h),
+                "flat_min": flat_min,
+            }
+        )
+    return breakdown
+
+
+def _resolve_bins_filled(stats: dict[str, Any], mode: FlatnessMode) -> None:
+    """Collapse the two candidate filled counts into ``bins_filled``.
+
+    Multi-walker ``window_stats`` dicts carry both
+    ``bins_filled_pooled`` and ``bins_filled_per_walker`` (the group
+    is mode-agnostic); the pool calls this once it knows the mode.
+    Single-walker dicts already carry ``bins_filled`` and are left
+    untouched.
+    """
+    pooled = stats.pop("bins_filled_pooled", None)
+    per_walker = stats.pop("bins_filled_per_walker", None)
+    if pooled is None:
+        return
+    stats["bins_filled"] = per_walker if mode == "per_walker" else pooled
+
+
 def decide_bp_switch(ts: list[int], fs: list[float]) -> bool:
     """Return ``True`` iff every walker satisfies the BP-switch condition.
 
