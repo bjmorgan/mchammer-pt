@@ -622,8 +622,15 @@ def equal_area_temperature(
             possibly at a fallback temperature near the seed if the
             exact seed T was not bimodal — while ``T_K`` is the
             single-pass equal-area root for that frozen saddle; the
-            reported peaks may therefore correspond to a temperature
-            slightly different from ``T_K``. Default 20.
+            reported peaks (and hence ``barrier_height``) may
+            therefore correspond to a temperature slightly different
+            from ``T_K``. The split is kept internally coherent —
+            peaks and ``E*`` come from one seed detection, so ``E*``
+            is the saddle strictly between the reported peaks —
+            rather than re-detecting only the peaks at ``T_K`` (which
+            would mix detection temperatures and could leave ``E*``
+            outside the peak pair). Use the default iterated mode for
+            a split fully consistent with ``T_K``. Default 20.
         damping: linear-mixing factor for the (Tc, E*) update; must
             satisfy ``0 < damping <= 1``. ``damping=1`` is no
             damping. Besides stabilising the iteration (the undamped
