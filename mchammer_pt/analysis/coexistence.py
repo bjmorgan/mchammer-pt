@@ -346,12 +346,14 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
     ln_g = dos["entropy"].to_numpy()
     if not np.isfinite(energies).all():
         raise ValueError(
-            "cv_peak_seed: 'energy' column contains non-finite values"
+            "could not derive the Cv-peak seed temperature: 'energy' "
+            "column contains non-finite values"
         )
     if np.isnan(ln_g).any() or np.isposinf(ln_g).any():
         raise ValueError(
-            "cv_peak_seed: 'entropy' column contains NaN or +inf; only "
-            "finite values and -inf (g=0) are permitted"
+            "could not derive the Cv-peak seed temperature: 'entropy' "
+            "column contains NaN or +inf; only finite values and -inf "
+            "(g=0) are permitted"
         )
 
     E_range = float(energies.max() - energies.min())
@@ -361,22 +363,22 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
     finite_ln_g = ln_g[np.isfinite(ln_g)]
     if finite_ln_g.size == 0:
         raise ValueError(
-            "cv_peak_seed: 'entropy' column has no finite values "
-            "(every bin is g=0); cannot derive a kT scale. "
-            "Supply T_bracket explicitly."
+            "could not derive the Cv-peak seed temperature: 'entropy' "
+            "column has no finite values (every bin is g=0); no kT scale "
+            "can be derived. Supply T_bracket explicitly."
         )
     ln_g_range = float(finite_ln_g.max() - finite_ln_g.min())
     if E_range <= 0.0:
         raise ValueError(
-            "cv_peak_seed: energy column has no variation "
-            f"(range = {E_range:.2g}); cannot derive a kT scale. "
-            "Supply T_bracket explicitly."
+            "could not derive the Cv-peak seed temperature: energy "
+            f"column has no variation (range = {E_range:.2g}); no kT "
+            "scale can be derived. Supply T_bracket explicitly."
         )
     if ln_g_range < 1e-10:
         raise ValueError(
-            "cv_peak_seed: ln g has no variation across the DOS "
-            f"(range = {ln_g_range:.2g}); cannot derive a kT scale. "
-            "Supply T_bracket explicitly."
+            "could not derive the Cv-peak seed temperature: ln g has no "
+            f"variation across the DOS (range = {ln_g_range:.2g}); no kT "
+            "scale can be derived. Supply T_bracket explicitly."
         )
     kT_scale = E_range / ln_g_range
     T_lo = max(_CV_SEED_KT_LOW_FRAC * kT_scale / kB, 1.0)
@@ -387,8 +389,8 @@ def _cv_peak_seed(dos: pd.DataFrame) -> float:
     i_peak = int(cv.argmax())
     if i_peak == 0 or i_peak == _CV_SEED_N_T - 1:
         raise ValueError(
-            f"cv_peak_seed: Cv peak at scan-range edge "
-            f"(T={Ts[i_peak]:.1f} K, scan range "
+            "could not derive the Cv-peak seed temperature: Cv peak at "
+            f"scan-range edge (T={Ts[i_peak]:.1f} K, scan range "
             f"[{T_lo:.1f}, {T_hi:.1f}] K). The true peak likely lies "
             "outside the kT-scale heuristic range. Supply T_bracket "
             "explicitly."
