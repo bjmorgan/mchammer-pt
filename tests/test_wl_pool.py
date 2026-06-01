@@ -200,12 +200,14 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     for s in stats:
         assert set(s.keys()) == {
             "fill_factor", "halvings", "histogram",
-            "bins_visited", "bins_known", "converged", "phase",
+            "bins_visited", "bins_filled", "bins_known",
+            "converged", "phase",
         }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
         assert isinstance(s["histogram"], dict)
         assert isinstance(s["bins_visited"], int)
+        assert isinstance(s["bins_filled"], int)
         assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["phase"] in {"halving", "1_over_t"}
