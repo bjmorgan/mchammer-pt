@@ -41,27 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ``mchammer_pt.analysis.coexistence.equal_area_temperature`` is
   re-architected around a fixed dividing energy with an outer
   self-consistency loop, replacing the previous design that
-  recomputed the phi-minima phase split at every trial temperature
-  inside the root-finder. The new flow smooths ``ln g(E)`` once
-  (controlled by ``smoothing_sigma``) to stabilise the topology
-  detection, seeds ``E_star`` at the heat-capacity peak inferred
-  from the stitched DOS, runs ``scipy.optimize.brentq`` on the
-  equal-area imbalance with that ``E_star`` held fixed, then
-  refreshes ``E_star`` at the resulting Tc and iterates the
-  ``(Tc, E_star)`` pair under damped updates until the temperature
-  change between successive iterations falls below
-  ``self_consistent_tol_K``. The previous in-loop peak detection
-  was defeated by shot-noise dimples in real REWL ``ln g(E)`` —
-  brentq's intermediate trial temperatures landed on T values
-  whose ``P(E | T)`` was momentarily unimodal under the raw curve,
-  collapsing the bracket. Smoothing the topology detection once
-  and removing per-T peak detection from the root-finder gives a
-  bracket-finding and root-finding pipeline that is robust on
-  realistically noisy input. The auto-bracket helper is replaced
-  by ``_walk_for_sign_change``, which integrates the raw
-  fixed-``E_star`` imbalance outward from the Cv-peak seed until
-  the sign flips; window-edge exits raise an informative
-  diagnostic distinct from the unimodal-midpoint case.
+  recomputed the phase split at every trial temperature inside the
+  root-finder. The new flow smooths ``ln g(E)`` once (controlled by
+  ``smoothing_sigma``) to stabilise the topology detection, seeds
+  ``E_star`` at the heat-capacity peak inferred from the stitched
+  DOS, runs ``scipy.optimize.brentq`` on the equal-area imbalance
+  with that ``E_star`` held fixed, then refreshes ``E_star`` at the
+  resulting Tc and iterates the ``(Tc, E_star)`` pair under damped
+  updates until the temperature change between successive
+  iterations falls below ``self_consistent_tol_K``. Detecting the
+  split once on a smoothed ``ln g`` — rather than at every trial
+  temperature on the raw curve — makes the pipeline robust to
+  bin-scale shot-noise dimples in real REWL output, which produce
+  spurious local minima of ``phi(E) = beta * E - ln g`` that would
+  otherwise be selected as phase peaks and collapse the bracket.
+  The auto-bracket helper is replaced by ``_walk_for_sign_change``,
+  which integrates the raw fixed-``E_star`` imbalance outward from
+  the Cv-peak seed until the sign flips; window-edge exits raise an
+  informative diagnostic distinct from the unimodal-midpoint case.
 - A user-supplied ``T_bracket`` whose midpoint temperature is
   unimodal under the smoothed ``ln g`` now raises
   ``NotBimodalError`` rather than ``NoBracketError``. The
