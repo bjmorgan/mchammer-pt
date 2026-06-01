@@ -184,8 +184,8 @@ def find_phase_split(
             detection on under-converged DOS data.
 
     Returns:
-        ``PhaseSplit`` with sub-bin-refined peak and valley positions
-        and the supplied ``T_K``.
+        ``PhaseSplit`` with bin-centre peak and valley positions and
+        the supplied ``T_K``.
 
     Raises:
         ValueError: if ``dos`` is empty, ``T_K <= 0``, the ``energy``
@@ -611,13 +611,17 @@ def equal_area_temperature(
             would mix detection temperatures and could leave ``E*``
             outside the peak pair). Use the default iterated mode for
             a split fully consistent with ``T_K``. Default 20.
-        damping: linear-mixing factor for the (Tc, E*) update; must
-            satisfy ``0 < damping <= 1``. ``damping=1`` is no
-            damping. Besides stabilising the iteration (the undamped
-            map can oscillate), it influences where on the
-            saddle-detection plateau the iteration settles, and
-            therefore has a small (~discretisation-scale) effect on
-            the delivered Tc. Default 0.5.
+        damping: linear-mixing factor for the Tc update
+            ``Tc <- (1 - damping) * Tc + damping * Tc_raw``; must
+            satisfy ``0 < damping <= 1``. ``damping=1`` is no damping.
+            Only Tc is mixed: E* is re-detected from scratch at each
+            pass as the saddle bin at the current Tc, so it carries
+            bin-centre resolution and is not itself blended. Besides
+            stabilising the iteration (the undamped map can oscillate),
+            damping influences where on the saddle-detection plateau
+            the iteration settles, and therefore has a small
+            (~discretisation-scale) effect on the delivered Tc.
+            Default 0.5.
         self_consistent_tol_K: convergence tolerance on the undamped
             fixed-point residual ``|Tc_raw - Tc|`` between successive
             self-consistency passes, in K. The achievable Tc accuracy
