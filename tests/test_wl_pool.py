@@ -770,6 +770,24 @@ def test_process_wl_pool_multi_walker_stats_report_union_bin_counts(tmp_path):
     # The internal field is stripped from the user-facing dict.
     assert "visited_bins" not in stats[0]
 
+    # bins_filled resolves through the real worker -> merge path
+    # (pooled default = union of per-walker positive bins), and the
+    # per-walker breakdown carries one entry per walker.
+    expected_filled = len(
+        {b for b, c in s0["histogram"].items() if c > 0}
+        | {b for b, c in s1["histogram"].items() if c > 0}
+    )
+    assert stats[0]["bins_filled"] == expected_filled
+    breakdown = stats[0]["per_walker_breakdown"]
+    assert len(breakdown) == 2
+    assert all(set(e) == {"filled", "known", "flat_min"} for e in breakdown)
+    expected_pairs = sorted(
+        (sum(1 for c in s["histogram"].values() if c > 0), len(s["histogram"]))
+        for s in (s0, s1)
+    )
+    got_pairs = sorted((e["filled"], e["known"]) for e in breakdown)
+    assert got_pairs == expected_pairs
+
 
 def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):
     """per_window_data_containers returns W containers per slot."""

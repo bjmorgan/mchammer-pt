@@ -178,3 +178,33 @@ def test_per_walker_detail_out_of_range_raises_at_construction():
         WangLandauProgressPrinter(
             _DetailPool(), interval=1, per_walker_detail=[5],
         )
+
+
+def test_per_walker_detail_renders_dash_for_none_flat_min():
+    """A walker with an empty histogram reports ``flat_min=None``; the
+    sub-row must render ``--`` rather than crash on ``f"{None:.3f}"``."""
+
+    class _NoneFlatPool:
+        windows = [(None, None)]
+
+        def per_window_stats(self):
+            return [
+                {
+                    "fill_factor": 1.0, "halvings": 0, "histogram": {},
+                    "bins_filled": 0, "bins_known": 0, "converged": False,
+                    "phase": "halving",
+                    "per_walker_breakdown": [
+                        {"filled": 0, "known": 0, "flat_min": None},
+                    ],
+                }
+            ]
+
+    out = io.StringIO()
+    printer = WangLandauProgressPrinter(
+        _NoneFlatPool(), interval=1, show_swap_rates=False,
+        per_walker_detail=[0], file=out,
+    )
+    printer.on_cycle_end(0, 1, _wl_history())
+    output = out.getvalue()
+    assert "w0" in output
+    assert "--" in output

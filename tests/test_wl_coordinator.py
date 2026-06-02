@@ -405,3 +405,43 @@ def test_resolve_bins_filled_no_candidates_is_noop():
     d = {"bins_filled": 5}
     _resolve_bins_filled(d, "per_walker")
     assert d == {"bins_filled": 5}
+
+
+def test_pooled_filled_parity_tracks_one_over_t_gate():
+    """``bins_filled == bins_known`` iff the pooled 1/t halving gate fires.
+
+    Ties the reported coverage to the criterion the coordinator
+    actually consults (``_summed_histogram_halving_criterion_met``),
+    so the printer cannot show ``fill/known`` reaching parity while
+    the gate refuses to halve (or vice versa) without this test
+    failing.
+    """
+    from mchammer_pt.wl_coordinator import (
+        WalkerPostBlockState,
+        _summed_histogram_halving_criterion_met,
+    )
+
+    def _snap(histogram: dict[int, int]) -> WalkerPostBlockState:
+        return WalkerPostBlockState(
+            halving_criterion_met=False,
+            fill_factor=1.0,
+            entropy={},
+            step=10,
+            window_entry_step=0,
+            histogram=histogram,
+            reached_energy_window=True,
+        )
+
+    cases = [
+        [{0: 1, 1: 2, 2: 3}],          # all positive -> gate fires
+        [{0: 1, 1: 0, 2: 3}],          # a zero -> gate refuses
+        [{0: 1, 1: 0}, {0: 0, 1: 4}],  # union covers both -> gate fires
+        [{0: 1, 1: 0}, {0: 2, 1: 0}],  # bin 1 zero in both -> refuses
+    ]
+    for histograms in cases:
+        known = set().union(*[set(h) for h in histograms])
+        at_parity = _compute_filled_bins(histograms, "pooled") == len(known)
+        gate_fires = _summed_histogram_halving_criterion_met(
+            [_snap(h) for h in histograms], 0.8, "1_over_t"
+        )
+        assert at_parity == gate_fires
