@@ -23,13 +23,18 @@ def _e0() -> float:
     ))
 
 
-def _make_wl_replica(schedule: str | None = None) -> WangLandauReplica:
+def _make_wl_replica(
+    schedule: str | None = None,
+    recency_visits_per_bin: int = 1000,
+) -> WangLandauReplica:
     """Construct a WangLandauReplica over a wide window.
 
     Args:
         schedule: optional schedule override (e.g. ``"1_over_t"``).
             Silently skipped when the installed icet does not support
             the ``schedule`` parameter.
+        recency_visits_per_bin: EWMA recency window forwarded to the
+            ensemble.
     """
     ce = make_wl_ce()
     atoms = make_wl_atoms()
@@ -47,7 +52,25 @@ def _make_wl_replica(schedule: str | None = None) -> WangLandauReplica:
         energy_limit_right=e0 + 100.0,
         random_seed=0,
         ensemble_kwargs=ensemble_kwargs,
+        recency_visits_per_bin=recency_visits_per_bin,
     )
+
+
+def test_window_stats_reports_recency_flatness_and_schedule():
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0}
+    e._record_recency_visit(0, step=0)
+    e._record_recency_visit(1, step=0)
+    stats = replica.window_stats()
+    assert stats["recency_flatness"] == 1.0      # two equal weights
+    assert stats["schedule"] in {"halving", "1_over_t"}
+
+
+def test_replica_forwards_recency_visits_per_bin_to_ensemble():
+    replica = _make_wl_replica(recency_visits_per_bin=250)
+    assert replica.ensemble._recency_visits_per_bin == 250
 
 
 @pytest.fixture
