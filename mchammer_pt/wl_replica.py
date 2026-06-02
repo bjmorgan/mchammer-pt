@@ -49,6 +49,7 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
         "energy_limit_left",
         "energy_limit_right",
         "random_seed",
+        "recency_visits_per_bin",
         "dc_filename",
     }
 )
@@ -253,7 +254,8 @@ class WangLandauReplica:
                 f"arguments (structure/calculator from "
                 f"cluster_expansion+atoms; energy_spacing, "
                 f"energy_limit_left, energy_limit_right, "
-                f"random_seed from their dedicated parameters; "
+                f"random_seed, recency_visits_per_bin from their "
+                f"dedicated parameters; "
                 f"dc_filename is always pinned to None to disable "
                 f"periodic on-disk writes)."
             )

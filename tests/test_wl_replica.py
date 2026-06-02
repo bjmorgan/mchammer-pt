@@ -73,6 +73,28 @@ def test_replica_forwards_recency_visits_per_bin_to_ensemble():
     assert replica.ensemble._recency_visits_per_bin == 250
 
 
+def test_recency_visits_per_bin_reserved_against_ensemble_kwargs():
+    """Passing recency_visits_per_bin via ensemble_kwargs is rejected.
+
+    The wrapper sets it from its dedicated parameter, so routing it
+    through ensemble_kwargs would collide; the boundary check must
+    raise a clear ValueError naming the parameter.
+    """
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = _e0()
+    with pytest.raises(ValueError, match="recency_visits_per_bin"):
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=0,
+            ensemble_kwargs={"recency_visits_per_bin": 42},
+        )
+
+
 @pytest.fixture
 def wl_replica_factory():
     """Return a factory callable that produces a fresh WangLandauReplica.
