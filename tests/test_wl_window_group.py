@@ -369,6 +369,29 @@ def test_halving_criterion_met_one_walker_not_flat_returns_false():
 
 
 
+def test_window_stats_exposes_recency_candidates_and_schedule():
+    """window_stats exposes both recency candidates and the schedule."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(2)
+    for r in replicas:
+        r.ensemble._reached_energy_window = True
+        r.ensemble._histogram = {0: 0, 1: 0}
+    replicas[0].ensemble._record_recency_visit(0, step=0)
+    replicas[0].ensemble._record_recency_visit(1, step=0)
+    replicas[1].ensemble._record_recency_visit(0, step=0)
+    # walker 1 leaves bin 1 unvisited -> its min/mean = 0
+
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    stats = group.window_stats()
+
+    # summed weights {0: 2.0, 1: 1.0} -> min/mean = 1.0 / 1.5 = 2/3
+    assert stats["recency_flatness_pooled"] == pytest.approx(2.0 / 3.0)
+    assert stats["recency_flatness_per_walker"] == 0.0  # walker 1 min=0
+    assert stats["schedule"] in {"halving", "1_over_t"}
+    assert "recency_flatness" not in stats
+
+
 def test_validate_flatness_mode_accepts_known_values():
     from mchammer_pt.wl_coordinator import _validate_flatness_mode
 
