@@ -53,6 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ``mchammer_pt.analysis.dos.stitch_entropy`` now returns a complete
+  histogram on the ``energy_spacing`` grid: every integer-multiple bin
+  from the lowest to the highest populated energy is emitted, with
+  interior bins that no window reached carried as ``entropy = -inf``
+  (``g = 0``) instead of being dropped. The output grid is therefore
+  uniform and self-describing, so downstream tools recover the true bin
+  width from ``energies[1] - energies[0]`` even across forbidden-energy
+  gaps in a discrete spectrum. The window merge, additive shifting, and
+  overlap-error reporting are unchanged; the ``-inf`` fills are added
+  only for unpopulated interior positions, and no frontier
+  extrapolation is done beyond the populated range. The rebase to
+  ``min = 0`` uses the minimum over finite entries, so a window that
+  already carries ``-inf`` (``g = 0``) bins -- e.g. a re-stitched
+  complete histogram -- no longer corrupts the offset.
+- ``mchammer-pt-coexistence`` no longer re-validates the DOS grid in
+  the CLI. The row-count, finiteness, and uniform-grid checks are
+  delegated to ``equal_area_temperature`` (which accepts ``-inf``
+  ``g = 0`` bins), removing a duplicated check whose copy wrongly
+  rejected the ``-inf`` bins of a complete-histogram DOS.
 - ``mchammer_pt.analysis.coexistence.equal_area_temperature`` is
   re-architected around a fixed dividing energy with an outer
   self-consistency loop, replacing the previous design that
@@ -111,9 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positions are bin centres of the energy grid, and the dividing
   energy is the highest *populated* ``phi`` bin between the peaks, so
   a ``g = 0`` bin in a forbidden-energy gap is never selected as the
-  saddle; when every bin between the peaks is ``g = 0`` the dividing
-  energy falls back to the peak midpoint and the free-energy barrier
-  is reported as infinite.
+  saddle.
+- Phase-peak detection (``_two_dominant_peak_indices``) now requires
+  both neighbours of a candidate ``phi`` minimum to be populated
+  (finite). A populated bin beside a ``g = 0`` gap (``phi = +inf``)
+  cleared its gap-side neighbour trivially and could masquerade as a
+  phase peak, even though it is only the edge of the populated region
+  against the forbidden-energy wall. On a complete-histogram DOS whose
+  low-energy spectrum is fragmented by forbidden gaps, this produced a
+  spurious low-energy split (two same-side peaks, a negative
+  ``barrier_height``, and a collapsed ``T_c``) under automatic Cv-peak
+  seeding. Excluding gap-adjacent minima recovers the genuine
+  inter-phase split. Two energy bins separated *only* by forbidden
+  ``g = 0`` bins (disconnected spectra, no populated barrier between
+  them) are correspondingly no longer treated as a coexistence pair.
 
 ## [0.16.0] - 2026-05-28
 

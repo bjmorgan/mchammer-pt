@@ -35,6 +35,13 @@ def stitch_entropy(
     rebased so that its minimum is zero (``ln g`` is only defined up to
     a single additive constant).
 
+    The output is a complete histogram on the ``energy_spacing`` grid:
+    every integer-multiple bin from the lowest to the highest populated
+    energy is emitted. Interior bins that no window reached carry
+    ``entropy = -inf`` (``g = 0`` -- a forbidden energy of the discrete
+    spectrum), so the grid is uniform and self-describing. The grid
+    spans only the populated range; no frontier extrapolation is done.
+
     Args:
         per_window: list of DataFrames each carrying ``energy`` and
             ``entropy`` columns. ``entropy`` is treated as ``ln g``.
@@ -43,8 +50,10 @@ def stitch_entropy(
 
     Returns:
         ``(stitched, overlap_errors)`` where ``stitched`` is a DataFrame
-        with ``energy`` and ``entropy`` columns (rebased to ``min = 0``)
-        and ``overlap_errors`` is a dict of overlap-region entropy
+        with ``energy`` and ``entropy`` columns on a complete uniform
+        grid (populated bins rebased to ``min = 0``; interior empty bins
+        carried as ``entropy = -inf``) and ``overlap_errors`` is a dict
+        of overlap-region entropy
         standard deviations keyed by ``"i-j"`` window-pair labels in
         the original input order. Pairs sharing only one bin report
         ``0.0`` (the sample std is undefined for a single point).
@@ -106,15 +115,38 @@ def stitch_entropy(
         ordered[k] = (idx_r, df_r)
 
     stacked = pd.concat([df_w for _, df_w in ordered], ignore_index=True)
-    merged = (
-        stacked.groupby("_bin", sort=True)["entropy"]
-        .mean()
-        .reset_index()
+    merged = stacked.groupby("_bin", sort=True)["entropy"].mean()
+
+    # Rebase so the minimum populated ln g is zero (ln g is defined only
+    # up to an additive constant). The offset is the minimum over finite
+    # entries: an input window may already carry -inf (g=0) bins (e.g. a
+    # re-stitched complete histogram), and folding -inf into the offset
+    # would yield inf/NaN. Done before the -inf fill below so the
+    # empty-bin sentinel is never folded into the offset.
+    finite_entropy = merged[np.isfinite(merged)]
+    if finite_entropy.empty:
+        raise ValueError(
+            "stitch_entropy: no finite entropy values across all windows "
+            "(every bin is g=0); cannot rebase to a finite minimum."
+        )
+    merged = merged - finite_entropy.min()
+
+    # Materialise a complete histogram: every integer bin from the lowest
+    # to the highest populated bin. Interior bins no window reached carry
+    # ln g = -inf (g = 0, a forbidden energy of the discrete spectrum)
+    # rather than being dropped, so the output is a self-describing
+    # uniform grid. No frontier extrapolation: the grid spans only the
+    # populated range.
+    full_bins = pd.RangeIndex(
+        int(merged.index.min()), int(merged.index.max()) + 1, name="_bin",
     )
-    merged["energy"] = merged["_bin"].to_numpy() * energy_spacing
-    merged = merged[["energy", "entropy"]]
-    merged["entropy"] = merged["entropy"] - merged["entropy"].min()
-    return merged, errors
+    merged = merged.reindex(full_bins, fill_value=-np.inf)
+
+    stitched = pd.DataFrame({
+        "energy": merged.index.to_numpy() * energy_spacing,
+        "entropy": merged.to_numpy(),
+    })
+    return stitched, errors
 
 
 def reweight_canonical_from_dos(

@@ -13,7 +13,6 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from mchammer_pt.analysis.coexistence import (
@@ -22,10 +21,6 @@ from mchammer_pt.analysis.coexistence import (
     NotBimodalError,
     equal_area_temperature,
 )
-
-# Relative tolerance on the uniform-grid check. Float-round bin
-# centres can differ by ~1e-12 of the bin spacing on real CSVs.
-_UNIFORM_GRID_RTOL = 1e-6
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -114,34 +109,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    energies = dos["energy"].to_numpy()
-    ln_g = dos["entropy"].to_numpy()
-    if energies.size < 2:
-        print(
-            f"error: {args.dos_csv} has fewer than two rows; need a "
-            f"grid",
-            file=sys.stderr,
-        )
-        return 2
-    if not (np.isfinite(energies).all() and np.isfinite(ln_g).all()):
-        print(
-            f"error: {args.dos_csv} contains non-finite (NaN/inf) "
-            f"values in 'energy' or 'entropy'",
-            file=sys.stderr,
-        )
-        return 2
-    diffs = np.diff(energies)
-    spacing = float(diffs[0])
-    if spacing <= 0.0 or not np.allclose(
-        diffs, spacing, rtol=_UNIFORM_GRID_RTOL, atol=0.0,
-    ):
-        print(
-            f"error: 'energy' column in {args.dos_csv} is not on a "
-            f"uniform ascending grid (first spacing = {spacing:.6g})",
-            file=sys.stderr,
-        )
-        return 2
-
+    # Grid validity (>= 2 rows, uniform spacing, finite energies, and
+    # entropy that is finite or -inf for g=0 bins) is enforced by
+    # equal_area_temperature, which raises ValueError with a specific
+    # message caught below. Re-checking here would duplicate that logic
+    # and risk drift -- the earlier copy wrongly rejected the -inf bins
+    # of a complete-histogram DOS.
     T_bracket = (
         (float(args.T_bracket[0]), float(args.T_bracket[1]))
         if args.T_bracket is not None else None

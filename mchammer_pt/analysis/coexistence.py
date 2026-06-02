@@ -249,14 +249,24 @@ def _two_dominant_peak_indices(phi: np.ndarray) -> np.ndarray:
     """Return the bin indices of the two deepest local minima of phi.
 
     Local minima are interior bins strictly lower than both
-    neighbours. The two with the smallest ``phi`` values are returned
-    in ascending bin-index order. These are the two dominant peaks
-    of ``P(E | T) ∝ exp(-phi(E))``.
+    neighbours, with both neighbours populated (finite ``phi``). The
+    two with the smallest ``phi`` values are returned in ascending
+    bin-index order. These are the two dominant peaks of
+    ``P(E | T) ∝ exp(-phi(E))``.
+
+    Requiring both neighbours finite excludes the populated bin beside
+    a ``g = 0`` gap (``phi = +inf``): such a bin clears its gap-side
+    neighbour trivially and would masquerade as a minimum, but it is
+    only the edge of the populated region against the forbidden-energy
+    wall, not a genuine ``P(E | T)`` peak.
 
     Raises:
         NotBimodalError: if fewer than two local minima exist.
     """
-    is_min = (phi[1:-1] < phi[:-2]) & (phi[1:-1] < phi[2:])
+    is_min = (
+        (phi[1:-1] < phi[:-2]) & (phi[1:-1] < phi[2:])
+        & np.isfinite(phi[:-2]) & np.isfinite(phi[2:])
+    )
     minima_idx = np.flatnonzero(is_min) + 1
     if minima_idx.size < 2:
         raise NotBimodalError(

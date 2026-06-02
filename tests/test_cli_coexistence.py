@@ -189,7 +189,8 @@ def test_cli_rejects_negative_smooth_sigma(tmp_path):
 
 def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     # Construct a DOS whose energy column has a clearly non-uniform
-    # spacing (one bin shifted). The CLI's grid check should fire.
+    # spacing (one bin shifted). equal_area_temperature's grid check
+    # fires and the CLI surfaces its message.
     dos = _coexistence_dos().copy()
     dos.loc[10, "energy"] = float(dos.loc[10, "energy"]) + 0.005
     dos_csv = tmp_path / "dos.csv"
@@ -198,6 +199,23 @@ def test_cli_rejects_non_uniform_grid(tmp_path, capsys):
     assert rc != 0
     err = capsys.readouterr().err
     assert "uniform" in err
+
+
+def test_cli_accepts_complete_dos_with_neg_inf_bins(tmp_path):
+    # A complete-histogram DOS carries forbidden energies as -inf
+    # (g=0). The CLI must pass these through to a successful solve
+    # rather than rejecting them as non-finite.
+    dos = _coexistence_dos().copy()
+    # A deep low-energy tail bin (interior, negligible weight) set to
+    # g=0; the double-well structure and its phase peaks are untouched.
+    dos.loc[5, "entropy"] = float("-inf")
+    dos_csv = tmp_path / "dos.csv"
+    out_json = tmp_path / "result.json"
+    _write_dos(dos_csv, dos)
+    rc = main([str(dos_csv), "--output", str(out_json)])
+    assert rc == 0
+    data = json.loads(out_json.read_text())
+    assert data["T_K"] > 0
 
 
 def test_cli_emits_stderr_warning_when_not_converged(
