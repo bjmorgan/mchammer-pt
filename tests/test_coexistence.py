@@ -312,6 +312,18 @@ def test_two_dominant_peak_indices_raises_on_fewer_than_two_minima():
         _two_dominant_peak_indices(phi)
 
 
+def test_two_dominant_peak_indices_excludes_gap_adjacent_minima():
+    # A forbidden-energy bin carries phi = +inf (g = 0). The populated
+    # bin beside it (index 2) clears its gap-side neighbour trivially
+    # and would be the deepest "minimum", but it is only the edge of
+    # the populated region against the gap wall, not a real P(E|T)
+    # peak. It must be excluded; the two genuine minima at indices 4
+    # and 6 are returned instead.
+    phi = np.array([20.0, np.inf, 0.5, 10.0, 1.0, 12.0, 2.0, 15.0, 20.0])
+    out = _two_dominant_peak_indices(phi)
+    assert list(out) == [4, 6]
+
+
 def test_find_phase_split_rejects_adjacent_minima():
     # Two phi minima at adjacent indices: separation = 1 < default
     # min_peak_separation = 5. find_phase_split should raise.
@@ -397,15 +409,19 @@ def test_find_phase_split_saddle_skips_g_zero_interior_bin():
     assert split.E_star == 4.0
 
 
-def test_find_phase_split_all_g_zero_valley_uses_peak_midpoint():
-    # Every bin strictly between the peaks is g=0 (a forbidden-energy
-    # gap), so no populated saddle bin exists. E_star falls back to the
-    # midpoint of the two peaks (E = 1 and E = 3 -> 2.0).
+def test_find_phase_split_rejects_phases_separated_only_by_gap():
+    # Two populated bins (E = 1, E = 3) separated only by a forbidden
+    # g=0 bin (E = 2). Each candidate peak is adjacent to the gap, so
+    # it is a minimum only against the +inf gap wall, not a genuine
+    # populated-barrier basin. Equal-area coexistence requires the two
+    # phases to be connected by populated barrier states; disconnected
+    # spectra are not bimodal in this sense, so detection raises rather
+    # than inventing a phase split across the gap.
     energies = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     ln_g = np.array([-5.0, 1.0, -np.inf, 3.0, -1.0])
     dos = pd.DataFrame({"energy": energies, "entropy": ln_g})
-    split = find_phase_split(dos, T_K=1.0 / kB, min_peak_separation=2)
-    assert split.E_star == 2.0
+    with pytest.raises(NotBimodalError, match="local minima of phi"):
+        find_phase_split(dos, T_K=1.0 / kB, min_peak_separation=2)
 
 
 def test_find_phase_split_raises_outside_bimodal_window():

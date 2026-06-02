@@ -113,9 +113,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positions are bin centres of the energy grid, and the dividing
   energy is the highest *populated* ``phi`` bin between the peaks, so
   a ``g = 0`` bin in a forbidden-energy gap is never selected as the
-  saddle; when every bin between the peaks is ``g = 0`` the dividing
-  energy falls back to the peak midpoint and the free-energy barrier
-  is reported as infinite.
+  saddle.
+- Phase-peak detection (``_two_dominant_peak_indices``) now requires
+  both neighbours of a candidate ``phi`` minimum to be populated
+  (finite). A populated bin beside a ``g = 0`` gap (``phi = +inf``)
+  cleared its gap-side neighbour trivially and could masquerade as a
+  phase peak, even though it is only the edge of the populated region
+  against the forbidden-energy wall. On a complete-histogram DOS whose
+  low-energy spectrum is fragmented by forbidden gaps, this produced a
+  spurious low-energy split (two same-side peaks, a negative
+  ``barrier_height``, and a collapsed ``T_c``) under automatic Cv-peak
+  seeding. Excluding gap-adjacent minima recovers the genuine
+  inter-phase split. Two energy bins separated *only* by forbidden
+  ``g = 0`` bins (disconnected spectra, no populated barrier between
+  them) are correspondingly no longer treated as a coexistence pair.
 
 ## [0.16.0] - 2026-05-28
 
