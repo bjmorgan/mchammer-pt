@@ -469,6 +469,15 @@ def test_compute_recency_flatness_per_walker_is_min_over_walkers():
     assert _compute_recency_flatness([a, b], "per_walker") == 0.5
 
 
+def test_compute_recency_flatness_per_walker_drops_unusable_walkers():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    # One walker has no usable weights (zero-mean -> None) and is dropped;
+    # the result is the surviving walker's min/mean, not poisoned by None.
+    empty = {0: 0.0, 1: 0.0}       # _min_over_mean -> None
+    usable = {0: 1.0, 1: 3.0}      # min/mean = 1/2
+    assert _compute_recency_flatness([empty, usable], "per_walker") == 0.5
+
+
 def test_compute_recency_flatness_empty_or_zero_mean_is_none():
     from mchammer_pt.wl_coordinator import _compute_recency_flatness
     assert _compute_recency_flatness([], "pooled") is None
