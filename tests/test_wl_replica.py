@@ -742,6 +742,49 @@ def test_window_stats_reports_bins_visited_and_bins_known():
     assert stats["bins_known"] == 3
 
 
+def test_window_stats_reports_bins_filled():
+    """window_stats counts histogram bins with a positive count.
+
+    Unlike monotone ``bins_visited``, ``bins_filled`` reflects the
+    current histogram, which is zeroed on every halving.
+    """
+    replica = _make_wl_replica()
+    replica.ensemble._histogram = {0: 3, 1: 0, 2: 5}
+
+    stats = replica.window_stats()
+
+    assert stats["bins_filled"] == 2
+    assert stats["bins_known"] == 3
+
+
+def test_bins_filled_resets_on_halve_while_visited_persists(wl_replica_factory):
+    """A halve zeroes the histogram counts, so ``bins_filled`` drops to
+    zero, while monotone ``bins_visited`` and the retained keys
+    (``bins_known``) are unchanged.
+
+    This pins the contract that motivates ``filled/known`` reporting
+    against real ensemble behaviour: sourcing ``bins_filled`` from
+    ``_visited_bins`` (which survives halvings), or no longer zeroing
+    the histogram on a halve, would reintroduce the misleading
+    monotone count this distinction was added to avoid.
+    """
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory()
+    replica.advance(500)
+    before = replica.window_stats()
+    assert before["bins_filled"] > 0
+
+    replica.apply_plan(
+        CoordinatorPlan(halve=True, merged_entropy=None, switch_to_phase=None)
+    )
+    after = replica.window_stats()
+
+    assert after["bins_filled"] == 0
+    assert after["bins_visited"] == before["bins_visited"]
+    assert after["bins_known"] == before["bins_known"]
+
+
 def test_init_leaves_visited_bins_empty():
     """`_visited_bins` is empty after construction.
 

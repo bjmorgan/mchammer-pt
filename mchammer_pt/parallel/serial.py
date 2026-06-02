@@ -19,6 +19,7 @@ from ..wl_coordinator import (
     FlatnessMode,
     MergeCadence,
     SlotView,
+    _resolve_bins_filled,
     _validate_flatness_mode,
     _validate_merge_cadence,
     decide_block_actions,
@@ -372,6 +373,7 @@ class SerialWangLandauPool:
         stats = [r.window_stats() for r in self._replicas]
         for d in stats:
             d["flatness_mode"] = self._flatness_mode
+            _resolve_bins_filled(d, self._flatness_mode)
         return stats
 
     @property

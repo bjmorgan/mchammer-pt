@@ -347,12 +347,15 @@ def test_wl_progress_printer_rows_contain_metrics_after_advance():
 
 
 def test_wl_progress_printer_empty_histogram_shows_zero_bins():
-    """Before any bins are visited (fresh replica), bins_visited shows 0."""
+    """Before any bins are sampled (fresh replica), the bins (fill/known)
+    column shows 0."""
     buf = io.StringIO()
     pt = _wl_pt()
 
     # Stub pool whose per_window_stats returns empty histograms.
     class _StubPool:
+        windows = [(None, None)] * len(pt.pool)
+
         def per_window_stats(self):
             return [
                 {
@@ -360,6 +363,7 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
                     "halvings": 0,
                     "histogram": {},
                     "bins_visited": 0,
+                    "bins_filled": 0,
                     "bins_known": 0,
                     "converged": False,
                     "phase": "halving",
@@ -376,7 +380,7 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
     blocks = _block_lines(buf.getvalue())
     assert blocks
     for row in blocks[-1][2:]:
-        # bins_visited column should read "0", not "--".
+        # bins (fill/known) column should read "0", not "--".
         assert re.search(r"\b0\b", row) is not None, row
         # flat_min is undefined with no histogram data: should show "--".
         assert "--" in row, row
@@ -388,6 +392,8 @@ def test_wl_progress_printer_pooled_mode_reports_summed_flat_min():
     pt = _wl_pt()
 
     class _StubPool:
+        windows = [(None, None)]
+
         def __len__(self):
             return 1
 
@@ -399,6 +405,7 @@ def test_wl_progress_printer_pooled_mode_reports_summed_flat_min():
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
                 "bins_visited": 2,
+                "bins_filled": 2,
                 "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "pooled",
@@ -425,6 +432,8 @@ def test_wl_progress_printer_per_walker_mode_reports_walker_min():
     pt = _wl_pt()
 
     class _StubPool:
+        windows = [(None, None)]
+
         def __len__(self):
             return 1
 
@@ -436,6 +445,7 @@ def test_wl_progress_printer_per_walker_mode_reports_walker_min():
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
                 "bins_visited": 2,
+                "bins_filled": 2,
                 "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "per_walker",
@@ -461,6 +471,8 @@ def test_wl_progress_printer_back_compat_no_mode_field():
     pt = _wl_pt()
 
     class _StubPool:
+        windows = [(None, None)]
+
         def __len__(self):
             return 1
 
@@ -472,6 +484,7 @@ def test_wl_progress_printer_back_compat_no_mode_field():
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
                 "bins_visited": 2,
+                "bins_filled": 2,
                 "bins_known": 2,
                 "converged": False,
                 "phase": "halving",
@@ -498,6 +511,8 @@ def test_wl_progress_printer_shows_phase_column():
     pt = _wl_pt()
 
     class _StubPool:
+        windows = [(None, None), (None, None)]
+
         def __len__(self) -> int:
             return 2
 
@@ -507,6 +522,7 @@ def test_wl_progress_printer_shows_phase_column():
                 "halvings": 24,
                 "histogram": {0: 100, 1: 100},
                 "bins_visited": 2,
+                "bins_filled": 2,
                 "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "pooled",
@@ -547,6 +563,8 @@ def test_wl_progress_printer_per_walker_zero_flat_min_displays_as_zero():
     pt = _wl_pt()
 
     class _StubPool:
+        windows = [(None, None)]
+
         def __len__(self):
             return 1
 
@@ -559,6 +577,7 @@ def test_wl_progress_printer_per_walker_zero_flat_min_displays_as_zero():
                 "halvings": 0,
                 "histogram": {0: 800, 1: 1000},
                 "bins_visited": 2,
+                "bins_filled": 2,
                 "bins_known": 2,
                 "converged": False,
                 "flatness_mode": "per_walker",

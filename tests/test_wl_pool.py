@@ -200,12 +200,14 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     for s in stats:
         assert set(s.keys()) == {
             "fill_factor", "halvings", "histogram",
-            "bins_visited", "bins_known", "converged", "phase",
+            "bins_visited", "bins_filled", "bins_known",
+            "converged", "phase",
         }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
         assert isinstance(s["histogram"], dict)
         assert isinstance(s["bins_visited"], int)
+        assert isinstance(s["bins_filled"], int)
         assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["phase"] in {"halving", "1_over_t"}
@@ -479,6 +481,54 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
     assert np.array_equal(pool.current_occupations(1), occ0_before)
 
 
+def test_serial_pool_resolves_bins_filled_by_mode():
+    """per_window_stats collapses the candidate counts into ``bins_filled``.
+
+    A multi-walker slot's ``window_stats`` returns ``bins_filled_pooled``
+    and ``bins_filled_per_walker`` but no singular ``bins_filled``. The
+    serial pool resolves these against its ``flatness_mode``, leaving a
+    single ``bins_filled`` and stripping the candidates.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    group = WangLandauWindowGroup(
+        [
+            WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=e0 - 100.0,
+                energy_limit_right=e0 + 100.0,
+                random_seed=j,
+            )
+            for j in range(2)
+        ],
+        random_seed=0,
+    )
+    pool = SerialWangLandauPool(
+        [group], energy_spacing=0.1, flatness_mode="per_walker"
+    )
+
+    pool.advance_all(10)
+    stats = pool.per_window_stats()
+    s = stats[0]
+    assert "bins_filled" in s
+    assert "bins_filled_pooled" not in s
+    assert "bins_filled_per_walker" not in s
+    assert isinstance(s["bins_filled"], int)
+    assert s["flatness_mode"] == "per_walker"
+
+
 def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
     """n_walkers_per_window=2 creates 2 workers per slot."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -608,6 +658,49 @@ def test_merge_per_window_stats_propagates_1_over_t_phase():
     assert out["phase"] == "1_over_t"
 
 
+def test_merge_per_window_stats_adds_filled_and_breakdown():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    slot_stats = [
+        {
+            "fill_factor": 1.0, "halvings": 0,
+            "histogram": {0: 1, 1: 4, 2: 0},
+            "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
+            "converged": False, "phase": "halving",
+            "visited_bins": [0, 1],
+        },
+        {
+            "fill_factor": 1.0, "halvings": 0,
+            "histogram": {0: 3, 1: 0, 2: 7},
+            "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
+            "converged": False, "phase": "halving",
+            "visited_bins": [0, 2],
+        },
+    ]
+    merged = _merge_per_window_stats(slot_stats, "per_walker")
+    assert merged["bins_filled"] == 1            # intersection {0}
+    assert merged["per_walker_breakdown"] == [
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+        {"filled": 2, "known": 3, "flat_min": 0.0},
+    ]
+    pooled = _merge_per_window_stats(slot_stats, "pooled")
+    assert pooled["bins_filled"] == 3            # union {0,1,2}
+
+
+def test_merge_per_window_stats_single_walker_carries_bins_filled():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    slot_stats = [{
+        "fill_factor": 1.0, "halvings": 0,
+        "histogram": {0: 1, 1: 0},
+        "bins_visited": 1, "bins_filled": 1, "bins_known": 2,
+        "converged": False, "phase": "halving",
+        "visited_bins": [0],
+    }]
+    merged = _merge_per_window_stats(slot_stats, "pooled")
+    assert merged["bins_filled"] == 1
+    assert "per_walker_breakdown" not in merged
+    assert "visited_bins" not in merged
+
+
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
     """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
     from tests._in_process_pool import make_in_process_wl_pool
@@ -676,6 +769,24 @@ def test_process_wl_pool_multi_walker_stats_report_union_bin_counts(tmp_path):
     assert stats[0]["bins_known"] == expected_known
     # The internal field is stripped from the user-facing dict.
     assert "visited_bins" not in stats[0]
+
+    # bins_filled resolves through the real worker -> merge path
+    # (pooled default = union of per-walker positive bins), and the
+    # per-walker breakdown carries one entry per walker.
+    expected_filled = len(
+        {b for b, c in s0["histogram"].items() if c > 0}
+        | {b for b, c in s1["histogram"].items() if c > 0}
+    )
+    assert stats[0]["bins_filled"] == expected_filled
+    breakdown = stats[0]["per_walker_breakdown"]
+    assert len(breakdown) == 2
+    assert all(set(e) == {"filled", "known", "flat_min"} for e in breakdown)
+    expected_pairs = sorted(
+        (sum(1 for c in s["histogram"].values() if c > 0), len(s["histogram"]))
+        for s in (s0, s1)
+    )
+    got_pairs = sorted((e["filled"], e["known"]) for e in breakdown)
+    assert got_pairs == expected_pairs
 
 
 def test_process_wl_pool_multi_walker_per_window_data_containers(tmp_path):

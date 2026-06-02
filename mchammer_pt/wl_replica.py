@@ -495,7 +495,8 @@ class WangLandauReplica:
         """Per-window convergence metrics.
 
         Returns ``fill_factor``, ``halvings``, ``histogram``,
-        ``bins_visited``, ``bins_known``, ``converged``. For a
+        ``bins_visited``, ``bins_filled``, ``bins_known``,
+        ``converged``. For a
         single-walker replica ``flatness_mode`` and
         ``per_walker_flat_min`` are omitted (the progress reporter
         falls through to the pooled computation, which is exact
@@ -503,9 +504,12 @@ class WangLandauReplica:
 
         ``bins_visited`` is ``len(_visited_bins)`` — the count of
         bins the walker has reached via MC since window entry.
-        Monotone within a run; survives halvings. ``bins_known``
-        is ``len(_histogram)`` and includes seeded-but-unvisited
-        bins.
+        Monotone within a run; survives halvings. ``bins_filled``
+        is the count of histogram bins with a positive count; a
+        halving zeroes the histogram counts but retains the keys, so
+        ``bins_filled`` resets each halving while ``bins_known`` does
+        not. ``bins_known`` is ``len(_histogram)`` and includes
+        seeded-but-unvisited bins.
 
         ``phase`` is the current WL phase taken from the underlying
         ensemble (``"halving"`` or ``"1_over_t"``).
@@ -517,6 +521,7 @@ class WangLandauReplica:
             "halvings": max(0, len(e._fill_factor_history) - 1),
             "histogram": histogram,
             "bins_visited": len(e._visited_bins),
+            "bins_filled": sum(1 for c in histogram.values() if c > 0),
             "bins_known": len(histogram),
             "converged": self.converged,
             "phase": self.phase,

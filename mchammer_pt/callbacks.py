@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime
 import sys
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol, TextIO
 
 import numpy as np
@@ -240,10 +241,12 @@ class WangLandauProgressPrinter:
     histogram), the current WL phase (``halv`` while the flatness
     gate still drives halving, ``1/t`` once the Belardinelli-Pereyra
     switch has fired and ``fill_factor`` decays continuously as
-    ``1/t``), number of energy bins visited in the current
-    histogram phase, histogram flatness (``min(H) / mean(H)`` — compare
-    against your ``flatness_limit``), and whether the window has
-    converged.
+    ``1/t``), the ``filled/known`` bin counts (bins covered since the
+    last WL halve, which resets each halve, over the bins known so far;
+    the union of covered bins under pooled flatness, the intersection
+    under per-walker flatness), histogram flatness
+    (``min(H) / mean(H)`` — compare against your ``flatness_limit``),
+    and whether the window has converged.
 
     Metrics are read from the live ensemble state via
     ``pool.per_window_stats()``, so they are always current regardless
@@ -260,6 +263,12 @@ class WangLandauProgressPrinter:
             Must be ``>= 1``. The final cycle always emits.
         show_swap_rates: include cumulative per-pair acceptance rates
             in the header line. Defaults to ``True``.
+        per_walker_detail: which windows expand into one sub-row per
+            walker (each showing that walker's ``filled/known`` and
+            ``flat_min``). ``False`` (default) shows none; ``True``
+            shows all; a sequence of window indices shows only those.
+            Single-walker windows never expand. Indices are
+            range-checked at construction.
         file: stream to write to. Defaults to ``sys.stderr``.
     """
 
@@ -269,6 +278,7 @@ class WangLandauProgressPrinter:
         interval: int = 100,
         *,
         show_swap_rates: bool = True,
+        per_walker_detail: bool | Sequence[int] = False,
         file: TextIO | None = None,
     ) -> None:
         if int(interval) < 1:
@@ -276,8 +286,33 @@ class WangLandauProgressPrinter:
         self._pool = pool
         self._interval = int(interval)
         self._show_swap_rates = bool(show_swap_rates)
+        self._detail_windows = self._resolve_detail_windows(per_walker_detail)
         self._file: TextIO = sys.stderr if file is None else file
         self._start: float | None = None
+
+    def _resolve_detail_windows(
+        self, per_walker_detail: bool | Sequence[int]
+    ) -> frozenset[int]:
+        """Resolve the per-walker-detail selector to window indices.
+
+        ``False`` selects no windows; ``True`` selects all windows; a
+        sequence selects those windows. Indices are range-checked
+        against the pool's window count so a typo fails at
+        construction.
+        """
+        n = len(self._pool.windows)
+        if per_walker_detail is False:
+            return frozenset()
+        if per_walker_detail is True:
+            return frozenset(range(n))
+        indices = [int(i) for i in per_walker_detail]
+        for i in indices:
+            if not 0 <= i < n:
+                raise IndexError(
+                    f"per_walker_detail index {i} out of range for "
+                    f"{n} windows"
+                )
+        return frozenset(indices)
 
     def on_cycle_end(
         self,
@@ -326,7 +361,7 @@ class WangLandauProgressPrinter:
         col_hdr = (
             f"  {'win':>3s}  {'fill_factor':>11s}  "
             f"{'halvings':>8s}  {'phase':>5s}  "
-            f"{'bins (vis/known)':>17s}  "
+            f"{'bins (fill/known)':>17s}  "
             f"{'flat_min':>8s}  {'converged':>9s}"
         )
         rows: list[str] = []
@@ -338,7 +373,7 @@ class WangLandauProgressPrinter:
             phase_str = "1/t" if s["phase"] == "1_over_t" else "halv"
 
             hist = s["histogram"]
-            bins_str = f"{s['bins_visited']}/{s['bins_known']}"
+            bins_str = f"{s['bins_filled']}/{s['bins_known']}"
 
             # flat_min reports the quantity the halve gate is actually
             # checking. Under flatness_mode='per_walker' the gate uses
@@ -362,6 +397,20 @@ class WangLandauProgressPrinter:
                 f"{phase_str:>5s}  "
                 f"{bins_str:>17s}  {flat_str:>8s}  {conv_str:>9s}"
             )
+
+            breakdown = s.get("per_walker_breakdown")
+            if i in self._detail_windows and breakdown:
+                for k, w in enumerate(breakdown):
+                    w_bins = f"{w['filled']}/{w['known']}"
+                    w_flat = (
+                        f"{w['flat_min']:.3f}"
+                        if w["flat_min"] is not None
+                        else "--"
+                    )
+                    rows.append(
+                        f"  {('w' + str(k)):>3s}  {'':>11s}  {'':>8s}  "
+                        f"{'':>5s}  {w_bins:>17s}  {w_flat:>8s}  {'':>9s}"
+                    )
 
         print(
             "\n".join([header, col_hdr, *rows]),
