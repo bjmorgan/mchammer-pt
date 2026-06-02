@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``WangLandauProgressPrinter`` gains an opt-in ``per_walker_detail``
+  argument (``bool | Sequence[int]``) that expands selected
+  multi-walker windows into one sub-row per walker, each showing that
+  walker's ``filled/known`` coverage and ``flat_min``.
+- ``per_window_stats()`` now reports ``bins_filled``: the number of
+  bins with a positive count in the current histogram (the union of
+  per-walker positive bins under pooled flatness, the intersection
+  under per-walker flatness), which resets on each halving.
+
+### Changed
+
+- The REWL progress table's bin column now shows ``bins (fill/known)``
+  -- coverage since the last halving -- in place of the monotone
+  ``bins (vis/known)``, so the displayed number tracks the halving
+  gate rather than pinning at its maximum once a window is spanned.
+  ``bins_visited`` is retained in ``per_window_stats()`` as a separate
+  monotone statistic.
+
 ## [0.16.0] - 2026-05-28
 
 ### Fixed
