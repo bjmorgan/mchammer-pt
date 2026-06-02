@@ -12,6 +12,9 @@ from typing import Any, Literal
 
 import numpy as np
 
+_UNSET: Any = object()
+"""Sentinel for "key absent" where ``None`` is a legitimate value."""
+
 
 @dataclass(frozen=True, slots=True)
 class WalkerPostBlockState:
@@ -169,6 +172,59 @@ def _compute_per_walker_flat_min(
             return None
         per_walker.append(float(counts.min()) / mean_c)
     return min(per_walker) if per_walker else None
+
+
+def _min_over_mean(weights: dict[int, float]) -> float | None:
+    """``min/mean`` over a weight dict, or ``None`` if empty/zero-mean."""
+    if not weights:
+        return None
+    arr = np.array(list(weights.values()), dtype=float)
+    mean_w = float(arr.mean())
+    if mean_w <= 0:
+        return None
+    return float(arr.min()) / mean_w
+
+
+def _compute_recency_flatness(
+    weights: list[dict[int, float]],
+    mode: FlatnessMode,
+) -> float | None:
+    """Recency flatness across per-walker EWMA weight dicts.
+
+    ``"pooled"``: ``min/mean`` over the summed weights (collective
+    sampling). ``"per_walker"``: minimum over walkers of each walker's
+    ``min/mean``. Returns ``None`` if no walker has usable weights.
+    """
+    if not weights:
+        return None
+    if mode == "per_walker":
+        per_walker = [_min_over_mean(w) for w in weights]
+        present = [v for v in per_walker if v is not None]
+        return min(present) if present else None
+    summed: dict[int, float] = {}
+    for w in weights:
+        for b, v in w.items():
+            summed[b] = summed.get(b, 0.0) + v
+    return _min_over_mean(summed)
+
+
+def _resolve_recency_flatness(
+    stats: dict[str, Any], mode: FlatnessMode
+) -> None:
+    """Collapse the two candidate recency flatnesses into one value.
+
+    Multi-walker ``window_stats`` dicts carry both
+    ``recency_flatness_pooled`` and ``recency_flatness_per_walker``;
+    the pool calls this once it knows the mode. Single-walker dicts
+    already carry ``recency_flatness`` and are left untouched.
+    """
+    pooled = stats.pop("recency_flatness_pooled", _UNSET)
+    per_walker = stats.pop("recency_flatness_per_walker", _UNSET)
+    if pooled is _UNSET:
+        return
+    stats["recency_flatness"] = (
+        per_walker if mode == "per_walker" else pooled
+    )
 
 
 def _compute_filled_bins(
