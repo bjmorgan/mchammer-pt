@@ -179,11 +179,11 @@ def _compute_filled_bins(
 
     A bin is "covered" when it has a positive count. Under
     ``"pooled"`` the union across walkers is taken (a bin counts if
-    any walker has sampled it, matching the summed-histogram gate);
-    under ``"per_walker"`` the intersection is taken (a bin counts
-    only if every walker has sampled it, matching the
-    every-walker-flat gate). For a single histogram the two modes
-    coincide. Returns 0 for empty input.
+    any walker has a positive count for it, matching the
+    summed-histogram gate); under ``"per_walker"`` the intersection
+    is taken (a bin counts only if every walker has a positive count
+    for it, matching the every-walker-flat gate). For a single
+    histogram the two modes coincide. Returns 0 for empty input.
     """
     positive_sets = [
         {b for b, c in h.items() if c > 0} for h in histograms

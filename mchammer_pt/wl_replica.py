@@ -505,9 +505,10 @@ class WangLandauReplica:
         ``bins_visited`` is ``len(_visited_bins)`` — the count of
         bins the walker has reached via MC since window entry.
         Monotone within a run; survives halvings. ``bins_filled``
-        is the count of histogram bins with a positive count; the
-        histogram is zeroed on every halving, so it resets each
-        halving. ``bins_known`` is ``len(_histogram)`` and includes
+        is the count of histogram bins with a positive count; a
+        halving zeroes the histogram counts but retains the keys, so
+        ``bins_filled`` resets each halving while ``bins_known`` does
+        not. ``bins_known`` is ``len(_histogram)`` and includes
         seeded-but-unvisited bins.
 
         ``phase`` is the current WL phase taken from the underlying

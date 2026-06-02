@@ -203,7 +203,7 @@ class WangLandauPool(ReplicaPool, Protocol):
           last halving (resets on each halve). For multi-walker
           windows this is the union of per-walker positive bins under
           ``flatness_mode="pooled"`` and the intersection under
-          ``"per_walker"``, matching the halving gate.
+          ``"per_walker"``.
         * ``"bins_known"`` (int): number of bins present in the
           histogram (seeded or visited).
         * ``"converged"`` (bool): whether this window has converged.
