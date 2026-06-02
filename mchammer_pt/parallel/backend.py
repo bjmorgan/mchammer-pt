@@ -184,16 +184,43 @@ class WangLandauPool(ReplicaPool, Protocol):
     def per_window_stats(self) -> list[dict[str, Any]]:
         """Per-window convergence metrics for monitoring callbacks.
 
-        Returns one dict per window with keys:
+        Returns one dict per window. The following keys are always
+        present:
 
         * ``"fill_factor"`` (float): current WL fill factor.
         * ``"halvings"`` (int): number of fill-factor halvings
           completed (each marks one flattened histogram phase).
         * ``"histogram"`` (dict[int, int]): current-phase histogram
-          keyed by bin index. Reset to empty after each fill-factor
-          halving, so ``len(histogram)`` counts bins visited since
-          the last halving, not over the full run.
+          keyed by bin index (summed across walkers for multi-walker
+          windows). A halving zeroes the counts but retains the keys,
+          so ``len(histogram)`` equals ``bins_known`` and does not
+          reset.
+        * ``"bins_visited"`` (int): number of distinct bins the
+          window has reached via MC since window entry. Monotone over
+          the run and unaffected by halvings.
+        * ``"bins_filled"`` (int): number of bins with a positive
+          count in the current histogram -- bins covered since the
+          last halving (resets on each halve). For multi-walker
+          windows this is the union of per-walker positive bins under
+          ``flatness_mode="pooled"`` and the intersection under
+          ``"per_walker"``.
+        * ``"bins_known"`` (int): number of bins present in the
+          histogram (seeded or visited).
         * ``"converged"`` (bool): whether this window has converged.
+        * ``"phase"`` (str): current WL phase, ``"halving"`` or
+          ``"1_over_t"``.
+
+        Multi-walker windows additionally carry:
+
+        * ``"flatness_mode"`` (str): ``"pooled"`` or ``"per_walker"``.
+          The serial backend also attaches this to single-walker
+          windows.
+        * ``"per_walker_flat_min"`` (float | None): minimum over
+          walkers of ``min(H_k) / mean(H_k)``, or ``None`` if any
+          walker has no histogram yet.
+        * ``"per_walker_breakdown"`` (list[dict]): one entry per
+          walker with ``"filled"``, ``"known"``, and ``"flat_min"``
+          (the last ``None`` for an empty or zero-mean histogram).
         """
         ...
 
