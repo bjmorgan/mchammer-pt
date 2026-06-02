@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
@@ -101,3 +102,46 @@ def test_update_entropy_adds_bin_to_visited_bins_when_in_window():
     e._reached_energy_window = True
     e._update_entropy(42)
     assert 42 in e._visited_bins
+
+
+def test_recency_visits_per_bin_validated_positive():
+    """A non-positive recency window is rejected at construction."""
+    with pytest.raises(ValueError):
+        _make_ensemble(recency_visits_per_bin=0)
+    with pytest.raises(ValueError):
+        _make_ensemble(recency_visits_per_bin=-5)
+
+
+def test_recency_effective_weights_keys_match_known_bins():
+    """Weights are keyed by known bins and start at zero."""
+    e = _make_ensemble()
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    w = e.recency_effective_weights()
+    assert set(w) == {0, 1, 2}
+    assert all(v == 0.0 for v in w.values())
+
+
+def test_recency_weight_increments_on_visit_and_decays():
+    """A fresh visit reads 1.0; an older visit has decayed below it."""
+    e = _make_ensemble(recency_visits_per_bin=1000)
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0}
+    e._record_recency_visit(0, step=0)
+    e._record_recency_visit(1, step=10_000)
+    w = e.recency_effective_weights(step=10_000)
+    assert w[1] == 1.0
+    assert 0.0 < w[0] < 1.0
+    assert w[0] < w[1]
+
+
+def test_recency_uniform_visits_give_flat_weights():
+    """Round-robin visits drive the per-bin weights towards uniform."""
+    e = _make_ensemble(recency_visits_per_bin=10)
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    for step in range(3000):
+        e._record_recency_visit(step % 3, step=step)
+    w = e.recency_effective_weights(step=2999)
+    vals = np.array(list(w.values()))
+    assert vals.min() / vals.mean() > 0.8
