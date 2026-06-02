@@ -347,7 +347,8 @@ def test_wl_progress_printer_rows_contain_metrics_after_advance():
 
 
 def test_wl_progress_printer_empty_histogram_shows_zero_bins():
-    """Before any bins are visited (fresh replica), bins_visited shows 0."""
+    """Before any bins are sampled (fresh replica), the bins (fill/known)
+    column shows 0."""
     buf = io.StringIO()
     pt = _wl_pt()
 
@@ -379,7 +380,7 @@ def test_wl_progress_printer_empty_histogram_shows_zero_bins():
     blocks = _block_lines(buf.getvalue())
     assert blocks
     for row in blocks[-1][2:]:
-        # bins_visited column should read "0", not "--".
+        # bins (fill/known) column should read "0", not "--".
         assert re.search(r"\b0\b", row) is not None, row
         # flat_min is undefined with no histogram data: should show "--".
         assert "--" in row, row
