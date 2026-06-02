@@ -4,7 +4,7 @@ Reads a stitched DOS CSV (columns ``energy``, ``entropy``, with
 ``entropy`` treated as ``ln g(E)``) and writes a one-row result
 containing the equal-area coexistence temperature, the phase peak
 locations, the dividing energy, latent heat, barrier height and
-bisection diagnostics.
+root-finder diagnostics.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from mchammer_pt.analysis.coexistence import (
+    DEFAULT_MAX_SELF_CONSISTENT_ITER,
     NoBracketError,
     NotBimodalError,
     equal_area_temperature,
@@ -52,19 +53,38 @@ def _build_parser() -> argparse.ArgumentParser:
         "--T-bracket", type=float, nargs=2, metavar=("T_LO", "T_HI"),
         default=None,
         help=(
-            "Optional temperature bracket (K) for the bisection. "
-            "If omitted, built from a coarse imbalance scan."
+            "Optional temperature bracket (K) for the brentq "
+            "root-find. If omitted, built from a Cv-peak seed and an "
+            "outward walk to the imbalance sign change."
         ),
     )
     p.add_argument(
         "--xtol", type=float, default=1e-4,
-        help="Relative bisection tolerance on T. Default: 1e-4.",
+        help=(
+            "Relative tolerance on the coexistence temperature "
+            "(passed to brentq's rtol). Default: 1e-4."
+        ),
     )
     p.add_argument(
         "--min-peak-separation", type=int, default=5,
         help=(
             "Minimum bin separation between the two phase peaks. "
             "Default: 5."
+        ),
+    )
+    p.add_argument(
+        "--smooth-sigma", type=float, default=2.0,
+        help=(
+            "Gaussian standard deviation in bins applied to ln g for "
+            "topology detection only. Default 2.0. Set to 0 to disable "
+            "smoothing."
+        ),
+    )
+    p.add_argument(
+        "--no-self-consistent", action="store_true",
+        help=(
+            "Disable the (T_c, E_star) self-consistency iteration "
+            "(single-pass solve). Default off; iteration runs."
         ),
     )
     return p
@@ -132,10 +152,26 @@ def main(argv: list[str] | None = None) -> int:
             T_bracket=T_bracket,
             xtol=args.xtol,
             min_peak_separation=args.min_peak_separation,
+            smoothing_sigma=args.smooth_sigma,
+            max_self_consistent_iter=(
+                0 if args.no_self_consistent
+                else DEFAULT_MAX_SELF_CONSISTENT_ITER
+            ),
         )
     except (NotBimodalError, NoBracketError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    if not result.self_consistent_converged:
+        print(
+            f"warning: self-consistency iteration did not converge "
+            f"within {DEFAULT_MAX_SELF_CONSISTENT_ITER} passes; the "
+            f"reported T_K may differ from the true fixed point by "
+            f"more than the solver's convergence tolerance. Consider "
+            f"re-running with a different --smooth-sigma or inspecting "
+            f"the DOS for data-quality issues.",
+            file=sys.stderr,
+        )
 
     row = {
         "T_K": result.T_K,
@@ -145,7 +181,9 @@ def main(argv: list[str] | None = None) -> int:
         "latent_heat": result.latent_heat,
         "barrier_height": result.barrier_height,
         "weight_imbalance": result.weight_imbalance,
-        "n_bisection_steps": result.n_bisection_steps,
+        "n_brentq_iterations": result.n_brentq_iterations,
+        "n_self_consistent_iter": result.n_self_consistent_iter,
+        "self_consistent_converged": result.self_consistent_converged,
     }
 
     if args.format == "json":

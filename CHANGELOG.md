@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ``CoexistencePoint.n_self_consistent_iter`` and
+  ``CoexistencePoint.self_consistent_converged`` fields, exposing the
+  number of self-consistent E_star refinement iterations performed at
+  the final brentq evaluation and whether that refinement converged.
+- ``smoothing_sigma`` keyword on ``find_phase_split`` (default
+  ``0.0``), which applies a Gaussian smoothing of ``ln g(E)`` along
+  the energy axis before locating the phi-minima. Opt-in for direct
+  callers; the coexistence top-level entry point enables it by
+  default.
+- ``smoothing_sigma`` (default ``2.0``),
+  ``max_self_consistent_iter`` (default ``20``), ``damping``
+  (default ``0.5``), and ``self_consistent_tol_K`` (default
+  ``1e-3``) keywords on ``equal_area_temperature``, controlling the
+  one-shot ``ln g`` smoothing and the ``(Tc, E_star)``
+  self-consistency loop respectively.
+- ``mchammer-pt-coexistence`` gains ``--smooth-sigma`` (forwarded as
+  ``smoothing_sigma``) and ``--no-self-consistent`` (sets
+  ``max_self_consistent_iter=0``, freezing ``E_star`` at its initial
+  seed value) command-line flags.
+- ``find_phase_split`` and ``equal_area_temperature`` accept
+  ``ln g(E)`` curves containing ``-inf`` entries (``g = 0``, the
+  forbidden energies of a discrete spectrum) as zero-weight bins,
+  while rejecting ``NaN`` and ``+inf``. ``equal_area_temperature``
+  additionally requires the ``energy`` column to lie on a uniform
+  grid. This supports complete-histogram DOS input that records
+  unreachable energies explicitly rather than omitting their rows.
 - ``WangLandauProgressPrinter`` gains an opt-in ``per_walker_detail``
   argument (``bool | Sequence[int]``) that expands selected
   multi-walker windows into one sub-row per walker, each showing that
@@ -18,14 +44,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-walker positive bins under pooled flatness, the intersection
   under per-walker flatness), which resets on each halving.
 
+### Deprecated
+
+- ``CoexistencePoint.n_iterations`` is a backward-compatibility
+  ``@property`` alias for ``n_brentq_iterations`` and emits a
+  ``DeprecationWarning`` on access. Use ``n_brentq_iterations``
+  directly.
+
 ### Changed
 
+- ``mchammer_pt.analysis.coexistence.equal_area_temperature`` is
+  re-architected around a fixed dividing energy with an outer
+  self-consistency loop, replacing the previous design that
+  recomputed the phase split at every trial temperature inside the
+  root-finder. The new flow smooths ``ln g(E)`` once (controlled by
+  ``smoothing_sigma``) to stabilise the topology detection, seeds
+  ``E_star`` at the heat-capacity peak inferred from the stitched
+  DOS, runs ``scipy.optimize.brentq`` on the equal-area imbalance
+  with that ``E_star`` held fixed, then refreshes ``E_star`` at the
+  resulting Tc and iterates the ``(Tc, E_star)`` pair under damped
+  updates until the temperature change between successive
+  iterations falls below ``self_consistent_tol_K``. Detecting the
+  split once on a smoothed ``ln g`` — rather than at every trial
+  temperature on the raw curve — makes the pipeline robust to
+  bin-scale shot-noise dimples in real REWL output, which produce
+  spurious local minima of ``phi(E) = beta * E - ln g`` that would
+  otherwise be selected as phase peaks and collapse the bracket.
+  The auto-bracket helper is replaced by ``_walk_for_sign_change``,
+  which integrates the raw fixed-``E_star`` imbalance outward from
+  the Cv-peak seed until the sign flips; window-edge exits raise an
+  informative diagnostic distinct from the unimodal-midpoint case.
+- A user-supplied ``T_bracket`` whose midpoint temperature is
+  unimodal under the smoothed ``ln g`` now raises
+  ``NotBimodalError`` rather than ``NoBracketError``. The
+  diagnostic identifies the root cause (the bracket does not
+  enclose a bimodal region) rather than reporting a generic
+  bracket failure.
+- The inner T root-finder is ``scipy.optimize.brentq``, exploiting
+  inverse-quadratic interpolation for faster convergence than
+  plain bisection at no API cost. ``scipy`` is declared as an
+  explicit dependency; it was already pulled in transitively by
+  ``ase`` and ``icet``. ``CoexistencePoint.n_bisection_steps`` is
+  renamed to ``CoexistencePoint.n_brentq_iterations`` to reflect
+  that the iteration count mixes bisection and
+  inverse-quadratic-interpolation steps; the CLI's JSON/CSV output
+  column is renamed consistently.
 - The REWL progress table's bin column now shows ``bins (fill/known)``
   -- coverage since the last halving -- in place of the monotone
   ``bins (vis/known)``, so the displayed number tracks the halving
   gate rather than pinning at its maximum once a window is spanned.
   ``bins_visited`` is retained in ``per_window_stats()`` as a separate
   monotone statistic.
+
+### Fixed
+
+- ``mchammer_pt.analysis.coexistence.find_phase_split`` previously
+  located phase peaks as local maxima of ``ln g(E)``, an assumption
+  that holds only for synthetic bimodal-``ln g`` DOS shapes. For any
+  real lattice system, ``ln g(E)`` is monotonically increasing in
+  energy (combinatorial expansion of configurations), so the helper
+  raised ``NotBimodalError`` at every trial temperature and the
+  estimator was unusable on real REWL output. Phase peaks are now
+  correctly located as the two dominant local minima of
+  ``phi(E) = beta * E - ln g(E)`` (peaks of ``P(E | T)``), which is
+  temperature-dependent. The reported peak and dividing-energy
+  positions are bin centres of the energy grid, and the dividing
+  energy is the highest *populated* ``phi`` bin between the peaks, so
+  a ``g = 0`` bin in a forbidden-energy gap is never selected as the
+  saddle; when every bin between the peaks is ``g = 0`` the dividing
+  energy falls back to the peak midpoint and the free-energy barrier
+  is reported as infinite.
 
 ## [0.16.0] - 2026-05-28
 
