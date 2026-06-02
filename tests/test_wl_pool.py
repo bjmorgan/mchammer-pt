@@ -529,6 +529,52 @@ def test_serial_pool_resolves_bins_filled_by_mode():
     assert s["flatness_mode"] == "per_walker"
 
 
+def test_serial_pool_resolves_recency_flatness_by_mode():
+    """per_window_stats collapses the recency-flatness candidates.
+
+    A multi-walker slot's ``window_stats`` returns
+    ``recency_flatness_pooled`` and ``recency_flatness_per_walker`` but
+    no singular ``recency_flatness``. The serial pool resolves these
+    against its ``flatness_mode``, leaving a single ``recency_flatness``
+    and stripping the candidates.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    group = WangLandauWindowGroup(
+        [
+            WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=e0 - 100.0,
+                energy_limit_right=e0 + 100.0,
+                random_seed=j,
+            )
+            for j in range(2)
+        ],
+        random_seed=0,
+    )
+    pool = SerialWangLandauPool(
+        [group], energy_spacing=0.1, flatness_mode="per_walker"
+    )
+
+    pool.advance_all(10)
+    s = pool.per_window_stats()[0]
+    assert "recency_flatness" in s
+    assert "recency_flatness_pooled" not in s
+    assert "recency_flatness_per_walker" not in s
+
+
 def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
     """n_walkers_per_window=2 creates 2 workers per slot."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
