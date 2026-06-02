@@ -63,7 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gaps in a discrete spectrum. The window merge, additive shifting, and
   overlap-error reporting are unchanged; the ``-inf`` fills are added
   only for unpopulated interior positions, and no frontier
-  extrapolation is done beyond the populated range.
+  extrapolation is done beyond the populated range. The rebase to
+  ``min = 0`` uses the minimum over finite entries, so a window that
+  already carries ``-inf`` (``g = 0``) bins -- e.g. a re-stitched
+  complete histogram -- no longer corrupts the offset.
 - ``mchammer-pt-coexistence`` no longer re-validates the DOS grid in
   the CLI. The row-count, finiteness, and uniform-grid checks are
   delegated to ``equal_area_temperature`` (which accepts ``-inf``

@@ -119,6 +119,35 @@ def test_stitch_entropy_neg_inf_round_trips_through_csv(tmp_path):
     )
 
 
+def test_stitch_entropy_rebases_on_finite_minimum_with_neg_inf_input():
+    # A window that already carries a -inf (g=0) bin -- e.g. a
+    # re-stitched complete histogram. The rebase offset must be the
+    # finite minimum; folding -inf in would yield NaN/inf and corrupt
+    # every bin.
+    df = pd.DataFrame({
+        "energy": np.array([0.0, 0.5, 1.0, 1.5]),
+        "entropy": np.array([2.0, -np.inf, 3.0, 5.0]),
+    })
+    stitched, _ = stitch_entropy([df], 0.5)
+    ent = stitched["entropy"].to_numpy()
+    finite = np.isfinite(ent)
+    # Finite bins rebased so their minimum is zero; no NaN anywhere.
+    assert np.allclose(ent[finite], [0.0, 1.0, 3.0])
+    assert not np.isnan(ent).any()
+    # The pre-existing g=0 bin stays -inf.
+    assert np.isneginf(ent[~finite]).all()
+
+
+def test_stitch_entropy_raises_when_all_bins_g_zero():
+    # Every bin g=0 (all -inf): no finite minimum to rebase against.
+    df = pd.DataFrame({
+        "energy": np.array([0.0, 0.5, 1.0]),
+        "entropy": np.array([-np.inf, -np.inf, -np.inf]),
+    })
+    with pytest.raises(ValueError, match="no finite entropy"):
+        stitch_entropy([df], 0.5)
+
+
 def test_stitch_entropy_robust_to_ulp_drift():
     # Two windows on the same logical 0.5-eV grid, but each computed by
     # an independent process so the shared bins differ at the ULP level.

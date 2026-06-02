@@ -118,9 +118,18 @@ def stitch_entropy(
     merged = stacked.groupby("_bin", sort=True)["entropy"].mean()
 
     # Rebase so the minimum populated ln g is zero (ln g is defined only
-    # up to an additive constant). Done before the -inf fill below so the
+    # up to an additive constant). The offset is the minimum over finite
+    # entries: an input window may already carry -inf (g=0) bins (e.g. a
+    # re-stitched complete histogram), and folding -inf into the offset
+    # would yield inf/NaN. Done before the -inf fill below so the
     # empty-bin sentinel is never folded into the offset.
-    merged = merged - merged.min()
+    finite_entropy = merged[np.isfinite(merged)]
+    if finite_entropy.empty:
+        raise ValueError(
+            "stitch_entropy: no finite entropy values across all windows "
+            "(every bin is g=0); cannot rebase to a finite minimum."
+        )
+    merged = merged - finite_entropy.min()
 
     # Materialise a complete histogram: every integer bin from the lowest
     # to the highest populated bin. Interior bins no window reached carry
