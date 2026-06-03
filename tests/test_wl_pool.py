@@ -855,6 +855,36 @@ def test_merge_single_walker_carries_recency_flatness():
     assert "recency_weights" not in merged
 
 
+def test_serial_and_process_recency_flatness_agree():
+    """Serial and process backends resolve the same recency_flatness.
+
+    The serial path (window group → ``_compute_recency_flatness``) and the
+    process path (``_merge_per_window_stats`` → ``_compute_recency_flatness``)
+    are distinct code routes, but both must collapse identical per-walker
+    EWMA weight dicts to the same value under each flatness mode.
+    """
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+
+    weights = [{0: 3.0, 1: 1.0, 2: 0.0}, {0: 0.0, 1: 2.0, 2: 2.0}]
+    for mode in ("pooled", "per_walker"):
+        serial_value = _compute_recency_flatness(weights, mode)
+        slot_stats = [
+            {
+                "fill_factor": 1.0, "halvings": 0,
+                "histogram": {0: 1, 1: 1, 2: 1},
+                "bins_visited": 3, "bins_filled": 3, "bins_known": 3,
+                "converged": False, "phase": "halving", "schedule": "halving",
+                "visited_bins": [0, 1, 2], "recency_weights": w,
+            }
+            for w in weights
+        ]
+        process_value = _merge_per_window_stats(slot_stats, mode)[
+            "recency_flatness"
+        ]
+        assert serial_value == process_value
+
+
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
     """per_window_stats sums histograms across walkers; fill_factor from walker 0."""
     from tests._in_process_pool import make_in_process_wl_pool

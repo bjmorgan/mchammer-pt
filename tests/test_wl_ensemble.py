@@ -155,3 +155,39 @@ def test_recency_uniform_visits_give_flat_weights():
     w = e.recency_effective_weights(step=2999)
     vals = np.array(list(w.values()))
     assert vals.min() / vals.mean() > 0.8
+
+
+def test_recency_lazy_decay_matches_eager_reference():
+    """Decay-on-read reproduces an eager per-step decay reference exactly.
+
+    ``recency_effective_weights`` decays each bin's weight from its last
+    recorded step to the read step in one shot. That lazy update must
+    equal an eager loop that decays every bin on every step. The
+    equivalence holds because ``_recency_alpha`` is constant across the
+    sequence: ``_record_recency_visit`` never mutates ``_histogram`` (it
+    only touches ``_recent_weight`` / ``_recent_last_step``), so the
+    known-bin count stays at 3 throughout and ``alpha = 1/(10*3)``.
+    """
+    e = _make_ensemble(recency_visits_per_bin=10)
+    e._reached_energy_window = True
+    e._histogram = {0: 0, 1: 0, 2: 0}
+    visits = [(0, 0), (1, 1), (0, 5), (2, 9), (1, 12)]  # (bin, step)
+    for b, step in visits:
+        e._record_recency_visit(b, step=step)
+    read_step = 20
+    got = e.recency_effective_weights(step=read_step)
+    # Eager reference: alpha is fixed (histogram fully known = 3 bins here).
+    alpha = 1.0 / (10 * 3)
+    expected = {0: 0.0, 1: 0.0, 2: 0.0}
+    last: dict[int, int | None] = {0: None, 1: None, 2: None}
+    for b, step in visits:
+        if last[b] is not None:
+            expected[b] *= (1 - alpha) ** (step - last[b])
+        expected[b] += 1.0
+        last[b] = step
+    for b in expected:
+        if last[b] is not None:
+            expected[b] *= (1 - alpha) ** (read_step - last[b])
+    assert np.allclose(
+        [got[b] for b in (0, 1, 2)], [expected[b] for b in (0, 1, 2)]
+    )
