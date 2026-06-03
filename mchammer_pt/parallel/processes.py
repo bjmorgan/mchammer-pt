@@ -721,6 +721,9 @@ class ProcessWangLandauPool:
             (default; halve when summed histogram is flat).
         merge_cadence: ``"at_halve"`` (default; Vogel cadence) or
             ``"never"`` (no mid-run merge, end-of-run finalisation only).
+        recency_visits_per_bin: EWMA timescale (default 1000) forwarded
+            to every walker's ensemble for the recency-flatness
+            diagnostic.
     """
 
     def __init__(
@@ -738,12 +741,14 @@ class ProcessWangLandauPool:
         ensemble_kwargs: Mapping[str, Any] | None = None,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        recency_visits_per_bin: int = 1000,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._recency_visits_per_bin: int = int(recency_visits_per_bin)
         self._merge_events: list[MergeEvent] = []
         self._flatness_limit: float = float(
             (ensemble_kwargs or {}).get("flatness_limit", 0.8)
@@ -812,6 +817,7 @@ class ProcessWangLandauPool:
                             seed=int(w_seed),
                             ensemble_cls=ensemble_cls,
                             ensemble_kwargs=dict(extra_kwargs),
+                            recency_visits_per_bin=self._recency_visits_per_bin,
                         )
                         process = ctx.Process(
                             target=_wl_worker,

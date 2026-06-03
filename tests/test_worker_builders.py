@@ -129,6 +129,7 @@ def test_wl_builder_build_returns_wl_replica(tmp_path):
         seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={},
+        recency_visits_per_bin=1000,
     )
     replica = builder.build()
     assert isinstance(replica, WangLandauReplica)
@@ -186,6 +187,7 @@ def test_wl_builder_picklable(tmp_path):
         seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={},
+        recency_visits_per_bin=1000,
     )
     restored = pickle.loads(pickle.dumps(builder))
     assert restored.ce_path == builder.ce_path

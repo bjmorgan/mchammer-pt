@@ -781,6 +781,78 @@ def test_wl_pt_n_walkers_per_window_wrong_length_raises():
         )
 
 
+def test_wl_pt_threads_recency_visits_per_bin_to_bare_replicas():
+    """recency_visits_per_bin reaches every W=1 replica's ensemble."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    for slot in pt.pool.replicas:
+        assert slot.ensemble._recency_visits_per_bin == 250
+
+
+def test_wl_pt_threads_recency_visits_per_bin_to_window_groups():
+    """recency_visits_per_bin reaches every walker in a W>1 window group."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+        recency_visits_per_bin=250,
+    )
+    for slot in pt.pool.replicas:
+        for walker in slot._replicas:
+            assert walker.ensemble._recency_visits_per_bin == 250
+
+
+def test_wl_pt_recency_visits_per_bin_validated_at_orchestrator():
+    """A non-positive recency_visits_per_bin raises at construction."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(ValueError, match="recency_visits_per_bin"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            recency_visits_per_bin=0,
+        )
+
+
+def test_wl_pt_checkpoint_meta_records_recency_visits_per_bin():
+    """recency_visits_per_bin is captured in the checkpoint metadata."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    assert pt._checkpoint_meta()["recency_visits_per_bin"] == 250
+
+
 def test_wl_pt_process_pool_accepts_n_walkers_per_window():
     """process_pool with n_walkers_per_window=2 returns a valid orchestrator."""
     from mchammer_pt.wl import WangLandauParallelTempering

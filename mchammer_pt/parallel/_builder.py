@@ -118,6 +118,7 @@ class WLBuilder:
     seed: int
     ensemble_cls: type[CoordinatedWangLandauEnsemble]
     ensemble_kwargs: dict[str, Any]
+    recency_visits_per_bin: int
 
     def build(self) -> WangLandauReplica:
         """Construct the replica from the configured inputs.
@@ -136,5 +137,6 @@ class WLBuilder:
             random_seed=self.seed,
             ensemble_cls=self.ensemble_cls,
             ensemble_kwargs=self.ensemble_kwargs,
+            recency_visits_per_bin=self.recency_visits_per_bin,
             cluster_expansion_path=self.ce_path,
         )

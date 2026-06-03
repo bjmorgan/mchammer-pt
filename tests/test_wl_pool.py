@@ -78,6 +78,7 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
         seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs=dict(ensemble_kwargs or {}),
+        recency_visits_per_bin=1000,
     )
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=True)
@@ -241,6 +242,52 @@ def test_process_wl_pool_propagates_flatness_limit_from_ensemble_kwargs(tmp_path
     ) as pool:
         assert pool._flatness_limit == 0.5
         assert pool._slots[0]._flatness_limit == 0.5
+
+
+def test_wl_builder_threads_recency_visits_per_bin(tmp_path):
+    """WLBuilder forwards recency_visits_per_bin to the built ensemble."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    builder = WLBuilder(
+        ce_path=str(ce_path),
+        atoms=AtomsSpec.from_atoms(atoms),
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={},
+        recency_visits_per_bin=250,
+    )
+    replica = builder.build()
+    assert replica.ensemble._recency_visits_per_bin == 250
+
+
+def test_process_wl_pool_stores_recency_visits_per_bin(tmp_path):
+    """ProcessWangLandauPool retains the recency_visits_per_bin it threads."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        recency_visits_per_bin=250,
+    ) as pool:
+        assert pool._recency_visits_per_bin == 250
 
 
 def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
