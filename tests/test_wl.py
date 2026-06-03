@@ -7,7 +7,6 @@ import pytest
 from mchammer.calculators import ClusterExpansionCalculator
 
 from mchammer_pt.wl import WangLandauParallelTempering
-from mchammer_pt.wl_replica import WangLandauReplica
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
@@ -1835,15 +1834,7 @@ def test_wl_pt_serial_broadcast_yields_independent_walkers():
         r0.current_occupations(), r1.current_occupations()
     )
     # Mutate walker 0 to b's (in-window) configuration; walker 1 unchanged.
-    ref_b = WangLandauReplica(
-        cluster_expansion=ce,
-        atoms=b,
-        energy_spacing=0.1,
-        energy_limit_left=lo,
-        energy_limit_right=hi,
-        random_seed=0,
-    )
-    r0.set_occupations(ref_b.current_occupations())
+    r0.set_occupations(b.numbers)
     assert not np.array_equal(
         r0.current_occupations(), r1.current_occupations()
     )
