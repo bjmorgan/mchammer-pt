@@ -40,6 +40,7 @@ from .wl_ensemble import (
     CoordinatedWangLandauEnsemble,
     _validate_recency_visits_per_bin,
 )
+from .wl_initial_structures import expand_initial_structures
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
@@ -173,10 +174,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
     Args:
         cluster_expansion: icet ClusterExpansion defining the energy.
-        atoms: one starting structure per window. Each structure's
-            energy must lie inside its window. Single-`Atoms`
-            broadcast is not supported (every window needs an
-            initial configuration that lands in that window).
+        atoms: one entry per window. Each entry is either a single
+            ``Atoms`` (broadcast: every walker in that window starts
+            from a copy of it) or a ``Sequence[Atoms]`` of length
+            ``n_walkers_per_window`` for that window (one structure per
+            walker, in walker order). Windows may mix the two forms.
+            Every structure's energy must lie inside its window. A bare
+            ``Atoms`` for the whole argument is rejected (every window
+            needs an initial configuration that lands in that window).
         windows: per-replica energy windows as (left, right) tuples;
             `None` on either side means unbounded.
         energy_spacing: bin size of the WL energy grid (shared
@@ -230,7 +235,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def __init__(
         self,
         cluster_expansion: ClusterExpansion,
-        atoms: Sequence[Atoms],
+        atoms: Sequence[Atoms | Sequence[Atoms]],
         windows: Sequence[tuple[float | None, float | None]],
         energy_spacing: float,
         block_size: int,
@@ -286,6 +291,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 f"all n_walkers_per_window values must be >= 1; "
                 f"got {walkers_per_window}"
             )
+        walker_atoms = expand_initial_structures(atoms_list, walkers_per_window)
         walker_seeds, group_seeds, master_seed = _spawn_wl_seeds(
             random_seed, walkers_per_window
         )
@@ -310,7 +316,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 walker_replicas = [
                     WangLandauReplica(
                         cluster_expansion=cluster_expansion,
-                        atoms=atoms_list[w],
+                        atoms=walker_atoms[w][j],
                         energy_spacing=energy_spacing,
                         energy_limit_left=lo,
                         energy_limit_right=hi,
@@ -356,7 +362,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool=pool,
             block_size=block_size,
             random_seed=master_seed,
-            template_atoms=atoms_list[0],
+            template_atoms=walker_atoms[0][0],
         )
         self._windows: list[tuple[float | None, float | None]] = [
             (lo, hi) for lo, hi in windows

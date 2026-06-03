@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from mchammer.calculators import ClusterExpansionCalculator
 
+from mchammer_pt.wl import WangLandauParallelTempering
+from mchammer_pt.wl_replica import WangLandauReplica
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
@@ -1768,3 +1771,111 @@ def test_wl_pt_checkpoint_round_trip_mixed_walkers_per_window(tmp_path):
     assert np.all(np.isfinite(resumed.pool.current_energies()))
     for wr in resumed.results():
         assert wr.get_entropy() is not None
+
+
+def _energy(ce, atoms):
+    return float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+
+
+def _distinct_in_window_pair():
+    """Return (ce, a, b, ea, eb): two same-composition configs with
+    distinct, well-separated energies (single nearest-neighbour swap)."""
+    ce = make_wl_ce()
+    a = make_wl_atoms()
+    b = a.copy()
+    symbols = list(b.get_chemical_symbols())
+    i_ag = symbols.index("Ag")
+    i_au = symbols.index("Au")
+    symbols[i_ag], symbols[i_au] = symbols[i_au], symbols[i_ag]
+    b.set_chemical_symbols(symbols)
+    ea, eb = _energy(ce, a), _energy(ce, b)
+    # Guard the fixture's own assumption; if this ever fails, swap a
+    # nearest-neighbour Ag/Au pair instead of the first of each.
+    assert abs(ea - eb) > 0.5, (ea, eb)
+    return ce, a, b, ea, eb
+
+
+def test_wl_pt_serial_per_walker_structures_reach_replicas():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    group = pt._pool._replicas[0]  # WangLandauWindowGroup (W=2)
+    assert group._replicas[0].current_energy() == pytest.approx(ea)
+    assert group._replicas[1].current_energy() == pytest.approx(eb)
+
+
+def test_wl_pt_serial_broadcast_yields_independent_walkers():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    group = pt._pool._replicas[0]
+    r0, r1 = group._replicas[0], group._replicas[1]
+    assert r0 is not r1
+    np.testing.assert_array_equal(
+        r0.current_occupations(), r1.current_occupations()
+    )
+    # Mutate walker 0 to b's (in-window) configuration; walker 1 unchanged.
+    ref_b = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=b,
+        energy_spacing=0.1,
+        energy_limit_left=lo,
+        energy_limit_right=hi,
+        random_seed=0,
+    )
+    r0.set_occupations(ref_b.current_occupations())
+    assert not np.array_equal(
+        r0.current_occupations(), r1.current_occupations()
+    )
+
+
+def test_wl_pt_serial_per_walker_length_mismatch_raises():
+    ce, a, _b, ea, _eb = _distinct_in_window_pair()
+    lo, hi = ea - 1.0, ea + 1.0
+    with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
+        WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[[a], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=0,
+            n_walkers_per_window=[2, 1],
+        )
+
+
+def test_wl_pt_serial_per_walker_out_of_window_raises():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    # Narrow window brackets a only; b is outside.
+    lo, hi = ea - 0.5, ea + 0.5
+    assert not (lo < eb < hi)
+    with pytest.raises(ValueError, match="outside window"):
+        WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[[a, b], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=0,
+            n_walkers_per_window=[2, 1],
+        )
