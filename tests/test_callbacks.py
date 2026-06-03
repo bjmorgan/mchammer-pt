@@ -253,8 +253,8 @@ def test_one_over_t_row_shows_dash_when_recency_none():
 
         def per_window_stats(self):
             return [{
-                "fill_factor": 1e-6, "halvings": 5, "histogram": {},
-                "bins_filled": 0, "bins_known": 0, "converged": False,
+                "fill_factor": 5e-6, "halvings": 5, "histogram": {0: 5, 1: 5},
+                "bins_filled": 2, "bins_known": 2, "converged": False,
                 "phase": "1/t", "schedule": "1_over_t",
                 "recency_flatness": None,
             }]
@@ -262,4 +262,6 @@ def test_one_over_t_row_shows_dash_when_recency_none():
     out = io.StringIO()
     p = WangLandauProgressPrinter(_Pool(), interval=1, show_swap_rates=False, file=out)
     p.on_cycle_end(0, 1, _wl_history())
-    assert "--" in out.getvalue()
+    output = out.getvalue()
+    assert "--" in output       # 1/t branch chose recency-None -> "--"
+    assert "1.000" not in output  # NOT the gate's cumulative min/mean
