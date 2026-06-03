@@ -316,6 +316,9 @@ class WangLandauWorker(BaseWorker):
         stats["visited_bins"] = sorted(
             self._replica.ensemble._visited_bins
         )
+        stats["recency_weights"] = dict(
+            self._replica.ensemble.recency_effective_weights()
+        )
         self._reply(stats)
 
     def _handle_get_entropy(self, cmd: tuple[Any, ...]) -> None:

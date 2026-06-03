@@ -660,7 +660,9 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_known": 3,
         "converged": False,
         "phase": "halving",
+        "schedule": "halving",
         "visited_bins": [0, 1, 2],
+        "recency_weights": {0: 1.0, 1: 1.0, 2: 1.0},
     }
     s1 = {
         "fill_factor": 0.25,
@@ -670,7 +672,9 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_known": 3,
         "converged": True,
         "phase": "halving",
+        "schedule": "halving",
         "visited_bins": [1, 2, 3],
+        "recency_weights": {1: 1.0, 2: 1.0, 3: 1.0},
     }
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
     assert out["fill_factor"] == 0.5
@@ -701,7 +705,9 @@ def test_merge_per_window_stats_propagates_1_over_t_phase():
         "bins_known": 2,
         "converged": False,
         "phase": "1_over_t",
+        "schedule": "1_over_t",
         "visited_bins": [0, 1],
+        "recency_weights": {0: 1.0, 1: 1.0},
     }
     s1 = {**s0, "histogram": {0: 110, 1: 90}, "visited_bins": [0, 1]}
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
@@ -715,15 +721,17 @@ def test_merge_per_window_stats_adds_filled_and_breakdown():
             "fill_factor": 1.0, "halvings": 0,
             "histogram": {0: 1, 1: 4, 2: 0},
             "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
-            "converged": False, "phase": "halving",
+            "converged": False, "phase": "halving", "schedule": "halving",
             "visited_bins": [0, 1],
+            "recency_weights": {0: 1.0, 1: 1.0, 2: 0.0},
         },
         {
             "fill_factor": 1.0, "halvings": 0,
             "histogram": {0: 3, 1: 0, 2: 7},
             "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
-            "converged": False, "phase": "halving",
+            "converged": False, "phase": "halving", "schedule": "halving",
             "visited_bins": [0, 2],
+            "recency_weights": {0: 1.0, 1: 0.0, 2: 1.0},
         },
     ]
     merged = _merge_per_window_stats(slot_stats, "per_walker")
@@ -749,6 +757,39 @@ def test_merge_per_window_stats_single_walker_carries_bins_filled():
     assert merged["bins_filled"] == 1
     assert "per_walker_breakdown" not in merged
     assert "visited_bins" not in merged
+
+
+def test_merge_per_window_stats_adds_recency_flatness():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    base = {
+        "fill_factor": 1.0, "halvings": 0, "histogram": {0: 1, 1: 1},
+        "bins_visited": 2, "bins_filled": 2, "bins_known": 2,
+        "converged": False, "phase": "halving", "schedule": "1_over_t",
+        "visited_bins": [0, 1],
+    }
+    s0 = {**base, "recency_weights": {0: 1.0, 1: 0.0}}
+    s1 = {**base, "recency_weights": {0: 0.0, 1: 1.0}}
+    merged = _merge_per_window_stats([s0, s1], "pooled")
+    # summed {0:1,1:1} -> min/mean = 1.0
+    assert merged["recency_flatness"] == 1.0
+    assert "recency_weights" not in merged
+    assert merged["schedule"] == "1_over_t"
+    pw = _merge_per_window_stats([s0, s1], "per_walker")
+    assert pw["recency_flatness"] == 0.0   # each walker has a zero bin
+
+
+def test_merge_single_walker_carries_recency_flatness():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    s = {
+        "fill_factor": 1.0, "halvings": 0, "histogram": {0: 1},
+        "bins_visited": 1, "bins_filled": 1, "bins_known": 1,
+        "converged": False, "phase": "halving", "schedule": "halving",
+        "recency_flatness": 1.0, "recency_weights": {0: 1.0},
+        "visited_bins": [0],
+    }
+    merged = _merge_per_window_stats([s], "pooled")
+    assert merged["recency_flatness"] == 1.0
+    assert "recency_weights" not in merged
 
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):
