@@ -58,3 +58,17 @@ def test_length_check_precedes_element_type_check():
     # mismatch first (the most structurally obvious mistake).
     with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
         expand_initial_structures([["x", "y", "z"]], [2])
+
+
+def test_str_element_rejected_with_type_name():
+    # A filename string instead of a loaded structure must be rejected
+    # clearly, not exploded into characters by ``list()``.
+    a = _atoms()
+    with pytest.raises(ValueError, match=r"atoms\[0\] is str, not an Atoms"):
+        expand_initial_structures(["POSCAR_a", a], [1, 1])
+
+
+def test_bytes_element_rejected_with_type_name():
+    a = _atoms()
+    with pytest.raises(ValueError, match=r"atoms\[1\] is bytes, not an Atoms"):
+        expand_initial_structures([a, b"raw"], [1, 1])

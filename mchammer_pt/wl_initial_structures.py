@@ -47,6 +47,17 @@ def expand_initial_structures(
         if isinstance(element, Atoms):
             out.append([element] * n_walkers)
             continue
+        if isinstance(element, (str, bytes)):
+            # A str/bytes is technically a Sequence, so without this
+            # guard it would be exploded into its characters/bytes by
+            # ``list()`` below and surface a misleading length error.
+            # The realistic mistake is passing a filename instead of a
+            # loaded structure.
+            raise ValueError(
+                f"atoms[{w}] is {type(element).__name__}, not an Atoms or a "
+                f"sequence of Atoms; pass a single Atoms to broadcast or a "
+                f"sequence of Atoms (one per walker)."
+            )
         walkers = list(element)
         if not walkers:
             raise ValueError(
