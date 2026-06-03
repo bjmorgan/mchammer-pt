@@ -183,7 +183,7 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
 def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     """per_window_stats() round-trips through WL_STATS opcode and returns
     fill_factor, halvings, histogram, bins_visited, bins_known,
-    converged, and phase for each window."""
+    converged, phase, recency_flatness, and schedule for each window."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
     with ProcessWangLandauPool(
@@ -201,7 +201,7 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert set(s.keys()) == {
             "fill_factor", "halvings", "histogram",
             "bins_visited", "bins_filled", "bins_known",
-            "converged", "phase",
+            "converged", "phase", "recency_flatness", "schedule",
         }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
@@ -211,6 +211,10 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["phase"] in {"halving", "1_over_t"}
+        assert s["recency_flatness"] is None or isinstance(
+            s["recency_flatness"], float
+        )
+        assert s["schedule"] in {"halving", "1_over_t"}
         assert s["fill_factor"] > 0.0
 
 
