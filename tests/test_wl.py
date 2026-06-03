@@ -663,6 +663,42 @@ def test_resume_defaults_recency_visits_per_bin_for_pre_feature_checkpoint(
         assert slot.ensemble._recency_visits_per_bin == 1000
 
 
+def test_resume_rejects_non_integer_recency_visits_per_bin_metadata(tmp_path):
+    """A non-integer recency timescale in meta fails loudly on resume.
+
+    Resume routes the saved ``recency_visits_per_bin`` through the same
+    strict validator used at construction, so a corrupted or hand-edited
+    checkpoint carrying a non-integer timescale raises rather than
+    silently truncating (as a bare ``int(2.5)`` would).
+    """
+    import h5py
+    import pytest
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    with h5py.File(cp, "r+") as f:
+        f["meta"].attrs["recency_visits_per_bin"] = 2.5
+
+    with pytest.raises(ValueError, match="positive integer"):
+        WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce()
+        )
+
+
 def test_recency_flatness_populates_from_real_mc_steps():
     """Real MC steps drive recency_flatness to a non-None value in [0, 1].
 

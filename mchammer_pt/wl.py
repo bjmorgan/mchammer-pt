@@ -611,7 +611,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
-        recency_visits_per_bin = int(meta.get("recency_visits_per_bin", 1000))
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            meta.get("recency_visits_per_bin", 1000)
+        )
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -806,7 +808,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
-        recency_visits_per_bin = int(meta.get("recency_visits_per_bin", 1000))
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            meta.get("recency_visits_per_bin", 1000)
+        )
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []

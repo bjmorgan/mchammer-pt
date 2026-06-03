@@ -8,14 +8,21 @@ import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
 
 
-def _validate_recency_visits_per_bin(value: int) -> int:
+def _validate_recency_visits_per_bin(value: object) -> int:
     """Return ``value`` as an int, or raise if it is not a positive integer.
 
     Rejects non-integer values (e.g. ``2.5``) and ``bool`` rather than
     silently truncating or coercing them, so the error message's promise
     of an integer holds. Integer-valued floats such as ``1e3`` are accepted.
+    Accepts ``object`` because callers pass values read from checkpoint
+    metadata (an untrusted union) as well as the constructor's ``int``.
     """
-    if isinstance(value, bool) or int(value) != value or int(value) <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float, np.integer, np.floating))
+        or int(value) != value
+        or int(value) <= 0
+    ):
         raise ValueError(
             f"recency_visits_per_bin must be a positive integer; "
             f"got {value!r}"
