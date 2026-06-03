@@ -1417,6 +1417,26 @@ def test_process_wl_pool_per_walker_length_mismatch_raises(tmp_path):
         )
 
 
+def test_process_wl_pool_rejects_bare_atoms(tmp_path):
+    """A single bare ``Atoms`` is rejected, mirroring the serial path.
+
+    Without the guard the bare ``Atoms`` would be iterated into per-site
+    ``Atom`` objects by ``list(initial_atoms)`` and surface a confusing
+    ``initial_atoms has N entries`` error.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with pytest.raises(TypeError, match="sequence of Atoms"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=atoms,
+            windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+        )
+
+
 def test_process_wl_pool_broadcast_yields_independent_workers(tmp_path):
     """A single Atoms broadcast to a W=2 window gives independent workers.
 

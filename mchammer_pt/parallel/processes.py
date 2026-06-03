@@ -708,7 +708,9 @@ class ProcessWangLandauPool:
             single ``Atoms`` (broadcast: every walker in that window
             starts from a copy) or a ``Sequence[Atoms]`` of length
             ``n_walkers_per_window`` for that window (one per walker).
-            Every structure's energy must lie inside its window.
+            Every structure's energy must lie inside its window. A bare
+            ``Atoms`` for the whole argument is rejected (every window
+            needs its own initial configuration).
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per window.
@@ -765,6 +767,14 @@ class ProcessWangLandauPool:
             (lo, hi) for lo, hi in windows
         ]
         seeds_list = list(seeds)
+        if isinstance(initial_atoms, Atoms):
+            raise TypeError(
+                "ProcessWangLandauPool requires a sequence of Atoms "
+                "(one per window). Each window needs an initial "
+                "configuration whose energy lies in that window; there "
+                "is no general way to produce one from a single "
+                "starting structure."
+            )
         atoms_list = list(initial_atoms)
         if len(atoms_list) != len(windows_list):
             raise ValueError(
