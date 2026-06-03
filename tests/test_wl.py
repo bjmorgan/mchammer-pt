@@ -1870,3 +1870,30 @@ def test_wl_pt_serial_per_walker_out_of_window_raises():
             random_seed=0,
             n_walkers_per_window=[2, 1],
         )
+
+
+def test_wl_pt_serial_per_walker_start_checkpoints_and_resumes(tmp_path):
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    ckpt = tmp_path / "rewl.h5"
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    pt.run(3)
+    pt.save_checkpoint(ckpt)
+
+    with pytest.warns(UserWarning):
+        pt_b = WangLandauParallelTempering.resume(ckpt, cluster_expansion=ce)
+    # Structurally resumes: one WindowResult per window, walker counts
+    # preserved (window 0 has 2 walkers, window 1 has 1).
+    results = pt_b.results()
+    assert len(results) == 2
+    assert len(results[0].containers) == 2
+    assert len(results[1].containers) == 1
+    pt_b.run(3)  # continues without error

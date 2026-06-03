@@ -862,7 +862,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def from_bin_count(
         cls,
         cluster_expansion: ClusterExpansion,
-        atoms: Sequence[Atoms],
+        atoms: Sequence[Atoms | Sequence[Atoms]],
         n_bins: int,
         energy_spacing: float,
         minimum_energy: float,
@@ -889,6 +889,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         common case of an even split. Power users construct
         `windows` by hand. ``flatness_mode``, ``merge_cadence``, and
         ``recency_visits_per_bin`` have the same meaning as on
+        :class:`WangLandauParallelTempering`.
+
+        ``atoms`` accepts the same broadcast-or-per-walker shape as
         :class:`WangLandauParallelTempering`.
         """
         from mchammer.ensembles.wang_landau_ensemble import (
@@ -934,7 +937,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
     def process_pool(
         cls,
         cluster_expansion: ClusterExpansion,
-        atoms: Sequence[Atoms],
+        atoms: Sequence[Atoms | Sequence[Atoms]],
         windows: Sequence[tuple[float | None, float | None]],
         energy_spacing: float,
         block_size: int,
@@ -956,6 +959,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         cleaned when the returned orchestrator is garbage-collected.
         ``flatness_mode``, ``merge_cadence``, and
         ``recency_visits_per_bin`` have the same meaning as on
+        :class:`WangLandauParallelTempering`.
+
+        ``atoms`` accepts the same broadcast-or-per-walker shape as
         :class:`WangLandauParallelTempering`.
         """
         seed_sequence = np.random.SeedSequence(int(random_seed))
