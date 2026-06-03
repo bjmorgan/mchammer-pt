@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint and adopted from there on resume; the estimate itself is
   not persisted, so the diagnostic re-accumulates after a resume,
   reading ``--`` only until the first recent visit.
+- ``WangLandauParallelTempering`` (including ``from_bin_count`` and
+  ``process_pool``) and ``ProcessWangLandauPool`` accept per-walker
+  initial structures. Each per-window ``atoms`` entry may now be either
+  a single ``Atoms`` (broadcast to every walker in that window, as
+  before) or a ``Sequence[Atoms]`` of length the window's
+  ``n_walkers_per_window`` (one starting structure per walker, in walker
+  order); windows may mix the two forms. This lets the walkers in a
+  window start from independent or symmetry-paired configurations so
+  their merged density of states is not biased toward a single basin in
+  quasi-ergodic systems. Each structure's energy must lie inside its
+  window, and a bare ``Atoms`` for the whole argument remains rejected.
 
 ### Deprecated
 
