@@ -244,9 +244,14 @@ class WangLandauProgressPrinter:
     ``1/t``), the ``filled/known`` bin counts (bins covered since the
     last WL halve, which resets each halve, over the bins known so far;
     the union of covered bins under pooled flatness, the intersection
-    under per-walker flatness), histogram flatness
-    (``min(H) / mean(H)`` — compare against your ``flatness_limit``),
-    and whether the window has converged.
+    under per-walker flatness), the schedule-aware ``flatness`` column
+    (for a halving-schedule run, the cumulative gate flatness
+    ``min(H) / mean(H)`` to compare against your ``flatness_limit``;
+    for a ``1/t`` (Belardinelli-Pereyra) run, the EWMA recency
+    flatness over recent visits, which tracks current sampling
+    uniformity and reads ``--`` only before the first recent visit,
+    then a low value climbing as more bins are sampled), and whether
+    the window has converged.
 
     Metrics are read from the live ensemble state via
     ``pool.per_window_stats()``, so they are always current regardless
@@ -362,7 +367,7 @@ class WangLandauProgressPrinter:
             f"  {'win':>3s}  {'fill_factor':>11s}  "
             f"{'halvings':>8s}  {'phase':>5s}  "
             f"{'bins (fill/known)':>17s}  "
-            f"{'flat_min':>8s}  {'converged':>9s}"
+            f"{'flatness':>8s}  {'converged':>9s}"
         )
         rows: list[str] = []
         for i, s in enumerate(stats):
@@ -375,21 +380,30 @@ class WangLandauProgressPrinter:
             hist = s["histogram"]
             bins_str = f"{s['bins_filled']}/{s['bins_known']}"
 
-            # flat_min reports the quantity the halve gate is actually
-            # checking. Under flatness_mode='per_walker' the gate uses
-            # the minimum over walkers of each walker's flat_min, not
-            # the pooled-summed flat_min. Stats from single-walker
-            # slots omit the mode; fall back to the pooled computation,
-            # which is exact for n_walkers == 1.
-            mode = s.get("flatness_mode")
-            if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
-                flat_str = f"{s['per_walker_flat_min']:.3f}"
-            elif hist:
-                counts = np.array(list(hist.values()), dtype=float)
-                mean_c = float(counts.mean())
-                flat_str = f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
+            if s.get("schedule") == "1_over_t":
+                # Under 1/t the cumulative min/mean only ever rises and no
+                # longer reflects current sampling, so show the EWMA
+                # recency flatness (current sampling uniformity) instead.
+                rf = s.get("recency_flatness")
+                flat_str = f"{rf:.3f}" if rf is not None else "--"
             else:
-                flat_str = "--"
+                # flat_min reports the quantity the halve gate is
+                # actually checking. Under flatness_mode='per_walker' the
+                # gate uses the minimum over walkers of each walker's
+                # flat_min, not the pooled-summed flat_min. Stats from
+                # single-walker slots omit the mode; fall back to the
+                # pooled computation, which is exact for n_walkers == 1.
+                mode = s.get("flatness_mode")
+                if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
+                    flat_str = f"{s['per_walker_flat_min']:.3f}"
+                elif hist:
+                    counts = np.array(list(hist.values()), dtype=float)
+                    mean_c = float(counts.mean())
+                    flat_str = (
+                        f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
+                    )
+                else:
+                    flat_str = "--"
 
             conv_str = "yes" if s["converged"] else "no"
             rows.append(

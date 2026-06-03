@@ -36,7 +36,10 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
 )
-from .wl_ensemble import CoordinatedWangLandauEnsemble
+from .wl_ensemble import (
+    CoordinatedWangLandauEnsemble,
+    _validate_recency_visits_per_bin,
+)
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
@@ -210,6 +213,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: ``"at_halve"`` (default; Vogel cadence: merge
             entropies at each collective halve) or ``"never"`` (no
             mid-run merge).
+        recency_visits_per_bin: EWMA timescale for the recency-flatness
+            diagnostic, in expected visits per bin (the decay constant
+            is roughly ``recency_visits_per_bin * N_bins`` MC steps).
+            Default 1000; larger gives a longer, smoother averaging
+            window. Must be a positive integer. Recorded in the
+            checkpoint and adopted from there on resume.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -236,6 +245,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         n_walkers_per_window: int | Sequence[int] = 1,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        recency_visits_per_bin: int = 1000,
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -257,6 +267,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"block_size must be >= 1; got {block_size}")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            recency_visits_per_bin
+        )
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -304,6 +317,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         random_seed=walker_seeds[w][j],
                         ensemble_cls=ensemble_cls,
                         ensemble_kwargs=ensemble_kwargs,
+                        recency_visits_per_bin=recency_visits_per_bin,
                     )
                     for j in range(W_w)
                 ]
@@ -350,6 +364,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         self._energy_spacing = float(energy_spacing)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._recency_visits_per_bin: int = recency_visits_per_bin
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
@@ -413,13 +428,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
         """Return the WL-specific checkpoint metadata.
 
         Contains the window edges, energy spacing, flatness mode,
-        merge cadence, and walkers-per-window boundary array.
+        merge cadence, recency visits per bin, and walkers-per-window
+        boundary array.
         """
         return {
             "windows": _windows_to_array(self._windows),
             "energy_spacing": float(self._energy_spacing),
             "flatness_mode": self._flatness_mode,
             "merge_cadence": self._merge_cadence,
+            "recency_visits_per_bin": int(self._recency_visits_per_bin),
             "walkers_per_window": np.asarray(
                 self._walkers_per_window, dtype=np.int32
             ),
@@ -594,6 +611,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            meta.get("recency_visits_per_bin", 1000)
+        )
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -622,6 +642,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         ensemble_cls=ensemble_cls,
                         ensemble_kwargs=ensemble_kwargs,
                         sites_by_species=replica_extras[flat_idx]["sites_by_species"],
+                        recency_visits_per_bin=recency_visits_per_bin,
                     )
                 )
                 flat_idx += 1
@@ -689,6 +710,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool=pool,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            recency_visits_per_bin=recency_visits_per_bin,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -786,6 +808,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            meta.get("recency_visits_per_bin", 1000)
+        )
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -806,6 +831,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             n_walkers_per_window=walkers_per_window,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            recency_visits_per_bin=recency_visits_per_bin,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
@@ -849,13 +875,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
         n_walkers_per_window: int | Sequence[int] = 1,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        recency_visits_per_bin: int = 1000,
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand. ``flatness_mode`` and ``merge_cadence``
-        have the same meaning as on
+        `windows` by hand. ``flatness_mode``, ``merge_cadence``, and
+        ``recency_visits_per_bin`` have the same meaning as on
         :class:`WangLandauParallelTempering`.
         """
         from mchammer.ensembles.wang_landau_ensemble import (
@@ -894,6 +921,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             n_walkers_per_window=n_walkers_per_window,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            recency_visits_per_bin=recency_visits_per_bin,
         )
 
     @classmethod
@@ -914,13 +942,15 @@ class WangLandauParallelTempering(BaseParallelTempering):
         n_walkers_per_window: int | Sequence[int] = 1,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        recency_visits_per_bin: int = 1000,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
-        ``flatness_mode`` and ``merge_cadence`` have the same meaning
-        as on :class:`WangLandauParallelTempering`.
+        ``flatness_mode``, ``merge_cadence``, and
+        ``recency_visits_per_bin`` have the same meaning as on
+        :class:`WangLandauParallelTempering`.
         """
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
@@ -941,6 +971,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 ensemble_kwargs=ensemble_kwargs,
                 flatness_mode=flatness_mode,
                 merge_cadence=merge_cadence,
+                recency_visits_per_bin=recency_visits_per_bin,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -958,6 +989,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 n_walkers_per_window=n_walkers_per_window,
                 flatness_mode=flatness_mode,
                 merge_cadence=merge_cadence,
+                recency_visits_per_bin=recency_visits_per_bin,
             )
         except BaseException:
             pool.shutdown()

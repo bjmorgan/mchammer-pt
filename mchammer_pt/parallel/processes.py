@@ -41,12 +41,16 @@ from ..wl_coordinator import (
     _compute_filled_bins,
     _compute_per_walker_breakdown,
     _compute_per_walker_flat_min,
+    _compute_recency_flatness,
     _validate_flatness_mode,
     _validate_merge_cadence,
     decide_block_actions,
     merge_entropies,
 )
-from ..wl_ensemble import CoordinatedWangLandauEnsemble
+from ..wl_ensemble import (
+    CoordinatedWangLandauEnsemble,
+    _validate_recency_visits_per_bin,
+)
 from ..wl_merge_diagnostics import MergeEvent
 from ..wl_replica import WangLandauReplica
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
@@ -634,14 +638,18 @@ def _merge_per_window_stats(
     ``bins_filled`` (union of positive bins for pooled flatness,
     intersection for per-walker), and adds the per-walker flat-min,
     a ``per_walker_breakdown`` list, plus the slot's flatness mode.
+    Resolves a window-level ``recency_flatness`` from the per-walker
+    ``recency_weights`` (the EWMA effective weights each worker
+    attaches to its WL_STATS reply) and carries the ``schedule``.
     Single-walker slots are returned unchanged apart from stripping
-    the internal ``visited_bins`` field.
+    the internal ``visited_bins`` and ``recency_weights`` fields.
 
     Pure function on the IPC payload.
     """
     if len(slot_stats) == 1:
         merged = dict(slot_stats[0])
         merged.pop("visited_bins", None)
+        merged.pop("recency_weights", None)
         return merged
     combined_hist: dict[int, int] = {}
     visited_union: set[int] = set()
@@ -651,6 +659,7 @@ def _merge_per_window_stats(
             combined_hist[k] = combined_hist.get(k, 0) + v
         visited_union.update(s.get("visited_bins", ()))
     per_walker_flat_min = _compute_per_walker_flat_min(histograms)
+    recency_weights = [s["recency_weights"] for s in slot_stats]
     return {
         "fill_factor": slot_stats[0]["fill_factor"],
         "halvings": slot_stats[0]["halvings"],
@@ -663,6 +672,10 @@ def _merge_per_window_stats(
         "per_walker_flat_min": per_walker_flat_min,
         "per_walker_breakdown": _compute_per_walker_breakdown(histograms),
         "phase": slot_stats[0]["phase"],
+        "recency_flatness": _compute_recency_flatness(
+            recency_weights, flatness_mode
+        ),
+        "schedule": slot_stats[0]["schedule"],
     }
 
 
@@ -711,6 +724,9 @@ class ProcessWangLandauPool:
             (default; halve when summed histogram is flat).
         merge_cadence: ``"at_halve"`` (default; Vogel cadence) or
             ``"never"`` (no mid-run merge, end-of-run finalisation only).
+        recency_visits_per_bin: EWMA timescale (default 1000) forwarded
+            to every walker's ensemble for the recency-flatness
+            diagnostic.
     """
 
     def __init__(
@@ -728,12 +744,16 @@ class ProcessWangLandauPool:
         ensemble_kwargs: Mapping[str, Any] | None = None,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        recency_visits_per_bin: int = 1000,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._recency_visits_per_bin: int = _validate_recency_visits_per_bin(
+            recency_visits_per_bin
+        )
         self._merge_events: list[MergeEvent] = []
         self._flatness_limit: float = float(
             (ensemble_kwargs or {}).get("flatness_limit", 0.8)
@@ -802,6 +822,7 @@ class ProcessWangLandauPool:
                             seed=int(w_seed),
                             ensemble_cls=ensemble_cls,
                             ensemble_kwargs=dict(extra_kwargs),
+                            recency_visits_per_bin=self._recency_visits_per_bin,
                         )
                         process = ctx.Process(
                             target=_wl_worker,

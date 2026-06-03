@@ -208,3 +208,60 @@ def test_per_walker_detail_renders_dash_for_none_flat_min():
     output = out.getvalue()
     assert "w0" in output
     assert "--" in output
+
+
+def test_flatness_column_header_renamed():
+    class _Pool:
+        windows = [(None, None)]
+
+        def per_window_stats(self):
+            return [{
+                "fill_factor": 1.0, "halvings": 0, "histogram": {0: 5},
+                "bins_filled": 1, "bins_known": 1, "converged": False,
+                "phase": "halving", "schedule": "halving",
+                "recency_flatness": 0.5,
+            }]
+
+    out = io.StringIO()
+    p = WangLandauProgressPrinter(_Pool(), interval=1, show_swap_rates=False, file=out)
+    p.on_cycle_end(0, 1, _wl_history())
+    assert "flatness" in out.getvalue()
+
+
+def test_one_over_t_row_shows_recency_flatness():
+    class _Pool:
+        windows = [(None, None)]
+
+        def per_window_stats(self):
+            return [{
+                "fill_factor": 1e-6, "halvings": 5, "histogram": {0: 0, 1: 9},
+                "bins_filled": 1, "bins_known": 2, "converged": False,
+                "phase": "1_over_t", "schedule": "1_over_t",
+                "recency_flatness": 0.873,
+            }]
+
+    out = io.StringIO()
+    p = WangLandauProgressPrinter(_Pool(), interval=1, show_swap_rates=False, file=out)
+    p.on_cycle_end(0, 1, _wl_history())
+    # recency_flatness rendered, NOT the cumulative-histogram min/mean (0.0)
+    assert "0.873" in out.getvalue()
+
+
+def test_one_over_t_row_shows_dash_when_recency_none():
+    class _Pool:
+        windows = [(None, None)]
+
+        def per_window_stats(self):
+            return [{
+                "fill_factor": 5e-6, "halvings": 5, "histogram": {0: 5, 1: 5},
+                "bins_filled": 2, "bins_known": 2, "converged": False,
+                "phase": "1_over_t", "schedule": "1_over_t",
+                "recency_flatness": None,
+            }]
+
+    out = io.StringIO()
+    p = WangLandauProgressPrinter(_Pool(), interval=1, show_swap_rates=False, file=out)
+    p.on_cycle_end(0, 1, _wl_history())
+    output = out.getvalue()
+    assert "--" in output       # 1/t branch chose recency-None -> "--"
+    assert "1.000" not in output  # NOT the gate's cumulative min/mean

@@ -445,3 +445,57 @@ def test_pooled_filled_parity_tracks_one_over_t_gate():
             [_snap(h) for h in histograms], 0.8, "1_over_t"
         )
         assert at_parity == gate_fires
+
+
+def test_compute_recency_flatness_single_is_min_over_mean():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    w = {0: 2.0, 1: 4.0}            # min/mean = 2/3
+    assert _compute_recency_flatness([w], "pooled") == 2.0 / 3.0
+    assert _compute_recency_flatness([w], "per_walker") == 2.0 / 3.0
+
+
+def test_compute_recency_flatness_pooled_sums_weights():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    a = {0: 1.0, 1: 0.0}
+    b = {0: 0.0, 1: 1.0}
+    # summed = {0:1,1:1} -> min/mean = 1.0
+    assert _compute_recency_flatness([a, b], "pooled") == 1.0
+
+
+def test_compute_recency_flatness_per_walker_is_min_over_walkers():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    a = {0: 4.0, 1: 4.0}           # min/mean = 1.0
+    b = {0: 1.0, 1: 3.0}           # min/mean = 1/2
+    assert _compute_recency_flatness([a, b], "per_walker") == 0.5
+
+
+def test_compute_recency_flatness_per_walker_drops_unusable_walkers():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    # One walker has no usable weights (zero-mean -> None) and is dropped;
+    # the result is the surviving walker's min/mean, not poisoned by None.
+    empty = {0: 0.0, 1: 0.0}       # _min_over_mean -> None
+    usable = {0: 1.0, 1: 3.0}      # min/mean = 1/2
+    assert _compute_recency_flatness([empty, usable], "per_walker") == 0.5
+
+
+def test_compute_recency_flatness_empty_or_zero_mean_is_none():
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+    assert _compute_recency_flatness([], "pooled") is None
+    assert _compute_recency_flatness([{}], "pooled") is None
+    assert _compute_recency_flatness([{0: 0.0, 1: 0.0}], "pooled") is None
+
+
+def test_resolve_recency_flatness_picks_by_mode():
+    from mchammer_pt.wl_coordinator import _resolve_recency_flatness
+    d = {"recency_flatness_pooled": 0.9, "recency_flatness_per_walker": 0.4}
+    _resolve_recency_flatness(d, "per_walker")
+    assert d["recency_flatness"] == 0.4
+    assert "recency_flatness_pooled" not in d
+    assert "recency_flatness_per_walker" not in d
+
+
+def test_resolve_recency_flatness_no_candidates_is_noop():
+    from mchammer_pt.wl_coordinator import _resolve_recency_flatness
+    d = {"recency_flatness": 0.7}
+    _resolve_recency_flatness(d, "pooled")
+    assert d == {"recency_flatness": 0.7}

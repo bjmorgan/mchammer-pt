@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bins with a positive count in the current histogram (the union of
   per-walker positive bins under pooled flatness, the intersection
   under per-walker flatness), which resets on each halving.
+- ``WangLandauParallelTempering`` and the Wang-Landau pools gain a
+  ``recency_visits_per_bin`` parameter (default ``1000``) setting the
+  timescale of a per-window recency-flatness diagnostic. Each walker
+  keeps an exponentially-weighted estimate of recent visits per energy
+  bin (decay constant roughly ``recency_visits_per_bin * N_bins`` MC
+  steps), and ``per_window_stats()`` now reports ``recency_flatness``
+  (``min / mean`` over known bins, pooled or per-walker by
+  ``flatness_mode``) and ``schedule``. The parameter is recorded in the
+  checkpoint and adopted from there on resume; the estimate itself is
+  not persisted, so the diagnostic re-accumulates after a resume,
+  reading ``--`` only until the first recent visit.
 
 ### Deprecated
 
@@ -53,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The ``WangLandauProgressPrinter`` flatness column is renamed from
+  ``flat_min`` to ``flatness`` and is now schedule-aware: it shows the
+  cumulative gate flatness ``min(H) / mean(H)`` for a halving-schedule
+  run, and the EWMA recency flatness for a ``1/t``
+  (Belardinelli-Pereyra) run, whose cumulative histogram does not
+  reset. Per-walker detail sub-rows continue to show the gate
+  ``flat_min``.
 - ``mchammer_pt.analysis.dos.stitch_entropy`` now returns a complete
   histogram on the ``energy_spacing`` grid: every integer-multiple bin
   from the lowest to the highest populated energy is emitted, with

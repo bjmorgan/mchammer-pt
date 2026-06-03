@@ -78,6 +78,7 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
         seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs=dict(ensemble_kwargs or {}),
+        recency_visits_per_bin=1000,
     )
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=True)
@@ -183,7 +184,7 @@ def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
 def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
     """per_window_stats() round-trips through WL_STATS opcode and returns
     fill_factor, halvings, histogram, bins_visited, bins_known,
-    converged, and phase for each window."""
+    converged, phase, recency_flatness, and schedule for each window."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
     with ProcessWangLandauPool(
@@ -201,7 +202,7 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert set(s.keys()) == {
             "fill_factor", "halvings", "histogram",
             "bins_visited", "bins_filled", "bins_known",
-            "converged", "phase",
+            "converged", "phase", "recency_flatness", "schedule",
         }
         assert isinstance(s["fill_factor"], float)
         assert isinstance(s["halvings"], int)
@@ -211,6 +212,10 @@ def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
         assert isinstance(s["bins_known"], int)
         assert isinstance(s["converged"], bool)
         assert s["phase"] in {"halving", "1_over_t"}
+        assert s["recency_flatness"] is None or isinstance(
+            s["recency_flatness"], float
+        )
+        assert s["schedule"] in {"halving", "1_over_t"}
         assert s["fill_factor"] > 0.0
 
 
@@ -237,6 +242,68 @@ def test_process_wl_pool_propagates_flatness_limit_from_ensemble_kwargs(tmp_path
     ) as pool:
         assert pool._flatness_limit == 0.5
         assert pool._slots[0]._flatness_limit == 0.5
+
+
+def test_wl_builder_threads_recency_visits_per_bin(tmp_path):
+    """WLBuilder forwards recency_visits_per_bin to the built ensemble."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    ce_path = tmp_path / "ce.ce"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    builder = WLBuilder(
+        ce_path=str(ce_path),
+        atoms=AtomsSpec.from_atoms(atoms),
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={},
+        recency_visits_per_bin=250,
+    )
+    replica = builder.build()
+    assert replica.ensemble._recency_visits_per_bin == 250
+
+
+def test_process_wl_pool_stores_recency_visits_per_bin(tmp_path):
+    """ProcessWangLandauPool retains the recency_visits_per_bin it threads."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        recency_visits_per_bin=250,
+    ) as pool:
+        assert pool._recency_visits_per_bin == 250
+
+
+def test_process_pool_rejects_nonpositive_recency_visits_per_bin(tmp_path):
+    import pytest
+
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with pytest.raises(ValueError, match="recency_visits_per_bin"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=[atoms],
+            windows=[(e0 - 50.0, e0 + 50.0)],
+            energy_spacing=0.1,
+            seeds=[0],
+            recency_visits_per_bin=0,
+        )
 
 
 def test_merge_per_window_stats_single_walker_returns_payload_unchanged():
@@ -529,6 +596,52 @@ def test_serial_pool_resolves_bins_filled_by_mode():
     assert s["flatness_mode"] == "per_walker"
 
 
+def test_serial_pool_resolves_recency_flatness_by_mode():
+    """per_window_stats collapses the recency-flatness candidates.
+
+    A multi-walker slot's ``window_stats`` returns
+    ``recency_flatness_pooled`` and ``recency_flatness_per_walker`` but
+    no singular ``recency_flatness``. The serial pool resolves these
+    against its ``flatness_mode``, leaving a single ``recency_flatness``
+    and stripping the candidates.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    group = WangLandauWindowGroup(
+        [
+            WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=e0 - 100.0,
+                energy_limit_right=e0 + 100.0,
+                random_seed=j,
+            )
+            for j in range(2)
+        ],
+        random_seed=0,
+    )
+    pool = SerialWangLandauPool(
+        [group], energy_spacing=0.1, flatness_mode="per_walker"
+    )
+
+    pool.advance_all(10)
+    s = pool.per_window_stats()[0]
+    assert "recency_flatness" in s
+    assert "recency_flatness_pooled" not in s
+    assert "recency_flatness_per_walker" not in s
+
+
 def test_process_wl_pool_multi_walker_slots_structure(tmp_path):
     """n_walkers_per_window=2 creates 2 workers per slot."""
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
@@ -610,7 +723,9 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_known": 3,
         "converged": False,
         "phase": "halving",
+        "schedule": "halving",
         "visited_bins": [0, 1, 2],
+        "recency_weights": {0: 1.0, 1: 1.0, 2: 1.0},
     }
     s1 = {
         "fill_factor": 0.25,
@@ -620,7 +735,9 @@ def test_merge_per_window_stats_multi_walker_sums_histograms():
         "bins_known": 3,
         "converged": True,
         "phase": "halving",
+        "schedule": "halving",
         "visited_bins": [1, 2, 3],
+        "recency_weights": {1: 1.0, 2: 1.0, 3: 1.0},
     }
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
     assert out["fill_factor"] == 0.5
@@ -651,7 +768,9 @@ def test_merge_per_window_stats_propagates_1_over_t_phase():
         "bins_known": 2,
         "converged": False,
         "phase": "1_over_t",
+        "schedule": "1_over_t",
         "visited_bins": [0, 1],
+        "recency_weights": {0: 1.0, 1: 1.0},
     }
     s1 = {**s0, "histogram": {0: 110, 1: 90}, "visited_bins": [0, 1]}
     out = _merge_per_window_stats([s0, s1], flatness_mode="pooled")
@@ -665,15 +784,17 @@ def test_merge_per_window_stats_adds_filled_and_breakdown():
             "fill_factor": 1.0, "halvings": 0,
             "histogram": {0: 1, 1: 4, 2: 0},
             "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
-            "converged": False, "phase": "halving",
+            "converged": False, "phase": "halving", "schedule": "halving",
             "visited_bins": [0, 1],
+            "recency_weights": {0: 1.0, 1: 1.0, 2: 0.0},
         },
         {
             "fill_factor": 1.0, "halvings": 0,
             "histogram": {0: 3, 1: 0, 2: 7},
             "bins_visited": 2, "bins_filled": 2, "bins_known": 3,
-            "converged": False, "phase": "halving",
+            "converged": False, "phase": "halving", "schedule": "halving",
             "visited_bins": [0, 2],
+            "recency_weights": {0: 1.0, 1: 0.0, 2: 1.0},
         },
     ]
     merged = _merge_per_window_stats(slot_stats, "per_walker")
@@ -699,6 +820,69 @@ def test_merge_per_window_stats_single_walker_carries_bins_filled():
     assert merged["bins_filled"] == 1
     assert "per_walker_breakdown" not in merged
     assert "visited_bins" not in merged
+
+
+def test_merge_per_window_stats_adds_recency_flatness():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    base = {
+        "fill_factor": 1.0, "halvings": 0, "histogram": {0: 1, 1: 1},
+        "bins_visited": 2, "bins_filled": 2, "bins_known": 2,
+        "converged": False, "phase": "halving", "schedule": "1_over_t",
+        "visited_bins": [0, 1],
+    }
+    s0 = {**base, "recency_weights": {0: 1.0, 1: 0.0}}
+    s1 = {**base, "recency_weights": {0: 0.0, 1: 1.0}}
+    merged = _merge_per_window_stats([s0, s1], "pooled")
+    # summed {0:1,1:1} -> min/mean = 1.0
+    assert merged["recency_flatness"] == 1.0
+    assert "recency_weights" not in merged
+    assert merged["schedule"] == "1_over_t"
+    pw = _merge_per_window_stats([s0, s1], "per_walker")
+    assert pw["recency_flatness"] == 0.0   # each walker has a zero bin
+
+
+def test_merge_single_walker_carries_recency_flatness():
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    s = {
+        "fill_factor": 1.0, "halvings": 0, "histogram": {0: 1},
+        "bins_visited": 1, "bins_filled": 1, "bins_known": 1,
+        "converged": False, "phase": "halving", "schedule": "halving",
+        "recency_flatness": 1.0, "recency_weights": {0: 1.0},
+        "visited_bins": [0],
+    }
+    merged = _merge_per_window_stats([s], "pooled")
+    assert merged["recency_flatness"] == 1.0
+    assert "recency_weights" not in merged
+
+
+def test_serial_and_process_recency_flatness_agree():
+    """Serial and process backends resolve the same recency_flatness.
+
+    The serial path (window group → ``_compute_recency_flatness``) and the
+    process path (``_merge_per_window_stats`` → ``_compute_recency_flatness``)
+    are distinct code routes, but both must collapse identical per-walker
+    EWMA weight dicts to the same value under each flatness mode.
+    """
+    from mchammer_pt.parallel.processes import _merge_per_window_stats
+    from mchammer_pt.wl_coordinator import _compute_recency_flatness
+
+    weights = [{0: 3.0, 1: 1.0, 2: 0.0}, {0: 0.0, 1: 2.0, 2: 2.0}]
+    for mode in ("pooled", "per_walker"):
+        serial_value = _compute_recency_flatness(weights, mode)
+        slot_stats = [
+            {
+                "fill_factor": 1.0, "halvings": 0,
+                "histogram": {0: 1, 1: 1, 2: 1},
+                "bins_visited": 3, "bins_filled": 3, "bins_known": 3,
+                "converged": False, "phase": "halving", "schedule": "halving",
+                "visited_bins": [0, 1, 2], "recency_weights": w,
+            }
+            for w in weights
+        ]
+        process_value = _merge_per_window_stats(slot_stats, mode)[
+            "recency_flatness"
+        ]
+        assert serial_value == process_value
 
 
 def test_process_wl_pool_multi_walker_per_window_stats_merges_histograms(tmp_path):

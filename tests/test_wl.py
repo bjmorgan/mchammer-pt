@@ -504,6 +504,7 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
         energy_spacing=0.1,
         block_size=10,
         random_seed=42,
+        recency_visits_per_bin=250,
     )
     pt_a.run(n_cycles=2)
     cp = tmp_path / "wl.hdf5"
@@ -513,6 +514,9 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
         cp, cluster_expansion=make_wl_ce()
     )
     try:
+        # recency_visits_per_bin is read from meta and threaded into the
+        # process pool reconstruction without the caller re-specifying it.
+        assert pt_b._recency_visits_per_bin == 250
         history = pt_b.run(n_cycles=2)
         assert history.energies_per_cycle.shape == (3, 2)
     finally:
@@ -543,6 +547,192 @@ def test_wl_pt_checkpoint_preserves_flatness_mode_and_merge_cadence(tmp_path):
     )
     assert pt2._flatness_mode == "per_walker"
     assert pt2._merge_cadence == "never"
+
+
+def test_resume_threads_recency_visits_per_bin_from_metadata(tmp_path):
+    """Resume reads recency_visits_per_bin from meta, not the caller.
+
+    The EWMA per-bin weights are not persisted; the diagnostic
+    re-accumulates from empty state on resume. For that re-accumulation
+    to use the same timescale it had before the interruption, resume
+    must thread the saved ``recency_visits_per_bin`` into the
+    reconstructed ensembles and orchestrator without the caller
+    re-specifying it.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    resumed = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._recency_visits_per_bin == 250
+    assert resumed._recency_visits_per_bin == 250
+
+
+def test_resume_does_not_persist_recency_ewma_state(tmp_path):
+    """The EWMA recency state re-accumulates from empty on resume.
+
+    Unlike ``_visited_bins`` and the entropy/histogram (which are
+    persisted and restored), the per-bin EWMA weights are deliberately
+    not checkpointed. After a resume the state must be empty so the
+    diagnostic re-accumulates from scratch; ``recency_flatness`` reads
+    ``None`` until the first post-resume visit. This guards against a
+    future change that mistakenly persists ``_recent_weight`` by
+    analogy with the restored state.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    resumed = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    # No MC has run since resume, so the EWMA state is genuinely empty.
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._recent_weight == {}
+        assert slot.ensemble._recent_last_step == {}
+    # recency_flatness is None until the first post-resume visit.
+    for s in resumed.pool.per_window_stats():
+        assert s["recency_flatness"] is None
+
+
+def test_resume_defaults_recency_visits_per_bin_for_pre_feature_checkpoint(
+    tmp_path,
+):
+    """A checkpoint lacking the meta key resumes with the 1000 default.
+
+    Pre-feature checkpoints have no ``recency_visits_per_bin`` entry in
+    ``/meta``. Resume must fall back to ``meta.get(..., 1000)`` rather
+    than raising a ``KeyError``. The meta is stored as HDF5 attributes
+    on the ``meta`` group (see ``history.write_hdf5``), so deleting the
+    attribute simulates a pre-feature file.
+    """
+    import h5py
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    with h5py.File(cp, "r+") as f:
+        assert "recency_visits_per_bin" in f["meta"].attrs
+        del f["meta"].attrs["recency_visits_per_bin"]
+
+    resumed = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    assert resumed._recency_visits_per_bin == 1000
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._recency_visits_per_bin == 1000
+
+
+def test_resume_rejects_non_integer_recency_visits_per_bin_metadata(tmp_path):
+    """A non-integer recency timescale in meta fails loudly on resume.
+
+    Resume routes the saved ``recency_visits_per_bin`` through the same
+    strict validator used at construction, so a corrupted or hand-edited
+    checkpoint carrying a non-integer timescale raises rather than
+    silently truncating (as a bare ``int(2.5)`` would).
+    """
+    import h5py
+    import pytest
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    with h5py.File(cp, "r+") as f:
+        f["meta"].attrs["recency_visits_per_bin"] = 2.5
+
+    with pytest.raises(ValueError, match="positive integer"):
+        WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce()
+        )
+
+
+def test_recency_flatness_populates_from_real_mc_steps():
+    """Real MC steps drive recency_flatness to a non-None value in [0, 1].
+
+    The other recency tests call ``_record_recency_visit`` by hand; this
+    one exercises the production wiring end-to-end (``_update_entropy`` ->
+    ``_record_recency_visit`` -> ``recency_effective_weights`` ->
+    ``per_window_stats``). A window mid-exploration can legitimately
+    report 0.0 (a known bin with no recent visit), so the contract is
+    non-None and bounded, not strictly positive.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(e0 - 100.0, e0), (e0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=100,
+        random_seed=0,
+    )
+    pt.run(n_cycles=10)
+    stats = pt.pool.per_window_stats()
+    rf_values = [s["recency_flatness"] for s in stats]
+    assert any(v is not None for v in rf_values)
+    for v in rf_values:
+        assert v is None or 0.0 <= v <= 1.0
 
 
 def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
@@ -779,6 +969,78 @@ def test_wl_pt_n_walkers_per_window_wrong_length_raises():
             random_seed=0,
             n_walkers_per_window=[2, 2, 2],
         )
+
+
+def test_wl_pt_threads_recency_visits_per_bin_to_bare_replicas():
+    """recency_visits_per_bin reaches every W=1 replica's ensemble."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    for slot in pt.pool.replicas:
+        assert slot.ensemble._recency_visits_per_bin == 250
+
+
+def test_wl_pt_threads_recency_visits_per_bin_to_window_groups():
+    """recency_visits_per_bin reaches every walker in a W>1 window group."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+        recency_visits_per_bin=250,
+    )
+    for slot in pt.pool.replicas:
+        for walker in slot._replicas:
+            assert walker.ensemble._recency_visits_per_bin == 250
+
+
+def test_wl_pt_recency_visits_per_bin_validated_at_orchestrator():
+    """A non-positive recency_visits_per_bin raises at construction."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    with pytest.raises(ValueError, match="recency_visits_per_bin"):
+        WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+            energy_spacing=0.1,
+            block_size=5,
+            random_seed=0,
+            recency_visits_per_bin=0,
+        )
+
+
+def test_wl_pt_checkpoint_meta_records_recency_visits_per_bin():
+    """recency_visits_per_bin is captured in the checkpoint metadata."""
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    assert pt._checkpoint_meta()["recency_visits_per_bin"] == 250
 
 
 def test_wl_pt_process_pool_accepts_n_walkers_per_window():

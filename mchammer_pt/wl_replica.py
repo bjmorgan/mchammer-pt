@@ -32,7 +32,13 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
-from .wl_coordinator import CoordinatorPlan, Phase, Schedule, WalkerPostBlockState
+from .wl_coordinator import (
+    CoordinatorPlan,
+    Phase,
+    Schedule,
+    WalkerPostBlockState,
+    _min_over_mean,
+)
 from .wl_ensemble import CoordinatedWangLandauEnsemble
 
 _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
@@ -43,6 +49,7 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
         "energy_limit_left",
         "energy_limit_right",
         "random_seed",
+        "recency_visits_per_bin",
         "dc_filename",
     }
 )
@@ -190,6 +197,8 @@ class WangLandauReplica:
         ensemble_kwargs: extra kwargs forwarded to ensemble construction.
             Reserved names (see `_RESERVED_ENSEMBLE_KWARGS`) cannot
             appear here — they are set by the wrapper.
+        recency_visits_per_bin: EWMA recency window forwarded to the
+            ensemble's recency-flatness diagnostic.
         cluster_expansion_path: same semantics as
             `mchammer_pt.replica.Replica`.
 
@@ -212,6 +221,7 @@ class WangLandauReplica:
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        recency_visits_per_bin: int = 1000,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._energy_spacing = float(energy_spacing)
@@ -244,7 +254,8 @@ class WangLandauReplica:
                 f"arguments (structure/calculator from "
                 f"cluster_expansion+atoms; energy_spacing, "
                 f"energy_limit_left, energy_limit_right, "
-                f"random_seed from their dedicated parameters; "
+                f"random_seed, recency_visits_per_bin from their "
+                f"dedicated parameters; "
                 f"dc_filename is always pinned to None to disable "
                 f"periodic on-disk writes)."
             )
@@ -260,6 +271,7 @@ class WangLandauReplica:
                 energy_limit_right=self._energy_limit_right,
                 random_seed=int(random_seed),
                 dc_filename=None,
+                recency_visits_per_bin=recency_visits_per_bin,
                 **extra,
             )
             self._rng_state = random.getstate()
@@ -496,6 +508,7 @@ class WangLandauReplica:
 
         Returns ``fill_factor``, ``halvings``, ``histogram``,
         ``bins_visited``, ``bins_filled``, ``bins_known``,
+        ``recency_flatness``, ``schedule``,
         ``converged``. For a
         single-walker replica ``flatness_mode`` and
         ``per_walker_flat_min`` are omitted (the progress reporter
@@ -523,6 +536,8 @@ class WangLandauReplica:
             "bins_visited": len(e._visited_bins),
             "bins_filled": sum(1 for c in histogram.values() if c > 0),
             "bins_known": len(histogram),
+            "recency_flatness": _min_over_mean(e.recency_effective_weights()),
+            "schedule": self.schedule,
             "converged": self.converged,
             "phase": self.phase,
         }
@@ -720,6 +735,7 @@ class WangLandauReplica:
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        recency_visits_per_bin: int = 1000,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> WangLandauReplica:
@@ -733,6 +749,7 @@ class WangLandauReplica:
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            recency_visits_per_bin=recency_visits_per_bin,
             cluster_expansion_path=cluster_expansion_path,
         )
         replica.restore_state(container, sites_by_species=sites_by_species)

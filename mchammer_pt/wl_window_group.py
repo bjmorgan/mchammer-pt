@@ -17,6 +17,7 @@ from .wl_coordinator import (
     _compute_filled_bins,
     _compute_per_walker_breakdown,
     _compute_per_walker_flat_min,
+    _compute_recency_flatness,
     merge_entropies,
 )
 from .wl_replica import WangLandauReplica
@@ -252,6 +253,13 @@ class WangLandauWindowGroup:
             resolving a single ``bins_filled`` here.
             ``per_walker_breakdown`` is a per-walker list of
             ``{"filled", "known", "flat_min"}``.
+            ``recency_flatness_pooled`` and
+            ``recency_flatness_per_walker`` are the two candidate
+            recency-flatness values from the per-walker EWMA weights
+            (summed-then-min/mean vs. min over walkers' min/mean); the
+            pool picks one according to its ``flatness_mode`` rather
+            than the group resolving a single ``recency_flatness``
+            here. ``schedule`` is the group's shared WL schedule.
             ``flatness_mode`` is not included here; the pool injects
             it (pool-level policy). ``phase`` is the current WL phase
             (``"halving"`` or ``"1_over_t"``), taken from the first
@@ -266,6 +274,9 @@ class WangLandauWindowGroup:
                 combined_hist[k] = combined_hist.get(k, 0) + v
             visited_union |= r.ensemble._visited_bins
         per_walker_flat_min = _compute_per_walker_flat_min(histograms)
+        recency_weights = [
+            r.ensemble.recency_effective_weights() for r in self._replicas
+        ]
         return {
             "fill_factor": float(e0._fill_factor),
             "halvings": max(0, len(e0._fill_factor_history) - 1),
@@ -279,6 +290,13 @@ class WangLandauWindowGroup:
             "bins_known": len(combined_hist),
             "converged": self.converged,
             "per_walker_flat_min": per_walker_flat_min,
+            "recency_flatness_pooled": _compute_recency_flatness(
+                recency_weights, "pooled"
+            ),
+            "recency_flatness_per_walker": _compute_recency_flatness(
+                recency_weights, "per_walker"
+            ),
+            "schedule": self.schedule,
             "phase": self.phase,
         }
 

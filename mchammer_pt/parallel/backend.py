@@ -209,6 +209,13 @@ class WangLandauPool(ReplicaPool, Protocol):
         * ``"converged"`` (bool): whether this window has converged.
         * ``"phase"`` (str): current WL phase, ``"halving"`` or
           ``"1_over_t"``.
+        * ``"recency_flatness"`` (float | None): ``min / mean`` over
+          known bins of an EWMA recency-weighted visit histogram,
+          measuring current sampling uniformity. The schedule-aware
+          progress display shows it for ``1_over_t`` windows. ``None``
+          before any bin has usable recent weight.
+        * ``"schedule"`` (str): the WL schedule driving the window,
+          ``"halving"`` or ``"1_over_t"``.
 
         Multi-walker windows additionally carry:
 
