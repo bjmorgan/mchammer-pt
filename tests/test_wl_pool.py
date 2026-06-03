@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from icet import ClusterExpansion
 
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from mchammer_pt.parallel.processes import (
@@ -11,7 +12,11 @@ from mchammer_pt.parallel.processes import (
     _merge_per_window_stats,
 )
 from tests._in_process_worker import InProcessWorkerConn
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+from tests._wl_fixtures import (
+    distinct_in_window_pair,
+    make_wl_atoms,
+    make_wl_ce,
+)
 
 
 def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
@@ -1350,3 +1355,131 @@ def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path)
             _, conn = slot.workers[0]
             got = request(conn, ("GET_ENTROPY",), i)
             assert got == {0: float(i), 1: float(i) + 1.0}
+
+
+def _distinct_in_window_pair_for_pool(ce_path):
+    """(a, b, ea, eb) with energies computed under the CE at ce_path."""
+    ce = ClusterExpansion.read(str(ce_path))
+    return distinct_in_window_pair(ce)
+
+
+def test_process_wl_pool_per_walker_initial_atoms_reach_workers(tmp_path):
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        _, c0 = pool._slots[0].workers[0]
+        _, c1 = pool._slots[0].workers[1]
+        e0 = float(request(c0, ("ENERGY",), "w0w0"))
+        e1 = float(request(c1, ("ENERGY",), "w0w1"))
+    assert e0 == pytest.approx(ea)
+    assert e1 == pytest.approx(eb)
+
+
+def test_process_wl_pool_per_walker_length_mismatch_raises(tmp_path):
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, _b, ea, _eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = ea - 1.0, ea + 1.0
+    with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=[[a], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+            n_walkers_per_window=[2, 1],
+        )
+
+
+def test_process_wl_pool_per_walker_out_of_window_raises(tmp_path):
+    """A per-walker structure outside its window is rejected.
+
+    The rejection happens inside the second walker's worker subprocess
+    (``WangLandauReplica`` validates the initial energy) and propagates
+    to the constructor through the STARTUP handshake as a ``RuntimeError``
+    carrying the worker traceback -- a different path from the serial
+    per-walker validation.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    # Narrow window brackets a only; b (walker 1) is outside.
+    lo, hi = ea - 0.5, ea + 0.5
+    assert not (lo < eb < hi)
+    with pytest.raises(RuntimeError, match="outside window"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=[[a, b], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+            n_walkers_per_window=[2, 1],
+        )
+
+
+def test_process_wl_pool_rejects_bare_atoms(tmp_path):
+    """A single bare ``Atoms`` is rejected, mirroring the serial path.
+
+    Without the guard the bare ``Atoms`` would be iterated into per-site
+    ``Atom`` objects by ``list(initial_atoms)`` and surface a confusing
+    ``initial_atoms has N entries`` error.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with pytest.raises(TypeError, match="sequence of Atoms"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=atoms,
+            windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+        )
+
+
+def test_process_wl_pool_broadcast_yields_independent_workers(tmp_path):
+    """A single Atoms broadcast to a W=2 window gives independent workers.
+
+    Each walker spawns its own subprocess from its own AtomsSpec, so
+    mutating one worker's configuration leaves the other untouched.
+    Guards against a future broadcast shortcut that points both walkers
+    at one shared worker.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        _, c0 = pool._slots[0].workers[0]
+        _, c1 = pool._slots[0].workers[1]
+        occ0_before = np.asarray(request(c0, ("GET_OCC",), "w0w0"))
+        occ1_before = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
+        np.testing.assert_array_equal(occ0_before, occ1_before)
+
+        # Mutate walker 0 to b's (in-window) configuration; walker 1
+        # must be unaffected.
+        request(c0, ("SET_OCC", np.asarray(b.numbers, dtype=np.int64)), "w0w0")
+        occ0_after = np.asarray(request(c0, ("GET_OCC",), "w0w0"))
+        occ1_after = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
+    assert not np.array_equal(occ0_after, occ1_after)
+    np.testing.assert_array_equal(occ1_after, occ1_before)

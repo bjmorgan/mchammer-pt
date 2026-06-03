@@ -51,6 +51,7 @@ from ..wl_ensemble import (
     CoordinatedWangLandauEnsemble,
     _validate_recency_visits_per_bin,
 )
+from ..wl_initial_structures import expand_initial_structures
 from ..wl_merge_diagnostics import MergeEvent
 from ..wl_replica import WangLandauReplica
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
@@ -703,9 +704,13 @@ class ProcessWangLandauPool:
 
     Args:
         ce_path: path to a CE file readable by `ClusterExpansion.read`.
-        initial_atoms: one starting structure per window. Single-Atoms
-            broadcast is not supported (every window needs an initial
-            configuration whose energy lies in that window).
+        initial_atoms: one entry per window. Each entry is either a
+            single ``Atoms`` (broadcast: every walker in that window
+            starts from a copy) or a ``Sequence[Atoms]`` of length
+            ``n_walkers_per_window`` for that window (one per walker).
+            Every structure's energy must lie inside its window. A bare
+            ``Atoms`` for the whole argument is rejected (every window
+            needs its own initial configuration).
         windows: per-replica energy windows.
         energy_spacing: bin size shared across replicas.
         seeds: one random seed per window.
@@ -732,7 +737,7 @@ class ProcessWangLandauPool:
     def __init__(
         self,
         ce_path: Path | str,
-        initial_atoms: Sequence[Atoms],
+        initial_atoms: Sequence[Atoms | Sequence[Atoms]],
         windows: Sequence[tuple[float | None, float | None]],
         energy_spacing: float,
         seeds: Sequence[int],
@@ -762,6 +767,14 @@ class ProcessWangLandauPool:
             (lo, hi) for lo, hi in windows
         ]
         seeds_list = list(seeds)
+        if isinstance(initial_atoms, Atoms):
+            raise TypeError(
+                "ProcessWangLandauPool requires a sequence of Atoms "
+                "(one per window). Each window needs an initial "
+                "configuration whose energy lies in that window; there "
+                "is no general way to produce one from a single "
+                "starting structure."
+            )
         atoms_list = list(initial_atoms)
         if len(atoms_list) != len(windows_list):
             raise ValueError(
@@ -786,7 +799,11 @@ class ProcessWangLandauPool:
             )
         self._windows: list[tuple[float | None, float | None]] = windows_list
         self._energy_spacing = float(energy_spacing)
-        atoms_specs = [AtomsSpec.from_atoms(a) for a in atoms_list]
+        walker_atoms = expand_initial_structures(atoms_list, walkers_per_window)
+        walker_specs = [
+            [AtomsSpec.from_atoms(structure) for structure in window]
+            for window in walker_atoms
+        ]
         extra_kwargs: dict[str, Any] = (
             dict(ensemble_kwargs) if ensemble_kwargs else {}
         )
@@ -797,8 +814,8 @@ class ProcessWangLandauPool:
         # slots in self._slots that shutdown() then joins.
         ctx = mp.get_context("spawn")
         try:
-            for (lo, hi), window_seed, atoms_spec, W_w in zip(
-                windows_list, seeds_list, atoms_specs, walkers_per_window, strict=True,
+            for (lo, hi), window_seed, window_specs, W_w in zip(
+                windows_list, seeds_list, walker_specs, walkers_per_window, strict=True,
             ):
                 if W_w == 1:
                     walker_seeds = [int(window_seed)]
@@ -811,7 +828,9 @@ class ProcessWangLandauPool:
 
                 workers: list[tuple[mp.process.BaseProcess, Connection]] = []
                 try:
-                    for w_seed in walker_seeds:
+                    for w_seed, atoms_spec in zip(
+                        walker_seeds, window_specs, strict=True
+                    ):
                         parent_conn, child_conn = ctx.Pipe(duplex=True)
                         builder = WLBuilder(
                             ce_path=str(ce_path),

@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+from mchammer_pt.wl import WangLandauParallelTempering
+from tests._wl_fixtures import (
+    distinct_in_window_pair,
+    make_wl_atoms,
+    make_wl_ce,
+)
 
 
 def _initial_energy():
@@ -1768,3 +1773,115 @@ def test_wl_pt_checkpoint_round_trip_mixed_walkers_per_window(tmp_path):
     assert np.all(np.isfinite(resumed.pool.current_energies()))
     for wr in resumed.results():
         assert wr.get_entropy() is not None
+
+
+def _distinct_in_window_pair():
+    """Return (ce, a, b, ea, eb) for the serial per-walker tests.
+
+    Thin wrapper over :func:`tests._wl_fixtures.distinct_in_window_pair`
+    that also returns the in-memory CE the energies were computed under.
+    """
+    ce = make_wl_ce()
+    a, b, ea, eb = distinct_in_window_pair(ce)
+    return ce, a, b, ea, eb
+
+
+def test_wl_pt_serial_per_walker_structures_reach_replicas():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    group = pt._pool._replicas[0]  # WangLandauWindowGroup (W=2)
+    assert group._replicas[0].current_energy() == pytest.approx(ea)
+    assert group._replicas[1].current_energy() == pytest.approx(eb)
+
+
+def test_wl_pt_serial_broadcast_yields_independent_walkers():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    group = pt._pool._replicas[0]
+    r0, r1 = group._replicas[0], group._replicas[1]
+    assert r0 is not r1
+    np.testing.assert_array_equal(
+        r0.current_occupations(), r1.current_occupations()
+    )
+    # Mutate walker 0 to b's (in-window) configuration; walker 1 unchanged.
+    r0.set_occupations(b.numbers)
+    assert not np.array_equal(
+        r0.current_occupations(), r1.current_occupations()
+    )
+
+
+def test_wl_pt_serial_per_walker_length_mismatch_raises():
+    ce, a, _b, ea, _eb = _distinct_in_window_pair()
+    lo, hi = ea - 1.0, ea + 1.0
+    with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
+        WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[[a], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=0,
+            n_walkers_per_window=[2, 1],
+        )
+
+
+def test_wl_pt_serial_per_walker_out_of_window_raises():
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    # Narrow window brackets a only; b is outside.
+    lo, hi = ea - 0.5, ea + 0.5
+    assert not (lo < eb < hi)
+    with pytest.raises(ValueError, match="outside window"):
+        WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[[a, b], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            block_size=10,
+            random_seed=0,
+            n_walkers_per_window=[2, 1],
+        )
+
+
+def test_wl_pt_serial_per_walker_start_checkpoints_and_resumes(tmp_path):
+    ce, a, b, ea, eb = _distinct_in_window_pair()
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    ckpt = tmp_path / "rewl.h5"
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=[2, 1],
+    )
+    pt.run(3)
+    pt.save_checkpoint(ckpt)
+
+    with pytest.warns(UserWarning):
+        pt_b = WangLandauParallelTempering.resume(ckpt, cluster_expansion=ce)
+    # Structurally resumes: one WindowResult per window, walker counts
+    # preserved (window 0 has 2 walkers, window 1 has 1).
+    results = pt_b.results()
+    assert len(results) == 2
+    assert len(results[0].containers) == 2
+    assert len(results[1].containers) == 1
+    pt_b.run(3)  # continues without error
