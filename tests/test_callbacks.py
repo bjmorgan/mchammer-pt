@@ -236,7 +236,7 @@ def test_one_over_t_row_shows_recency_flatness():
             return [{
                 "fill_factor": 1e-6, "halvings": 5, "histogram": {0: 0, 1: 9},
                 "bins_filled": 1, "bins_known": 2, "converged": False,
-                "phase": "1/t", "schedule": "1_over_t",
+                "phase": "1_over_t", "schedule": "1_over_t",
                 "recency_flatness": 0.873,
             }]
 
@@ -255,7 +255,7 @@ def test_one_over_t_row_shows_dash_when_recency_none():
             return [{
                 "fill_factor": 5e-6, "halvings": 5, "histogram": {0: 5, 1: 5},
                 "bins_filled": 2, "bins_known": 2, "converged": False,
-                "phase": "1/t", "schedule": "1_over_t",
+                "phase": "1_over_t", "schedule": "1_over_t",
                 "recency_flatness": None,
             }]
 

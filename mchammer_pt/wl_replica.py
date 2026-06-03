@@ -271,7 +271,7 @@ class WangLandauReplica:
                 energy_limit_right=self._energy_limit_right,
                 random_seed=int(random_seed),
                 dc_filename=None,
-                recency_visits_per_bin=int(recency_visits_per_bin),
+                recency_visits_per_bin=recency_visits_per_bin,
                 **extra,
             )
             self._rng_state = random.getstate()

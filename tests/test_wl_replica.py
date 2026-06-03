@@ -73,6 +73,12 @@ def test_replica_forwards_recency_visits_per_bin_to_ensemble():
     assert replica.ensemble._recency_visits_per_bin == 250
 
 
+def test_replica_rejects_non_integer_recency_visits_per_bin():
+    """A non-integer recency window reaching the replica is rejected by the ensemble."""
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_wl_replica(recency_visits_per_bin=2.5)
+
+
 def test_recency_visits_per_bin_reserved_against_ensemble_kwargs():
     """Passing recency_visits_per_bin via ensemble_kwargs is rejected.
 

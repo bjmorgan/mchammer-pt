@@ -122,6 +122,14 @@ def test_recency_visits_per_bin_rejects_non_integer():
     assert isinstance(e._recency_visits_per_bin, int)
 
 
+def test_recency_visits_per_bin_rejects_bool():
+    """A bool recency window is rejected, not coerced to 0 or 1."""
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=True)
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=False)
+
+
 def test_recency_effective_weights_keys_match_known_bins():
     """Weights are keyed by known bins and start at zero."""
     e = _make_ensemble()
