@@ -746,6 +746,11 @@ class ProcessWangLandauPool:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
+        if int(recency_visits_per_bin) <= 0:
+            raise ValueError(
+                f"recency_visits_per_bin must be a positive integer; "
+                f"got {recency_visits_per_bin!r}"
+            )
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._recency_visits_per_bin: int = int(recency_visits_per_bin)

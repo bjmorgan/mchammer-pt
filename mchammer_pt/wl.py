@@ -424,7 +424,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         """Return the WL-specific checkpoint metadata.
 
         Contains the window edges, energy spacing, flatness mode,
-        merge cadence, and walkers-per-window boundary array.
+        merge cadence, recency visits per bin, and walkers-per-window
+        boundary array.
         """
         return {
             "windows": _windows_to_array(self._windows),
@@ -867,8 +868,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand. ``flatness_mode`` and ``merge_cadence``
-        have the same meaning as on
+        `windows` by hand. ``flatness_mode``, ``merge_cadence``, and
+        ``recency_visits_per_bin`` have the same meaning as on
         :class:`WangLandauParallelTempering`.
         """
         from mchammer.ensembles.wang_landau_ensemble import (
@@ -934,8 +935,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
-        ``flatness_mode`` and ``merge_cadence`` have the same meaning
-        as on :class:`WangLandauParallelTempering`.
+        ``flatness_mode``, ``merge_cadence``, and
+        ``recency_visits_per_bin`` have the same meaning as on
+        :class:`WangLandauParallelTempering`.
         """
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
