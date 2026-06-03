@@ -36,7 +36,10 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
 )
-from .wl_ensemble import CoordinatedWangLandauEnsemble
+from .wl_ensemble import (
+    CoordinatedWangLandauEnsemble,
+    _validate_recency_visits_per_bin,
+)
 from .wl_merge_diagnostics import MergeEvent
 from .wl_replica import WangLandauReplica, WangLandauSlot
 from .wl_result import WindowResult
@@ -264,11 +267,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
             raise ValueError(f"block_size must be >= 1; got {block_size}")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
-        if int(recency_visits_per_bin) <= 0:
-            raise ValueError(
-                f"recency_visits_per_bin must be a positive integer; "
-                f"got {recency_visits_per_bin!r}"
-            )
+        recency_visits_per_bin = _validate_recency_visits_per_bin(
+            recency_visits_per_bin
+        )
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -363,7 +364,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         self._energy_spacing = float(energy_spacing)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
-        self._recency_visits_per_bin: int = int(recency_visits_per_bin)
+        self._recency_visits_per_bin: int = recency_visits_per_bin
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)

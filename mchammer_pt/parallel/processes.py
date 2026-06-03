@@ -47,7 +47,10 @@ from ..wl_coordinator import (
     decide_block_actions,
     merge_entropies,
 )
-from ..wl_ensemble import CoordinatedWangLandauEnsemble
+from ..wl_ensemble import (
+    CoordinatedWangLandauEnsemble,
+    _validate_recency_visits_per_bin,
+)
 from ..wl_merge_diagnostics import MergeEvent
 from ..wl_replica import WangLandauReplica
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
@@ -746,14 +749,11 @@ class ProcessWangLandauPool:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
-        if int(recency_visits_per_bin) <= 0:
-            raise ValueError(
-                f"recency_visits_per_bin must be a positive integer; "
-                f"got {recency_visits_per_bin!r}"
-            )
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
-        self._recency_visits_per_bin: int = int(recency_visits_per_bin)
+        self._recency_visits_per_bin: int = _validate_recency_visits_per_bin(
+            recency_visits_per_bin
+        )
         self._merge_events: list[MergeEvent] = []
         self._flatness_limit: float = float(
             (ensemble_kwargs or {}).get("flatness_limit", 0.8)

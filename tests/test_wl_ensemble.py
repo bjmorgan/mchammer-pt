@@ -112,6 +112,16 @@ def test_recency_visits_per_bin_validated_positive():
         _make_ensemble(recency_visits_per_bin=-5)
 
 
+def test_recency_visits_per_bin_rejects_non_integer():
+    """A non-integer recency window is rejected, not silently truncated."""
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=2.5)
+    # An integer-valued float is accepted.
+    e = _make_ensemble(recency_visits_per_bin=1000.0)
+    assert e._recency_visits_per_bin == 1000
+    assert isinstance(e._recency_visits_per_bin, int)
+
+
 def test_recency_effective_weights_keys_match_known_bins():
     """Weights are keyed by known bins and start at zero."""
     e = _make_ensemble()

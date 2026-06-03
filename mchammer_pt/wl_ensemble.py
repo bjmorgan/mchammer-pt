@@ -8,6 +8,21 @@ import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
 
 
+def _validate_recency_visits_per_bin(value: int) -> int:
+    """Return ``value`` as an int, or raise if it is not a positive integer.
+
+    Rejects non-integer values (e.g. ``2.5``) rather than silently
+    truncating them, so the error message's promise of an integer holds.
+    Integer-valued floats such as ``1e3`` are accepted.
+    """
+    if int(value) != value or int(value) <= 0:
+        raise ValueError(
+            f"recency_visits_per_bin must be a positive integer; "
+            f"got {value!r}"
+        )
+    return int(value)
+
+
 class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     """`WangLandauEnsemble` with internal halving suppressed.
 
@@ -22,11 +37,7 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     def __init__(
         self, *args: Any, recency_visits_per_bin: int = 1000, **kwargs: Any
     ) -> None:
-        if int(recency_visits_per_bin) <= 0:
-            raise ValueError(
-                f"recency_visits_per_bin must be a positive integer; "
-                f"got {recency_visits_per_bin!r}"
-            )
+        recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
         super().__init__(*args, **kwargs)
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on
@@ -35,7 +46,7 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # EWMA recency state: per-bin weight and the step it was last
         # updated. Decayed lazily (only the visited bin is touched per
         # step; all known bins are decayed at read time).
-        self._recency_visits_per_bin: int = int(recency_visits_per_bin)
+        self._recency_visits_per_bin: int = recency
         self._recent_weight: dict[int, float] = {}
         self._recent_last_step: dict[int, int] = {}
 
