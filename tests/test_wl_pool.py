@@ -292,6 +292,7 @@ def test_process_wl_pool_stores_recency_visits_per_bin(tmp_path):
 
 def test_process_pool_rejects_nonpositive_recency_visits_per_bin(tmp_path):
     import pytest
+
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
     ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
     with pytest.raises(ValueError, match="recency_visits_per_bin"):
