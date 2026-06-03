@@ -607,6 +607,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
+        recency_visits_per_bin = int(meta.get("recency_visits_per_bin", 1000))
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -635,6 +636,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         ensemble_cls=ensemble_cls,
                         ensemble_kwargs=ensemble_kwargs,
                         sites_by_species=replica_extras[flat_idx]["sites_by_species"],
+                        recency_visits_per_bin=recency_visits_per_bin,
                     )
                 )
                 flat_idx += 1
@@ -702,6 +704,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool=pool,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            recency_visits_per_bin=recency_visits_per_bin,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -799,6 +802,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = str(
             meta["merge_cadence"]
         )  # type: ignore[assignment]
+        recency_visits_per_bin = int(meta.get("recency_visits_per_bin", 1000))
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -819,6 +823,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             n_walkers_per_window=walkers_per_window,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            recency_visits_per_bin=recency_visits_per_bin,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]

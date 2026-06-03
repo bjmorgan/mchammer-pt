@@ -504,6 +504,7 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
         energy_spacing=0.1,
         block_size=10,
         random_seed=42,
+        recency_visits_per_bin=250,
     )
     pt_a.run(n_cycles=2)
     cp = tmp_path / "wl.hdf5"
@@ -513,6 +514,9 @@ def test_wl_pt_resume_process_pool_round_trips(tmp_path):
         cp, cluster_expansion=make_wl_ce()
     )
     try:
+        # recency_visits_per_bin is read from meta and threaded into the
+        # process pool reconstruction without the caller re-specifying it.
+        assert pt_b._recency_visits_per_bin == 250
         history = pt_b.run(n_cycles=2)
         assert history.energies_per_cycle.shape == (3, 2)
     finally:
@@ -543,6 +547,40 @@ def test_wl_pt_checkpoint_preserves_flatness_mode_and_merge_cadence(tmp_path):
     )
     assert pt2._flatness_mode == "per_walker"
     assert pt2._merge_cadence == "never"
+
+
+def test_resume_threads_recency_visits_per_bin_from_metadata(tmp_path):
+    """Resume reads recency_visits_per_bin from meta, not the caller.
+
+    The EWMA per-bin weights are not persisted; the diagnostic
+    re-accumulates from empty state on resume. For that re-accumulation
+    to use the same timescale it had before the interruption, resume
+    must thread the saved ``recency_visits_per_bin`` into the
+    reconstructed ensembles and orchestrator without the caller
+    re-specifying it.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    e0 = _initial_energy()
+
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        recency_visits_per_bin=250,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    resumed = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce()
+    )
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._recency_visits_per_bin == 250
+    assert resumed._recency_visits_per_bin == 250
 
 
 def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
