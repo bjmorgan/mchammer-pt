@@ -362,7 +362,7 @@ class WangLandauProgressPrinter:
             f"  {'win':>3s}  {'fill_factor':>11s}  "
             f"{'halvings':>8s}  {'phase':>5s}  "
             f"{'bins (fill/known)':>17s}  "
-            f"{'flat_min':>8s}  {'converged':>9s}"
+            f"{'flatness':>8s}  {'converged':>9s}"
         )
         rows: list[str] = []
         for i, s in enumerate(stats):
@@ -375,21 +375,27 @@ class WangLandauProgressPrinter:
             hist = s["histogram"]
             bins_str = f"{s['bins_filled']}/{s['bins_known']}"
 
-            # flat_min reports the quantity the halve gate is actually
-            # checking. Under flatness_mode='per_walker' the gate uses
-            # the minimum over walkers of each walker's flat_min, not
-            # the pooled-summed flat_min. Stats from single-walker
-            # slots omit the mode; fall back to the pooled computation,
-            # which is exact for n_walkers == 1.
-            mode = s.get("flatness_mode")
-            if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
-                flat_str = f"{s['per_walker_flat_min']:.3f}"
-            elif hist:
-                counts = np.array(list(hist.values()), dtype=float)
-                mean_c = float(counts.mean())
-                flat_str = f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
+            if s.get("schedule") == "1_over_t":
+                rf = s.get("recency_flatness")
+                flat_str = f"{rf:.3f}" if rf is not None else "--"
             else:
-                flat_str = "--"
+                # flat_min reports the quantity the halve gate is
+                # actually checking. Under flatness_mode='per_walker' the
+                # gate uses the minimum over walkers of each walker's
+                # flat_min, not the pooled-summed flat_min. Stats from
+                # single-walker slots omit the mode; fall back to the
+                # pooled computation, which is exact for n_walkers == 1.
+                mode = s.get("flatness_mode")
+                if mode == "per_walker" and s.get("per_walker_flat_min") is not None:
+                    flat_str = f"{s['per_walker_flat_min']:.3f}"
+                elif hist:
+                    counts = np.array(list(hist.values()), dtype=float)
+                    mean_c = float(counts.mean())
+                    flat_str = (
+                        f"{counts.min() / mean_c:.3f}" if mean_c > 0 else "--"
+                    )
+                else:
+                    flat_str = "--"
 
             conv_str = "yes" if s["converged"] else "no"
             rows.append(
