@@ -210,9 +210,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: ``"at_halve"`` (default; Vogel cadence: merge
             entropies at each collective halve) or ``"never"`` (no
             mid-run merge).
-        recency_visits_per_bin: EWMA timescale (default 1000) forwarded
-            to every replica's ensemble for the recency-flatness
-            diagnostic. Must be a positive integer.
+        recency_visits_per_bin: EWMA timescale for the recency-flatness
+            diagnostic, in expected visits per bin (the decay constant
+            is roughly ``recency_visits_per_bin * N_bins`` MC steps).
+            Default 1000; larger gives a longer, smoother averaging
+            window. Must be a positive integer. Recorded in the
+            checkpoint and adopted from there on resume.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
