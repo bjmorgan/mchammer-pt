@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from mchammer.calculators import ClusterExpansionCalculator
 
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from mchammer_pt.parallel.processes import (
@@ -1350,3 +1351,66 @@ def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path)
             _, conn = slot.workers[0]
             got = request(conn, ("GET_ENTROPY",), i)
             assert got == {0: float(i), 1: float(i) + 1.0}
+
+
+def _distinct_in_window_pair_for_pool(ce_path):
+    """(a, b, ea, eb): two same-composition configs with separated
+    energies, sharing the CE written at ce_path."""
+    ce = make_wl_ce()
+    a = make_wl_atoms()
+    b = a.copy()
+    symbols = list(b.get_chemical_symbols())
+    i_ag = symbols.index("Ag")
+    i_au = symbols.index("Au")
+    symbols[i_ag], symbols[i_au] = symbols[i_au], symbols[i_ag]
+    b.set_chemical_symbols(symbols)
+
+    def energy(at):
+        return float(
+            ClusterExpansionCalculator(at, ce).calculate_total(
+                occupations=at.numbers
+            )
+        )
+
+    ea, eb = energy(a), energy(b)
+    assert abs(ea - eb) > 0.5, (ea, eb)
+    return a, b, ea, eb
+
+
+def test_process_wl_pool_per_walker_initial_atoms_reach_workers(tmp_path):
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[[a, b], a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        _, c0 = pool._slots[0].workers[0]
+        _, c1 = pool._slots[0].workers[1]
+        e0 = float(request(c0, ("ENERGY",), "w0w0"))
+        e1 = float(request(c1, ("ENERGY",), "w0w1"))
+    assert e0 == pytest.approx(ea)
+    assert e1 == pytest.approx(eb)
+
+
+def test_process_wl_pool_per_walker_length_mismatch_raises(tmp_path):
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, _b, ea, _eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = ea - 1.0, ea + 1.0
+    with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=[[a], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+            n_walkers_per_window=[2, 1],
+        )
