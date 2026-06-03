@@ -72,3 +72,17 @@ def test_bytes_element_rejected_with_type_name():
     a = _atoms()
     with pytest.raises(ValueError, match=r"atoms\[1\] is bytes, not an Atoms"):
         expand_initial_structures([a, b"raw"], [1, 1])
+
+
+def test_non_iterable_element_rejected_as_valueerror():
+    # A non-iterable (int) must raise the consistent ValueError, not a
+    # raw "object is not iterable" TypeError from list().
+    a = _atoms()
+    with pytest.raises(ValueError, match=r"atoms\[1\] is int, not an Atoms"):
+        expand_initial_structures([a, 42], [1, 1])
+
+
+def test_none_element_rejected_as_valueerror():
+    a = _atoms()
+    with pytest.raises(ValueError, match=r"atoms\[0\] is NoneType, not an Atoms"):
+        expand_initial_structures([None, a], [1, 1])

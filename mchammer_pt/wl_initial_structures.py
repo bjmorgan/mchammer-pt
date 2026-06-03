@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from ase import Atoms
 
@@ -36,7 +36,9 @@ def expand_initial_structures(
         ``walkers_per_window[w]``.
 
     Raises:
-        ValueError: a per-window sequence is empty, contains a
+        ValueError: a per-window element is neither an ``Atoms`` nor a
+            sequence of ``Atoms`` (e.g. a ``str`` filename, or a
+            non-iterable); or a per-window sequence is empty, contains a
             non-``Atoms`` element, or has a length other than that
             window's walker count.
     """
@@ -47,12 +49,13 @@ def expand_initial_structures(
         if isinstance(element, Atoms):
             out.append([element] * n_walkers)
             continue
-        if isinstance(element, (str, bytes)):
-            # A str/bytes is technically a Sequence, so without this
-            # guard it would be exploded into its characters/bytes by
-            # ``list()`` below and surface a misleading length error.
-            # The realistic mistake is passing a filename instead of a
-            # loaded structure.
+        if isinstance(element, (str, bytes)) or not isinstance(element, Iterable):
+            # str/bytes are iterable but would explode into their
+            # characters/bytes via ``list()`` and surface a misleading
+            # length error; non-iterables (int, None, ...) would raise a
+            # raw ``TypeError`` from ``list()``. Both are the same
+            # shape mistake -- the realistic one being a filename or a
+            # single object where a sequence of Atoms was meant.
             raise ValueError(
                 f"atoms[{w}] is {type(element).__name__}, not an Atoms or a "
                 f"sequence of Atoms; pass a single Atoms to broadcast or a "
