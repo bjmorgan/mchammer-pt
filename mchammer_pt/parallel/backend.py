@@ -210,11 +210,10 @@ class WangLandauPool(ReplicaPool, Protocol):
         * ``"phase"`` (str): current WL phase, ``"halving"`` or
           ``"1_over_t"``.
         * ``"recency_flatness"`` (float | None): ``min / mean`` over
-          known bins of an EWMA recency-weighted visit histogram. Tracks
-          current sampling uniformity; the schedule-aware progress
-          display shows it for ``1_over_t`` windows, where the
-          cumulative ``flat_min`` is uninformative. ``None`` before any
-          bin has usable recent weight.
+          known bins of an EWMA recency-weighted visit histogram,
+          measuring current sampling uniformity. The schedule-aware
+          progress display shows it for ``1_over_t`` windows. ``None``
+          before any bin has usable recent weight.
         * ``"schedule"`` (str): the WL schedule driving the window,
           ``"halving"`` or ``"1_over_t"``.
 

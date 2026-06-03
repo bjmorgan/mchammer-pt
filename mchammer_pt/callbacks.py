@@ -245,12 +245,12 @@ class WangLandauProgressPrinter:
     last WL halve, which resets each halve, over the bins known so far;
     the union of covered bins under pooled flatness, the intersection
     under per-walker flatness), the schedule-aware ``flatness`` column
-    (under ``halv`` the cumulative gate flatness ``min(H) / mean(H)`` to
-    compare against your ``flatness_limit``; under ``1/t``, where that
-    cumulative ratio is uninformative, the EWMA recency flatness over
-    recent visits, a "converging vs stuck" signal that reads ``--``
-    until it has accumulated enough recent samples), and whether the
-    window has converged.
+    (for a halving-schedule run, the cumulative gate flatness
+    ``min(H) / mean(H)`` to compare against your ``flatness_limit``;
+    for a ``1/t`` (Belardinelli-Pereyra) run, the EWMA recency
+    flatness over recent visits, which tracks current sampling
+    uniformity and reads ``--`` until it has accumulated enough
+    recent samples), and whether the window has converged.
 
     Metrics are read from the live ensemble state via
     ``pool.per_window_stats()``, so they are always current regardless
