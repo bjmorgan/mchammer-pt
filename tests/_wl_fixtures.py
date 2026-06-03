@@ -48,6 +48,40 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
     return atoms
 
 
+def distinct_in_window_pair(
+    ce: ClusterExpansion,
+) -> tuple[Atoms, Atoms, float, float]:
+    """Two same-composition configs with well-separated energies.
+
+    Builds ``a`` from :func:`make_wl_atoms` and ``b`` by swapping the
+    first Ag and first Au atom, then returns ``(a, b, ea, eb)`` with the
+    energies computed under ``ce``. Used by the per-walker REWL tests to
+    give each walker a distinguishable in-window start. The energy-gap
+    assertion guards the callers' window sizing; if it ever fails, swap
+    a nearest-neighbour Ag/Au pair to widen the gap.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    a = make_wl_atoms()
+    b = a.copy()
+    symbols = list(b.get_chemical_symbols())
+    i_ag = symbols.index("Ag")
+    i_au = symbols.index("Au")
+    symbols[i_ag], symbols[i_au] = symbols[i_au], symbols[i_ag]
+    b.set_chemical_symbols(symbols)
+
+    def energy(at: Atoms) -> float:
+        return float(
+            ClusterExpansionCalculator(at, ce).calculate_total(
+                occupations=at.numbers
+            )
+        )
+
+    ea, eb = energy(a), energy(b)
+    assert abs(ea - eb) > 0.5, (ea, eb)
+    return a, b, ea, eb
+
+
 def make_process_wl_pool_w2(tmp_path: Path):
     """ProcessWangLandauPool (in-process workers) with 2 windows x W=2.
 

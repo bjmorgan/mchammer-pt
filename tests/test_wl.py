@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from mchammer.calculators import ClusterExpansionCalculator
 
 from mchammer_pt.wl import WangLandauParallelTempering
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+from tests._wl_fixtures import (
+    distinct_in_window_pair,
+    make_wl_atoms,
+    make_wl_ce,
+)
 
 
 def _initial_energy():
@@ -1772,29 +1775,14 @@ def test_wl_pt_checkpoint_round_trip_mixed_walkers_per_window(tmp_path):
         assert wr.get_entropy() is not None
 
 
-def _energy(ce, atoms):
-    return float(
-        ClusterExpansionCalculator(atoms, ce).calculate_total(
-            occupations=atoms.numbers
-        )
-    )
-
-
 def _distinct_in_window_pair():
-    """Return (ce, a, b, ea, eb): two same-composition configs with
-    distinct, well-separated energies (single nearest-neighbour swap)."""
+    """Return (ce, a, b, ea, eb) for the serial per-walker tests.
+
+    Thin wrapper over :func:`tests._wl_fixtures.distinct_in_window_pair`
+    that also returns the in-memory CE the energies were computed under.
+    """
     ce = make_wl_ce()
-    a = make_wl_atoms()
-    b = a.copy()
-    symbols = list(b.get_chemical_symbols())
-    i_ag = symbols.index("Ag")
-    i_au = symbols.index("Au")
-    symbols[i_ag], symbols[i_au] = symbols[i_au], symbols[i_ag]
-    b.set_chemical_symbols(symbols)
-    ea, eb = _energy(ce, a), _energy(ce, b)
-    # Guard the fixture's own assumption; if this ever fails, swap a
-    # nearest-neighbour Ag/Au pair instead of the first of each.
-    assert abs(ea - eb) > 0.5, (ea, eb)
+    a, b, ea, eb = distinct_in_window_pair(ce)
     return ce, a, b, ea, eb
 
 

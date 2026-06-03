@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from icet import ClusterExpansion
-from mchammer.calculators import ClusterExpansionCalculator
 
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
 from mchammer_pt.parallel.processes import (
@@ -13,7 +12,11 @@ from mchammer_pt.parallel.processes import (
     _merge_per_window_stats,
 )
 from tests._in_process_worker import InProcessWorkerConn
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+from tests._wl_fixtures import (
+    distinct_in_window_pair,
+    make_wl_atoms,
+    make_wl_ce,
+)
 
 
 def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
@@ -1355,27 +1358,9 @@ def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path)
 
 
 def _distinct_in_window_pair_for_pool(ce_path):
-    """(a, b, ea, eb): two same-composition configs with separated
-    energies, sharing the CE written at ce_path."""
+    """(a, b, ea, eb) with energies computed under the CE at ce_path."""
     ce = ClusterExpansion.read(str(ce_path))
-    a = make_wl_atoms()
-    b = a.copy()
-    symbols = list(b.get_chemical_symbols())
-    i_ag = symbols.index("Ag")
-    i_au = symbols.index("Au")
-    symbols[i_ag], symbols[i_au] = symbols[i_au], symbols[i_ag]
-    b.set_chemical_symbols(symbols)
-
-    def energy(at):
-        return float(
-            ClusterExpansionCalculator(at, ce).calculate_total(
-                occupations=at.numbers
-            )
-        )
-
-    ea, eb = energy(a), energy(b)
-    assert abs(ea - eb) > 0.5, (ea, eb)
-    return a, b, ea, eb
+    return distinct_in_window_pair(ce)
 
 
 def test_process_wl_pool_per_walker_initial_atoms_reach_workers(tmp_path):
