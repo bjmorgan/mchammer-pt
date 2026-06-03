@@ -1415,3 +1415,39 @@ def test_process_wl_pool_per_walker_length_mismatch_raises(tmp_path):
             seeds=[0, 1],
             n_walkers_per_window=[2, 1],
         )
+
+
+def test_process_wl_pool_broadcast_yields_independent_workers(tmp_path):
+    """A single Atoms broadcast to a W=2 window gives independent workers.
+
+    Each walker spawns its own subprocess from its own AtomsSpec, so
+    mutating one worker's configuration leaves the other untouched.
+    Guards against a future broadcast shortcut that points both walkers
+    at one shared worker.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        _, c0 = pool._slots[0].workers[0]
+        _, c1 = pool._slots[0].workers[1]
+        occ0_before = np.asarray(request(c0, ("GET_OCC",), "w0w0"))
+        occ1_before = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
+        np.testing.assert_array_equal(occ0_before, occ1_before)
+
+        # Mutate walker 0 to b's (in-window) configuration; walker 1
+        # must be unaffected.
+        request(c0, ("SET_OCC", np.asarray(b.numbers, dtype=np.int64)), "w0w0")
+        occ0_after = np.asarray(request(c0, ("GET_OCC",), "w0w0"))
+        occ1_after = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
+    assert not np.array_equal(occ0_after, occ1_after)
+    np.testing.assert_array_equal(occ1_after, occ1_before)
