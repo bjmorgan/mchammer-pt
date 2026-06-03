@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from icet import ClusterExpansion
 from mchammer.calculators import ClusterExpansionCalculator
 
 from mchammer_pt.parallel._comms import Reply, recv_reply, request
@@ -1356,7 +1357,7 @@ def test_process_pool_finalise_for_reporting_skips_single_walker_slots(tmp_path)
 def _distinct_in_window_pair_for_pool(ce_path):
     """(a, b, ea, eb): two same-composition configs with separated
     energies, sharing the CE written at ce_path."""
-    ce = make_wl_ce()
+    ce = ClusterExpansion.read(str(ce_path))
     a = make_wl_atoms()
     b = a.copy()
     symbols = list(b.get_chemical_symbols())
