@@ -54,17 +54,17 @@ def expand_initial_structures(
                 f"walker (window {w} has {n_walkers}) or a single Atoms "
                 f"to broadcast."
             )
-        for k, structure in enumerate(walkers):
-            if not isinstance(structure, Atoms):
-                raise ValueError(
-                    f"atoms[{w}][{k}] is {type(structure).__name__}, not an "
-                    f"Atoms; each per-walker entry must be an ase.Atoms."
-                )
         if len(walkers) != n_walkers:
             raise ValueError(
                 f"atoms[{w}] has {len(walkers)} structures but window {w} "
                 f"has {n_walkers} walkers; supply exactly one Atoms per "
                 f"walker or a single Atoms to broadcast."
             )
+        for k, structure in enumerate(walkers):
+            if not isinstance(structure, Atoms):
+                raise ValueError(
+                    f"atoms[{w}][{k}] is {type(structure).__name__}, not an "
+                    f"Atoms; each per-walker entry must be an ase.Atoms."
+                )
         out.append(walkers)
     return out

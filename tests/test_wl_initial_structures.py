@@ -31,8 +31,8 @@ def test_per_walker_sequence_returned_in_order():
 def test_mixed_windows_broadcast_and_sequence():
     a, b, c = _atoms("H"), _atoms("He"), _atoms("Li")
     out = expand_initial_structures([a, [b, c]], [2, 2])
-    assert out[0] == [a, a]
-    assert out[1] == [b, c]
+    assert out[0][0] is a and out[0][1] is a
+    assert out[1][0] is b and out[1][1] is c
 
 
 def test_sequence_length_mismatch_raises_naming_window():
@@ -51,3 +51,10 @@ def test_non_atoms_element_raises():
     a = _atoms()
     with pytest.raises(ValueError, match=r"not an Atoms"):
         expand_initial_structures([[a, "nope"]], [2])
+
+
+def test_length_check_precedes_element_type_check():
+    # A wrong-length sequence of non-Atoms still reports the count
+    # mismatch first (the most structurally obvious mistake).
+    with pytest.raises(ValueError, match=r"window 0 has 2 walkers"):
+        expand_initial_structures([["x", "y", "z"]], [2])
