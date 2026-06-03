@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, cast
 
 import numpy as np
@@ -20,6 +21,7 @@ def _validate_recency_visits_per_bin(value: object) -> int:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float, np.integer, np.floating))
+        or not math.isfinite(value)
         or int(value) != value
         or int(value) <= 0
     ):

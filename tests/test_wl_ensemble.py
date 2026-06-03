@@ -130,6 +130,16 @@ def test_recency_visits_per_bin_rejects_bool():
         _make_ensemble(recency_visits_per_bin=False)
 
 
+def test_recency_visits_per_bin_rejects_non_finite():
+    """Non-finite recency windows fail with the consistent error message."""
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=float("inf"))
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=float("nan"))
+    with pytest.raises(ValueError, match="positive integer"):
+        _make_ensemble(recency_visits_per_bin=np.float64("inf"))
+
+
 def test_recency_effective_weights_keys_match_known_bins():
     """Weights are keyed by known bins and start at zero."""
     e = _make_ensemble()
