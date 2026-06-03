@@ -1402,6 +1402,33 @@ def test_process_wl_pool_per_walker_length_mismatch_raises(tmp_path):
         )
 
 
+def test_process_wl_pool_per_walker_out_of_window_raises(tmp_path):
+    """A per-walker structure outside its window is rejected.
+
+    The rejection happens inside the second walker's worker subprocess
+    (``WangLandauReplica`` validates the initial energy) and propagates
+    to the constructor through the STARTUP handshake as a ``RuntimeError``
+    carrying the worker traceback -- a different path from the serial
+    per-walker validation.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    # Narrow window brackets a only; b (walker 1) is outside.
+    lo, hi = ea - 0.5, ea + 0.5
+    assert not (lo < eb < hi)
+    with pytest.raises(RuntimeError, match="outside window"):
+        ProcessWangLandauPool(
+            ce_path=ce_path,
+            initial_atoms=[[a, b], a],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.1,
+            seeds=[0, 1],
+            n_walkers_per_window=[2, 1],
+        )
+
+
 def test_process_wl_pool_rejects_bare_atoms(tmp_path):
     """A single bare ``Atoms`` is rejected, mirroring the serial path.
 
