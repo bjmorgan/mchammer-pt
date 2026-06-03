@@ -82,9 +82,8 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         """EWMA rate ``1 / tau`` with ``tau = recency_visits_per_bin * N``.
 
         ``N`` is the current known-bin count (``len(self._histogram)``,
-        at least 1). ``alpha`` drifts as bins are discovered and
-        stabilises once the window is explored; immaterial for a
-        diagnostic.
+        at least 1), so early in a run the effective averaging window is
+        shorter than its final value because ``N`` is still growing.
         """
         n_bins = max(1, len(self._histogram))
         return 1.0 / (self._recency_visits_per_bin * n_bins)

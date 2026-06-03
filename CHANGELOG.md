@@ -52,8 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (``min / mean`` over known bins, pooled or per-walker by
   ``flatness_mode``) and ``schedule``. The parameter is recorded in the
   checkpoint and adopted from there on resume; the estimate itself is
-  not persisted, so the diagnostic re-accumulates after a resume and
-  reads ``--`` until it has warmed up.
+  not persisted, so the diagnostic re-accumulates after a resume,
+  reading ``--`` only until the first recent visit.
 
 ### Deprecated
 

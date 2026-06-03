@@ -249,8 +249,9 @@ class WangLandauProgressPrinter:
     ``min(H) / mean(H)`` to compare against your ``flatness_limit``;
     for a ``1/t`` (Belardinelli-Pereyra) run, the EWMA recency
     flatness over recent visits, which tracks current sampling
-    uniformity and reads ``--`` until it has accumulated enough
-    recent samples), and whether the window has converged.
+    uniformity and reads ``--`` only before the first recent visit,
+    then a low value climbing as more bins are sampled), and whether
+    the window has converged.
 
     Metrics are read from the live ensemble state via
     ``pool.per_window_stats()``, so they are always current regardless
@@ -380,8 +381,9 @@ class WangLandauProgressPrinter:
             bins_str = f"{s['bins_filled']}/{s['bins_known']}"
 
             if s.get("schedule") == "1_over_t":
-                # Under 1/t the gate no longer consults flat_min, so show
-                # the EWMA recency flatness the BP-switch is tracking.
+                # Under 1/t the cumulative min/mean only ever rises and no
+                # longer reflects current sampling, so show the EWMA
+                # recency flatness (current sampling uniformity) instead.
                 rf = s.get("recency_flatness")
                 flat_str = f"{rf:.3f}" if rf is not None else "--"
             else:
