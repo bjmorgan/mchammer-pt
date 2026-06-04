@@ -106,16 +106,16 @@ def run_multi_run(args: argparse.Namespace) -> int:
     consensus ``energy``/``entropy`` CSV and prints per-pair overlap
     standard deviations to stderr as a join diagnostic.
 
-    A run that produces no data for a kept window (its walker never entered)
-    is excluded from that window's merge and a note is printed to stderr; the
-    window's consensus is then formed from the remaining runs.
+    Every run must yield usable entropy for every kept window; a run that
+    produces no data for a kept window is an error, mirroring the single-run
+    path (a well-formed seed set covers every window in every run).
     """
     # This mirrors the validate/group/select/trim/stitch/write spine of the
     # single-run path in ``stitch.main``. The two are intentionally not
     # unified: the multi-run path additionally validates window-key equality
-    # across runs, merges each window across runs, tolerates a run missing a
-    # window, and reports per-pair overlap to stderr -- threading those
-    # differences through a shared helper would obscure both flows.
+    # across runs, merges each window across runs, and reports per-pair
+    # overlap to stderr -- threading those differences through a shared helper
+    # would obscure both flows.
     if len(args.inputs) < 2:
         print(
             "error: --multi-run needs at least two run checkpoints",
@@ -203,17 +203,16 @@ def run_multi_run(args: argparse.Namespace) -> int:
             )
             df = result.get_entropy(fill_factor_limit=args.fill_factor_limit)
             if df is None or df.empty:
-                curves[(lo, hi)] = {}
                 print(
-                    f"note: run {run_idx} contributed no data to window "
-                    f"({lo}, {hi}); excluded from its merge",
+                    f"error: run {run_idx} window ({lo}, {hi}) produced no "
+                    f"entropy data; every run must cover every window",
                     file=sys.stderr,
                 )
-            else:
-                curves[(lo, hi)] = {
-                    int(b): float(v)
-                    for b, v in zip(df.index, df["entropy"], strict=True)
-                }
+                return 2
+            curves[(lo, hi)] = {
+                int(b): float(v)
+                for b, v in zip(df.index, df["entropy"], strict=True)
+            }
         per_run_windows.append(curves)
 
     try:
@@ -226,13 +225,6 @@ def run_multi_run(args: argparse.Namespace) -> int:
     surviving_keys: list[WindowKey] = []
     for lo, hi in kept_keys:
         curve = merged[(lo, hi)]
-        if not curve:
-            print(
-                f"error: window ({lo}, {hi}) produced no entropy data "
-                f"across {len(runs)} run(s)",
-                file=sys.stderr,
-            )
-            return 2
         bins = sorted(curve)
         df = pd.DataFrame({
             "energy": [b * energy_spacing for b in bins],
@@ -272,25 +264,10 @@ def run_multi_run(args: argparse.Namespace) -> int:
     for pair, std in errors.items():
         print(f"overlap std window {pair}: {std:.3g}", file=sys.stderr)
 
-    # A stitched window may have been merged from fewer than all runs (a seed
-    # whose walker never entered it, excluded above). Reflect that on stdout so
-    # a reader of "merged N runs" is not misled into assuming every window used
-    # every run; the per-window detail is in the stderr notes above.
-    thin_windows = sum(
-        1
-        for key in surviving_keys
-        if sum(1 for rc in per_run_windows if rc[key]) < len(runs)
-    )
-
     msg = (
         f"wrote {args.output} ({len(stitched)} rows; "
         f"merged {len(runs)} runs)"
     )
-    if thin_windows:
-        msg += (
-            f"; {thin_windows} of {len(surviving_keys)} windows merged "
-            f"fewer than {len(runs)} runs (see stderr notes)"
-        )
     if filters_active:
         msg += "; " + _format_window_summary(surviving_keys, len(by_window0))
     print(msg)

@@ -202,9 +202,12 @@ def test_multi_run_emits_overlap_diagnostic_to_stderr(tmp_path, monkeypatch, cap
     assert "overlap std window" in capsys.readouterr().err
 
 
-def test_multi_run_notes_partial_window_coverage(tmp_path, monkeypatch, capsys):
-    # Run B never populated the lower window; the consensus for that
-    # window comes from run A alone, and the gap is flagged on stderr.
+def test_multi_run_errors_when_run_lacks_window_data(
+    tmp_path, monkeypatch, capsys,
+):
+    # A run that produces no entropy for a kept window is an error, matching
+    # the single-run path: a well-formed seed set covers every window in
+    # every run.
     rb = [
         _mock_dc({}, 0.5, -1.0, 0.0),
         _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5),
@@ -213,17 +216,11 @@ def test_multi_run_notes_partial_window_coverage(tmp_path, monkeypatch, capsys):
         Path("rA.h5"): _two_window_run(),
         Path("rB.h5"): rb,
     })
-    out = tmp_path / "dos.csv"
-    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(out)])
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "no data" in captured.err.lower()
-    assert "(-1.0, 0.0)" in captured.err
-    # The thin window is also surfaced on stdout so a reader of the
-    # "merged N runs" line is not misled into assuming uniform coverage.
-    assert "1 of 2 windows merged fewer than 2 runs" in captured.out
-    df = pd.read_csv(out)
-    assert list(df.columns) == ["energy", "entropy"]
+    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "produced no entropy data" in err
+    assert "(-1.0, 0.0)" in err
 
 
 def test_multi_run_consensus_reweights(tmp_path, monkeypatch):
@@ -241,24 +238,6 @@ def test_multi_run_consensus_reweights(tmp_path, monkeypatch):
     assert len(result) == 3
     assert result["E_mean"].notna().all()
     assert (result["Cv"] >= 0.0).all()
-
-
-def test_multi_run_errors_when_window_empty_in_all_runs(
-    tmp_path, monkeypatch, capsys,
-):
-    # The lower window is empty in BOTH runs (no seed entered it); its merged
-    # curve is empty, so stitching cannot proceed and the CLI errors.
-    empty_lower = [
-        _mock_dc({}, 0.5, -1.0, 0.0),
-        _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5),
-    ]
-    _patch_runs(monkeypatch, {
-        Path("rA.h5"): empty_lower,
-        Path("rB.h5"): empty_lower,
-    })
-    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv")])
-    assert rc == 2
-    assert "produced no entropy data" in capsys.readouterr().err
 
 
 def test_multi_run_rejects_emin_not_below_emax(tmp_path, monkeypatch, capsys):
