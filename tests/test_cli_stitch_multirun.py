@@ -10,6 +10,7 @@ from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
+from mchammer_pt.analysis.dos import reweight_canonical_from_dos
 from mchammer_pt.cli.stitch import main
 from mchammer_pt.cli.stitch_multirun import _load_runs, merge_runs_per_window
 
@@ -208,3 +209,20 @@ def test_multi_run_notes_partial_window_coverage(tmp_path, monkeypatch, capsys):
     assert "(-1.0, 0.0)" in err
     df = pd.read_csv(out)
     assert list(df.columns) == ["energy", "entropy"]
+
+
+def test_multi_run_consensus_reweights(tmp_path, monkeypatch):
+    # End-to-end: two runs -> consensus DOS CSV -> canonical reweighting
+    # produces finite thermodynamics on a temperature grid.
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(bump=0.0),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    out = tmp_path / "dos.csv"
+    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(out)])
+    assert rc == 0
+    dos = pd.read_csv(out)
+    result = reweight_canonical_from_dos(dos, temperatures=[100.0, 300.0, 900.0])
+    assert len(result) == 3
+    assert result["E_mean"].notna().all()
+    assert (result["Cv"] >= 0.0).all()

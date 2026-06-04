@@ -16,6 +16,11 @@ Containers are grouped by window using each one's
 walker-merged within each window via ``WindowResult.get_entropy()``,
 and stitched via ``mchammer_pt.analysis.dos.stitch_entropy``. Handles
 single- and multi-walker REWL output through one code path.
+
+With ``--multi-run``, the positional inputs are instead N independent
+run checkpoints (one per run). Each window is merged across runs before
+stitching, so the consensus DOS is denoised relative to any single run.
+The multi-run orchestration lives in ``stitch_multirun``.
 """
 from __future__ import annotations
 
