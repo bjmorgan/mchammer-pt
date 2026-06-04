@@ -1,9 +1,11 @@
 """Tests for mchammer_pt.cli.stitch_multirun."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from mchammer_pt.cli.stitch_multirun import merge_runs_per_window
+from mchammer_pt.cli.stitch_multirun import _load_runs, merge_runs_per_window
 
 
 def test_merge_runs_per_window_recovers_aligned_mean():
@@ -47,3 +49,28 @@ def test_merge_runs_per_window_rejects_mismatched_window_keys():
 def test_merge_runs_per_window_rejects_empty():
     with pytest.raises(ValueError, match="at least one run"):
         merge_runs_per_window([])
+
+
+def test_load_runs_reads_each_checkpoint(monkeypatch):
+    seen = []
+
+    def fake_read(path):
+        seen.append(path)
+        return (None, [f"dc-of-{path}"], None)
+
+    monkeypatch.setattr("mchammer_pt.cli.stitch.read_hdf5", fake_read)
+    runs, err = _load_runs([Path("r1.h5"), Path("r2.h5")])
+    assert err is None
+    assert runs == [["dc-of-r1.h5"], ["dc-of-r2.h5"]]
+    assert seen == [Path("r1.h5"), Path("r2.h5")]
+
+
+def test_load_runs_propagates_read_error(monkeypatch):
+    def raise_oserror(_):
+        raise OSError("nope")
+
+    monkeypatch.setattr("mchammer_pt.cli.stitch.read_hdf5", raise_oserror)
+    runs, err = _load_runs([Path("r1.h5")])
+    assert runs == []
+    assert err is not None
+    assert "could not read checkpoint" in err

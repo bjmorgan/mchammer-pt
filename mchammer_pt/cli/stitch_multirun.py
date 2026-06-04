@@ -9,7 +9,11 @@ merge helper and ``stitch_entropy`` stay HDF5-agnostic.
 """
 from __future__ import annotations
 
-from mchammer_pt.cli.stitch import WindowKey
+from pathlib import Path
+
+from mchammer.data_containers.base_data_container import BaseDataContainer
+
+from mchammer_pt.cli.stitch import WindowKey, _load_from_checkpoint
 from mchammer_pt.wl_coordinator import merge_entropies
 
 
@@ -55,3 +59,21 @@ def merge_runs_per_window(
         key: merge_entropies([run[key] for run in per_run_windows])
         for key in keys
     }
+
+
+def _load_runs(
+    paths: list[Path],
+) -> tuple[list[list[BaseDataContainer]], str | None]:
+    """Read one checkpoint per run. Returns ``(runs, error_message)``.
+
+    Each path is read as an independent run via the same checkpoint
+    reader the single-run path uses. On the first read error the runs
+    list is empty and the message is non-None.
+    """
+    runs: list[list[BaseDataContainer]] = []
+    for path in paths:
+        raw, err = _load_from_checkpoint(path)
+        if err is not None:
+            return [], err
+        runs.append(raw)
+    return runs, None

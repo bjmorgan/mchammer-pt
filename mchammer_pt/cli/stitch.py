@@ -77,6 +77,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--multi-run", action="store_true",
+        help=(
+            "Treat positional inputs as N independent run checkpoints "
+            "(one per run) and merge each window across runs before "
+            "stitching. Repeated paths are weighted by multiplicity (a "
+            "bootstrap draw). Requires two or more inputs; cannot be "
+            "combined with --containers."
+        ),
+    )
+    p.add_argument(
         "-o", "--output", type=Path, default=Path("dos.csv"),
         help="Output CSV path. Default: dos.csv (CWD).",
     )
@@ -230,6 +240,13 @@ def _format_window_summary(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.multi_run and args.containers:
+        print(
+            "error: cannot combine --multi-run with --containers",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.containers:
         if len(args.inputs) < 2:
