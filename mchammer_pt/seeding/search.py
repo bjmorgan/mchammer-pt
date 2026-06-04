@@ -171,36 +171,61 @@ def _energy(calc: ClusterExpansionCalculator, atoms: Atoms) -> float:
     return float(calc.calculate_total(occupations=atoms.numbers))
 
 
-def _validate_fill_output(atoms: object, n_sites: int) -> Atoms:
+def _validate_fill_output(atoms: object, template: Atoms, seed: int) -> Atoms:
     """Validate one ``random_fill`` output at the caller boundary.
 
-    ``random_fill`` is a user-supplied callable; a wrong return type or
-    site count would otherwise surface as an inscrutable failure deep
-    inside a spawn worker (the calculator is bound to ``bottom_anchor``'s
-    lattice). Checking the output here names ``random_fill`` as the
-    culprit instead.
+    ``random_fill`` is a user-supplied callable, and every walk reads its
+    occupation vector against a single ``ClusterExpansionCalculator``
+    bound to ``bottom_anchor``'s fixed index->site mapping. A fill with
+    the same cell and the same set of positions but a *different atom
+    ordering* (e.g. species-grouped instead of the anchor's site order)
+    therefore yields silently wrong energies -- walks target the wrong
+    band and windows mis-fill with nothing to surface the cause.
+
+    Guarding here, in the main process where the fill is produced,
+    converts that silent wrong-energy failure into an immediate,
+    self-explaining error. The configuration is *not* canonicalised:
+    reordering a caller's structure could mask a genuine caller bug and
+    would defeat the build-once-calculator optimisation, so the contract
+    is enforced loudly instead.
 
     Args:
         atoms: the value ``random_fill`` returned.
-        n_sites: the number of sites ``bottom_anchor`` has.
+        template: the ``bottom_anchor`` whose lattice and atom ordering
+            every fill must match.
+        seed: the seed ``random_fill`` was called with (named in errors).
 
     Returns:
         ``atoms`` unchanged, once validated.
 
     Raises:
-        ValueError: if ``atoms`` is not an ``Atoms`` or has the wrong
-            number of sites.
+        ValueError: if ``atoms`` is not an ``Atoms``, has a different
+            site count, or has a different cell or atom ordering
+            (per-index positions) from ``template``.
     """
+    contract = (
+        f"the structure from random_fill(seed={seed}) must be on the same "
+        f"lattice and atom ordering as bottom_anchor, differing only in the "
+        f"species at each site"
+    )
     if not isinstance(atoms, Atoms):
         raise ValueError(
-            f"random_fill must return an ase.Atoms; got "
+            f"random_fill(seed={seed}) must return an ase.Atoms; got "
             f"{type(atoms).__name__}."
         )
-    if len(atoms) != n_sites:
+    if len(atoms) != len(template):
         raise ValueError(
-            f"random_fill returned a structure with {len(atoms)} sites but "
-            f"bottom_anchor has {n_sites}; every configuration must share "
-            f"bottom_anchor's lattice."
+            f"{contract}; it has {len(atoms)} sites but bottom_anchor has "
+            f"{len(template)}."
+        )
+    if not np.allclose(atoms.cell.array, template.cell.array, atol=1e-6):
+        raise ValueError(f"{contract}; its cell differs from bottom_anchor's.")
+    if not np.allclose(atoms.positions, template.positions, atol=1e-6):
+        raise ValueError(
+            f"{contract}; its atom positions differ from bottom_anchor's. A "
+            f"reordered structure (same positions, different index order) "
+            f"fails this index-by-index check -- the occupation vector would "
+            f"otherwise be read against the wrong sites."
         )
     return atoms
 
@@ -249,7 +274,13 @@ def seed_window_configs(
         bottom_anchor: ground-state structure. Start for bottom-anchored
             walks, calculator template, and a guaranteed seed.
         random_fill: ``seed -> Atoms`` producing fresh,
-            correct-composition, high-energy structures.
+            correct-composition, high-energy structures. Each returned
+            structure must be on the same lattice and the same atom
+            ordering as ``bottom_anchor`` -- identical cell and
+            per-index positions, differing only in the species at each
+            site -- because a single calculator bound to ``bottom_anchor``
+            reads every occupation vector against that fixed site order.
+            This is validated up front.
         random_seed: master seed; per-walk seeds derive from it.
         params: search knobs (see :class:`SeedSearchParams`).
         anchors: optional explicit ``"bottom"``/``"top"`` per window;
@@ -291,16 +322,15 @@ def seed_window_configs(
         )
         e_gs = _energy(main_calc, bottom_anchor)
 
-        n_sites = len(bottom_anchor)
-
         # Resolve anchors.
         if anchors is not None:
             anchor_kinds: list[Anchor] = validate_anchor_override(
                 anchors, n_windows
             )
         else:
+            probe_seed = _seed(random_seed, n_windows, 0, 0)
             top_probe = _validate_fill_output(
-                random_fill(_seed(random_seed, n_windows, 0, 0)), n_sites
+                random_fill(probe_seed), bottom_anchor, probe_seed
             )
             e_top = _energy(main_calc, top_probe)
             anchor_kinds = assign_anchors(windows, e_gs, e_top)
@@ -354,9 +384,9 @@ def seed_window_configs(
                     if anchor_kinds[i] == "bottom":
                         start = bottom_anchor.copy()  # type: ignore[no-untyped-call]
                     else:
+                        fill_seed = _seed(random_seed, i, round_idx, 0)
                         start = _validate_fill_output(
-                            random_fill(_seed(random_seed, i, round_idx, 0)),
-                            n_sites,
+                            random_fill(fill_seed), bottom_anchor, fill_seed
                         )
                     tasks.append(
                         _WalkTask(

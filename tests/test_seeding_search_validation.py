@@ -110,3 +110,27 @@ def test_random_fill_wrong_type_is_caught_at_boundary():
             random_fill=bad_fill,
             random_seed=0,
         )
+
+
+def test_random_fill_reordered_atoms_is_caught_at_boundary():
+    # A fill with the anchor's exact cell and positions but a different
+    # atom ordering passes type and length checks, yet its occupation
+    # vector would be read against the wrong sites -> silent wrong energy.
+    # The index-by-index position check must reject it.
+    ce = make_wl_ce()
+    anchor = make_wl_atoms(n_au=16)
+
+    def reordering_fill(seed):
+        return anchor[list(reversed(range(len(anchor))))]
+
+    with pytest.raises(ValueError, match="positions|ordering"):
+        seed_window_configs(
+            cluster_expansion=ce,
+            moves=_MOVES,
+            windows=[(-50.0, 0.0), (-5.0, 50.0)],
+            counts=[1, 1],
+            energy_spacing=0.5,
+            bottom_anchor=anchor,
+            random_fill=reordering_fill,
+            random_seed=0,
+        )
