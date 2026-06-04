@@ -255,10 +255,13 @@ canonical = reweight_canonical_from_dos(
 The same pipeline is available from the command line via the
 `mchammer-pt-stitch` and `mchammer-pt-reweight` console scripts, which
 read either an mchammer-pt checkpoint HDF5 or
-`WangLandauDataContainer` files directly. For production runs on a
-new system, plan to validate the recovered DOS against ground truth
-(e.g. by brute-force enumeration on a small case, or against an
-analytic result) before trusting downstream thermodynamic averages.
+`WangLandauDataContainer` files directly. Pass `--multi-run` with two
+or more checkpoints to merge independent seeds of the same system into
+one consensus DOS (each window is merged across runs before
+stitching). For production runs on a new system, plan
+to validate the recovered DOS against ground truth (e.g. by
+brute-force enumeration on a small case, or against an analytic
+result) before trusting downstream thermodynamic averages.
 
 ## Examples
 

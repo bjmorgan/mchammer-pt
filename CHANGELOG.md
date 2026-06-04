@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``mchammer-pt-stitch`` gains a ``--multi-run`` flag that merges N
+  independent run checkpoints (one per run) into a single consensus
+  density of states: each energy window is merged across the runs, then
+  stitched once with the existing stitcher. A checkpoint passed more than
+  once is weighted by its multiplicity. Every run must cover the same
+  windows on the same energy grid and yield entropy for every kept
+  window; mismatched window bounds or ``energy_spacing``, or a run with no
+  data for a kept window, are reported as errors. Per-pair overlap
+  standard deviations are written to stderr as a join diagnostic. The DOS
+  CSV schema (``energy``, ``entropy``) and single-checkpoint /
+  ``--containers`` behaviour are unchanged.
+
 ## [0.17.0] - 2026-06-03
 
 ### Added

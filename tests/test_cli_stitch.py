@@ -720,3 +720,24 @@ def test_stitch_cli_filters_reducing_below_two_windows_has_distinct_error(
     assert "fewer than 2 windows" in err
     assert "--windows" in err
     assert "all containers share" not in err
+
+
+def test_parser_accepts_multi_run_flag():
+    parser = _build_parser()
+    args = parser.parse_args(["a.h5", "b.h5", "--multi-run"])
+    assert args.multi_run is True
+
+
+def test_parser_defaults_multi_run_false():
+    parser = _build_parser()
+    args = parser.parse_args(["a.h5"])
+    assert args.multi_run is False
+
+
+def test_multi_run_and_containers_are_mutually_exclusive(tmp_path, capsys):
+    rc = main([
+        "--multi-run", "--containers", "a.h5", "b.h5",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc != 0
+    assert "cannot combine" in capsys.readouterr().err.lower()
