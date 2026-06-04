@@ -2,9 +2,9 @@
 
 Combines N independent run checkpoints into one consensus density of
 states: each window is merged across runs (via ``merge_entropies``, so a
-checkpoint passed more than once is weighted by its multiplicity -- a
-bootstrap draw), then the merged per-window curves are stitched once by
-the unchanged ``stitch_entropy``. HDF5 reading lives in the CLI; the
+checkpoint passed more than once is weighted by its multiplicity), then
+the merged per-window curves are stitched once by the unchanged
+``stitch_entropy``. HDF5 reading lives in the CLI; the
 merge helper and ``stitch_entropy`` stay HDF5-agnostic.
 """
 from __future__ import annotations
@@ -55,7 +55,9 @@ def merge_runs_per_window(
         ValueError: if ``per_run_windows`` is empty or the runs do not all
             expose the same set of window keys.
         RuntimeError: if, within a window, the runs share no common bin
-            (propagated from :func:`mchammer_pt.wl_coordinator.merge_entropies`).
+            (propagated from :func:`mchammer_pt.wl_coordinator.merge_entropies`,
+            re-raised with the offending window key so the caller can name the
+            energy band).
     """
     if not per_run_windows:
         raise ValueError(
@@ -68,10 +70,13 @@ def merge_runs_per_window(
                 f"run {i} window keys differ from run 0: "
                 f"run 0 has {keys}, run {i} has {set(run)}"
             )
-    return {
-        key: merge_entropies([run[key] for run in per_run_windows])
-        for key in keys
-    }
+    merged: dict[WindowKey, dict[int, float]] = {}
+    for key in keys:
+        try:
+            merged[key] = merge_entropies([run[key] for run in per_run_windows])
+        except RuntimeError as e:
+            raise RuntimeError(f"window {key}: {e}") from e
+    return merged
 
 
 def _load_runs(
@@ -105,6 +110,12 @@ def run_multi_run(args: argparse.Namespace) -> int:
     is excluded from that window's merge and a note is printed to stderr; the
     window's consensus is then formed from the remaining runs.
     """
+    # This mirrors the validate/group/select/trim/stitch/write spine of the
+    # single-run path in ``stitch.main``. The two are intentionally not
+    # unified: the multi-run path additionally validates window-key equality
+    # across runs, merges each window across runs, tolerates a run missing a
+    # window, and reports per-pair overlap to stderr -- threading those
+    # differences through a shared helper would obscure both flows.
     if len(args.inputs) < 2:
         print(
             "error: --multi-run needs at least two run checkpoints",
@@ -261,10 +272,25 @@ def run_multi_run(args: argparse.Namespace) -> int:
     for pair, std in errors.items():
         print(f"overlap std window {pair}: {std:.3g}", file=sys.stderr)
 
+    # A stitched window may have been merged from fewer than all runs (a seed
+    # whose walker never entered it, excluded above). Reflect that on stdout so
+    # a reader of "merged N runs" is not misled into assuming every window used
+    # every run; the per-window detail is in the stderr notes above.
+    thin_windows = sum(
+        1
+        for key in surviving_keys
+        if sum(1 for rc in per_run_windows if rc[key]) < len(runs)
+    )
+
     msg = (
         f"wrote {args.output} ({len(stitched)} rows; "
         f"merged {len(runs)} runs)"
     )
+    if thin_windows:
+        msg += (
+            f"; {thin_windows} of {len(surviving_keys)} windows merged "
+            f"fewer than {len(runs)} runs (see stderr notes)"
+        )
     if filters_active:
         msg += "; " + _format_window_summary(surviving_keys, len(by_window0))
     print(msg)

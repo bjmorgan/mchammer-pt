@@ -58,6 +58,18 @@ def test_merge_runs_per_window_rejects_empty():
         merge_runs_per_window([])
 
 
+def test_merge_runs_per_window_no_common_bin_names_window():
+    # Two runs whose curves for the window share no bin -> merge_entropies
+    # raises RuntimeError; the helper re-raises naming the offending window
+    # so the user can tell which energy band failed.
+    runs = [
+        {(0.0, 1.0): {0: 0.0}},
+        {(0.0, 1.0): {5: 0.0}},
+    ]
+    with pytest.raises(RuntimeError, match=r"window \(0\.0, 1\.0\)"):
+        merge_runs_per_window(runs)
+
+
 def test_load_runs_reads_each_checkpoint(monkeypatch):
     seen = []
 
@@ -204,9 +216,12 @@ def test_multi_run_notes_partial_window_coverage(tmp_path, monkeypatch, capsys):
     out = tmp_path / "dos.csv"
     rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(out)])
     assert rc == 0
-    err = capsys.readouterr().err
-    assert "no data" in err.lower()
-    assert "(-1.0, 0.0)" in err
+    captured = capsys.readouterr()
+    assert "no data" in captured.err.lower()
+    assert "(-1.0, 0.0)" in captured.err
+    # The thin window is also surfaced on stdout so a reader of the
+    # "merged N runs" line is not misled into assuming uniform coverage.
+    assert "1 of 2 windows merged fewer than 2 runs" in captured.out
     df = pd.read_csv(out)
     assert list(df.columns) == ["energy", "entropy"]
 
@@ -226,3 +241,52 @@ def test_multi_run_consensus_reweights(tmp_path, monkeypatch):
     assert len(result) == 3
     assert result["E_mean"].notna().all()
     assert (result["Cv"] >= 0.0).all()
+
+
+def test_multi_run_errors_when_window_empty_in_all_runs(
+    tmp_path, monkeypatch, capsys,
+):
+    # The lower window is empty in BOTH runs (no seed entered it); its merged
+    # curve is empty, so stitching cannot proceed and the CLI errors.
+    empty_lower = [
+        _mock_dc({}, 0.5, -1.0, 0.0),
+        _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5),
+    ]
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): empty_lower,
+        Path("rB.h5"): empty_lower,
+    })
+    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv")])
+    assert rc == 2
+    assert "produced no entropy data" in capsys.readouterr().err
+
+
+def test_multi_run_rejects_emin_not_below_emax(tmp_path, monkeypatch, capsys):
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    rc = main([
+        "--multi-run", "rA.h5", "rB.h5",
+        "--emin", "0.0", "--emax", "-1.0",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--emin" in err and "--emax" in err
+
+
+def test_multi_run_windows_filter_leaving_one_window_errors(
+    tmp_path, monkeypatch, capsys,
+):
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    rc = main([
+        "--multi-run", "rA.h5", "rB.h5",
+        "--windows", "0",
+        "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 2
+    assert "fewer than 2 windows" in capsys.readouterr().err

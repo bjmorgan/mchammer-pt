@@ -86,9 +86,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Treat positional inputs as N independent run checkpoints "
             "(one per run) and merge each window across runs before "
-            "stitching. Repeated paths are weighted by multiplicity (a "
-            "bootstrap draw). Requires two or more inputs; cannot be "
-            "combined with --containers."
+            "stitching. Repeated paths are weighted by multiplicity. "
+            "Requires two or more inputs; cannot be combined with "
+            "--containers."
         ),
     )
     p.add_argument(
