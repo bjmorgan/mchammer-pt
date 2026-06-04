@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
+from mchammer.data_containers.wang_landau_data_container import (
+    WangLandauDataContainer,
+)
 
+from mchammer_pt.cli.stitch import main
 from mchammer_pt.cli.stitch_multirun import _load_runs, merge_runs_per_window
 
 
@@ -74,3 +80,131 @@ def test_load_runs_propagates_read_error(monkeypatch):
     assert runs == []
     assert err is not None
     assert "could not read checkpoint" in err
+
+
+def _mock_dc(entropy, energy_spacing, lo, hi):
+    dc = MagicMock(spec=WangLandauDataContainer)
+    dc._last_state = {
+        "entropy": dict(entropy),
+        "histogram": {k: 1 for k in entropy},
+        "fill_factor": 0.5,
+        "fill_factor_history": {},
+        "entropy_history": {},
+    }
+    dc.ensemble_parameters = {
+        "energy_spacing": energy_spacing,
+        "energy_limit_left": lo,
+        "energy_limit_right": hi,
+    }
+    dc.fill_factor = 0.5
+    return dc
+
+
+def _two_window_run(bump=0.0):
+    # Two overlapping windows on a 0.5 grid; `bump` perturbs the second
+    # window's shape so distinct runs are genuinely different.
+    a = _mock_dc({-2: 0.0, -1: 0.4, 0: 0.7}, 0.5, -1.0, 0.0)
+    b = _mock_dc({-1: 0.9 + bump, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5)
+    return [a, b]
+
+
+def _patch_runs(monkeypatch, mapping):
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch.read_hdf5",
+        lambda p: (None, mapping[Path(p)], None),
+    )
+
+
+def test_multi_run_writes_consensus_csv(tmp_path, monkeypatch, capsys):
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(bump=0.0),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    out = tmp_path / "dos.csv"
+    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(out)])
+    assert rc == 0
+    df = pd.read_csv(out)
+    assert list(df.columns) == ["energy", "entropy"]
+    assert df["entropy"].min() == pytest.approx(0.0, abs=1e-12)
+    assert "merged 2 runs" in capsys.readouterr().out
+
+
+def test_multi_run_requires_two_inputs(tmp_path, monkeypatch, capsys):
+    _patch_runs(monkeypatch, {Path("rA.h5"): _two_window_run()})
+    rc = main(["--multi-run", "rA.h5", "-o", str(tmp_path / "dos.csv")])
+    assert rc != 0
+    assert "at least two run checkpoints" in capsys.readouterr().err
+
+
+def test_multi_run_accepts_repeated_checkpoint(tmp_path, monkeypatch):
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(bump=0.0),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    out = tmp_path / "dos.csv"
+    rc = main(["--multi-run", "rA.h5", "rA.h5", "rB.h5", "-o", str(out)])
+    assert rc == 0
+    df = pd.read_csv(out)
+    assert list(df.columns) == ["energy", "entropy"]
+
+
+def test_multi_run_rejects_mismatched_window_keys(tmp_path, monkeypatch, capsys):
+    # rB has a single window at a key rA does not share.
+    rb = [_mock_dc({-2: 0.0, -1: 0.4, 0: 0.7}, 0.5, -3.0, -2.0),
+          _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5)]
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(),
+        Path("rB.h5"): rb,
+    })
+    rc = main([
+        "--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc != 0
+    assert "different window keys" in capsys.readouterr().err
+
+
+def test_multi_run_rejects_mismatched_spacing(tmp_path, monkeypatch, capsys):
+    rb = [_mock_dc({-2: 0.0, -1: 0.4, 0: 0.7}, 0.25, -1.0, 0.0),
+          _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.25, -0.5, 0.5)]
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(),
+        Path("rB.h5"): rb,
+    })
+    rc = main([
+        "--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc != 0
+    assert "disagree on energy_spacing" in capsys.readouterr().err
+
+
+def test_multi_run_emits_overlap_diagnostic_to_stderr(tmp_path, monkeypatch, capsys):
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(bump=0.0),
+        Path("rB.h5"): _two_window_run(bump=0.2),
+    })
+    rc = main([
+        "--multi-run", "rA.h5", "rB.h5", "-o", str(tmp_path / "dos.csv"),
+    ])
+    assert rc == 0
+    assert "overlap std window" in capsys.readouterr().err
+
+
+def test_multi_run_notes_partial_window_coverage(tmp_path, monkeypatch, capsys):
+    # Run B never populated the lower window; the consensus for that
+    # window comes from run A alone, and the gap is flagged on stderr.
+    rb = [
+        _mock_dc({}, 0.5, -1.0, 0.0),
+        _mock_dc({-1: 0.9, 0: 1.2, 1: 1.4}, 0.5, -0.5, 0.5),
+    ]
+    _patch_runs(monkeypatch, {
+        Path("rA.h5"): _two_window_run(),
+        Path("rB.h5"): rb,
+    })
+    out = tmp_path / "dos.csv"
+    rc = main(["--multi-run", "rA.h5", "rB.h5", "-o", str(out)])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no data" in err.lower()
+    assert "(-1.0, 0.0)" in err
+    df = pd.read_csv(out)
+    assert list(df.columns) == ["energy", "entropy"]

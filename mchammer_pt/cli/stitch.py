@@ -248,6 +248,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if args.multi_run:
+        from mchammer_pt.cli.stitch_multirun import run_multi_run
+        return run_multi_run(args)
+
     if args.containers:
         if len(args.inputs) < 2:
             print(
