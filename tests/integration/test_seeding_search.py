@@ -99,6 +99,14 @@ def test_fills_all_windows_distinct_and_in_band():
             keys.add(atoms.numbers.tobytes())
         assert len(keys) == len(per_window)  # distinct within window
 
+    # The exact ground state is injected into the window whose band
+    # contains it. Here e_gs (the sampled minimum) lies in window 0.
+    e_gs = _energy(ce, bottom_anchor)
+    lo0, hi0 = windows[0]
+    assert lo0 <= e_gs <= hi0
+    gs_key = bottom_anchor.numbers.tobytes()
+    assert gs_key in {atoms.numbers.tobytes() for atoms in result[0]}
+
     # The result drops straight into a process-pool REWL run.
     pt = WangLandauParallelTempering.process_pool(
         cluster_expansion=ce,
@@ -113,6 +121,60 @@ def test_fills_all_windows_distinct_and_in_band():
         pt.run(1)
     finally:
         pt._pool.shutdown()
+
+
+def test_same_seed_reproduces_identical_configs():
+    ce, bottom_anchor, random_fill, windows = _scenario()
+    counts = [2, 2, 2]
+    params = SeedSearchParams(
+        walk_sweeps=40, max_walks_per_window=12, n_workers=2
+    )
+    kwargs = dict(
+        cluster_expansion=ce,
+        moves=[(PairSwap(sublattice_index=0), 1.0)],
+        windows=windows,
+        counts=counts,
+        energy_spacing=0.1,
+        bottom_anchor=bottom_anchor,
+        random_fill=random_fill,
+        random_seed=11,
+        params=params,
+    )
+    first = seed_window_configs(**kwargs)
+    second = seed_window_configs(**kwargs)
+
+    first_keys = [[a.numbers.tobytes() for a in w] for w in first]
+    second_keys = [[a.numbers.tobytes() for a in w] for w in second]
+    # Per-walk seeds are derived from random_seed independently of worker
+    # dispatch order, so a fixed seed reproduces the configs and their order.
+    assert first_keys == second_keys
+
+
+def test_explicit_anchors_override_fills_windows():
+    ce, bottom_anchor, random_fill, windows = _scenario()
+    counts = [2, 2, 2]
+    params = SeedSearchParams(
+        walk_sweeps=40, max_walks_per_window=12, n_workers=2
+    )
+
+    # Explicit anchors skip the e_top probe and the energy-based split.
+    result = seed_window_configs(
+        cluster_expansion=ce,
+        moves=[(PairSwap(sublattice_index=0), 1.0)],
+        windows=windows,
+        counts=counts,
+        energy_spacing=0.1,
+        bottom_anchor=bottom_anchor,
+        random_fill=random_fill,
+        random_seed=5,
+        params=params,
+        anchors=["bottom", "bottom", "top"],
+    )
+
+    assert [len(w) for w in result] == counts
+    for (lo, hi), per_window in zip(windows, result, strict=True):
+        for atoms in per_window:
+            assert lo <= _energy(ce, atoms) <= hi
 
 
 def test_unfillable_window_raises_naming_it():

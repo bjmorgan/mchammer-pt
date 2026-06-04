@@ -1,19 +1,21 @@
 """Orchestration for the REWL window-seeding search.
 
-Runs a spawn ``multiprocessing.Pool`` of short, independent confined
+Runs a spawn ``ProcessPoolExecutor`` of short, independent confined
 walks across rounds, dedups per window, and raises if a window cannot
-be filled. Start configurations are built in the main process (so the
-caller's ``random_fill`` factory never crosses the spawn boundary) and
-shipped to workers as ``AtomsSpec``.
+be filled or if a worker process dies. Start configurations are built
+in the main process (so the caller's ``random_fill`` factory never
+crosses the spawn boundary) and shipped to workers as ``AtomsSpec``.
 """
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import multiprocessing as mp
 import os
 import tempfile
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +30,7 @@ from ..parallel._imports import _check_importable
 from .anchoring import Anchor, assign_anchors, validate_anchor_override
 from .bookkeeping import WindowHarvest
 from .params import SeedSearchParams
-from .walk import confined_walk
+from .walk import _in_band, confined_walk
 
 # Heartbeat cadence (seconds) for the still-short-window progress line.
 _HEARTBEAT_INTERVAL_S = 30.0
@@ -94,6 +96,32 @@ def _run_walk(task: _WalkTask) -> tuple[int, np.ndarray | None]:
     return task.window_idx, result.numbers.copy()
 
 
+def _walk_result(
+    future: cf.Future[tuple[int, np.ndarray | None]],
+) -> tuple[int, np.ndarray | None]:
+    """Unwrap a confined-walk future, mapping worker death to RuntimeError.
+
+    A worker killed by the OS (e.g. an out-of-memory kill on a large
+    supercell) breaks the pool; ``ProcessPoolExecutor`` then raises
+    ``BrokenProcessPool`` rather than hanging, and a worker that raises
+    re-surfaces its own exception. Both are wrapped in a ``RuntimeError``
+    so the documented contract holds and the cause is named.
+    """
+    try:
+        return future.result()
+    except BrokenProcessPool as exc:
+        raise RuntimeError(
+            "a seed-search worker process died unexpectedly (it may have "
+            "been killed by the OS, e.g. an out-of-memory kill on a large "
+            "supercell). Try reducing n_workers or the supercell size."
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"a seed-search worker raised while running a confined walk: "
+            f"{exc!r}"
+        ) from exc
+
+
 def _seed(random_seed: int, *tags: int) -> int:
     """Deterministic, dispatch-order-independent child seed."""
     entropy = [int(random_seed), *[int(t) for t in tags]]
@@ -143,6 +171,40 @@ def _energy(calc: ClusterExpansionCalculator, atoms: Atoms) -> float:
     return float(calc.calculate_total(occupations=atoms.numbers))
 
 
+def _validate_fill_output(atoms: object, n_sites: int) -> Atoms:
+    """Validate one ``random_fill`` output at the caller boundary.
+
+    ``random_fill`` is a user-supplied callable; a wrong return type or
+    site count would otherwise surface as an inscrutable failure deep
+    inside a spawn worker (the calculator is bound to ``bottom_anchor``'s
+    lattice). Checking the output here names ``random_fill`` as the
+    culprit instead.
+
+    Args:
+        atoms: the value ``random_fill`` returned.
+        n_sites: the number of sites ``bottom_anchor`` has.
+
+    Returns:
+        ``atoms`` unchanged, once validated.
+
+    Raises:
+        ValueError: if ``atoms`` is not an ``Atoms`` or has the wrong
+            number of sites.
+    """
+    if not isinstance(atoms, Atoms):
+        raise ValueError(
+            f"random_fill must return an ase.Atoms; got "
+            f"{type(atoms).__name__}."
+        )
+    if len(atoms) != n_sites:
+        raise ValueError(
+            f"random_fill returned a structure with {len(atoms)} sites but "
+            f"bottom_anchor has {n_sites}; every configuration must share "
+            f"bottom_anchor's lattice."
+        )
+    return atoms
+
+
 def seed_window_configs(
     cluster_expansion: ClusterExpansion,
     moves: Sequence[tuple[Move, float]],
@@ -162,9 +224,11 @@ def seed_window_configs(
     ground state below, a fresh random fill above) and a directed
     Wang-Landau window search drives configurations into the band.
     ``counts[i]`` independent confined walks per window, cross-deduped,
-    produce ``counts[i]`` distinct seeds. The exact ground state
-    (``bottom_anchor``) is injected as one free seed into the window
-    whose band contains it.
+    produce ``counts[i]`` distinct seeds. When its energy lies within a
+    window's band the exact ground state (``bottom_anchor``) is injected
+    into that window as one free seed; if it lies below every window the
+    injection is skipped and those windows are filled by the search
+    alone.
 
     The search is material-agnostic: the ground state, the random fill,
     and the move set are all caller-supplied. ``random_fill`` is called
@@ -196,9 +260,12 @@ def seed_window_configs(
         length ``counts[i]`` and all distinct and in-band.
 
     Raises:
-        ValueError: on input validation failure.
+        ValueError: on input validation failure, or if ``random_fill``
+            returns a structure incompatible with ``bottom_anchor``.
         RuntimeError: if any window cannot be filled to its target after
-            ``params.max_walks_per_window`` rounds, or if a worker fails.
+            ``params.max_walks_per_window`` rounds, or if a seed-search
+            worker process raises or dies unexpectedly (e.g. an
+            out-of-memory kill).
     """
     _validate_inputs(windows, counts, moves, params.max_walks_per_window)
     windows = [tuple(w) for w in windows]  # type: ignore[misc]
@@ -224,21 +291,37 @@ def seed_window_configs(
         )
         e_gs = _energy(main_calc, bottom_anchor)
 
+        n_sites = len(bottom_anchor)
+
         # Resolve anchors.
         if anchors is not None:
             anchor_kinds: list[Anchor] = validate_anchor_override(
                 anchors, n_windows
             )
         else:
-            top_probe = random_fill(_seed(random_seed, n_windows, 0, 0))
+            top_probe = _validate_fill_output(
+                random_fill(_seed(random_seed, n_windows, 0, 0)), n_sites
+            )
             e_top = _energy(main_calc, top_probe)
             anchor_kinds = assign_anchors(windows, e_gs, e_top)
 
-        # GS injection: first window whose band contains e_gs.
+        # GS injection: the first window whose band contains e_gs gets the
+        # exact ground state as a free seed. If e_gs lies below every
+        # window (a ladder that does not reach the true ground state) the
+        # injection is skipped -- reported, not silent.
+        injected = False
         for i, (lo, hi) in enumerate(windows):
-            if (lo is None or e_gs >= lo) and (hi is None or e_gs <= hi):
+            if _in_band(e_gs, lo, hi):
                 harvest.record(i, bottom_anchor.numbers)
+                injected = True
                 break
+        if not injected:
+            print(
+                f"[seed] ground-state energy {e_gs:.6g} lies outside every "
+                f"window band; not injected as a free seed (those windows "
+                f"are filled by the search).",
+                flush=True,
+            )
 
         print(
             f"[seed] {n_windows} windows, counts={counts}, "
@@ -246,8 +329,9 @@ def seed_window_configs(
             flush=True,
         )
 
-        with ctx.Pool(
-            processes=n_workers,
+        with cf.ProcessPoolExecutor(
+            max_workers=n_workers,
+            mp_context=ctx,
             initializer=_init_worker,
             initargs=(
                 str(ce_path),
@@ -257,7 +341,7 @@ def seed_window_configs(
                 float(params.window_search_penalty),
                 n_steps,
             ),
-        ) as pool:
+        ) as executor:
             t0 = time.monotonic()
             next_heartbeat = t0 + _HEARTBEAT_INTERVAL_S
             for round_idx in range(params.max_walks_per_window):
@@ -270,8 +354,9 @@ def seed_window_configs(
                     if anchor_kinds[i] == "bottom":
                         start = bottom_anchor.copy()  # type: ignore[no-untyped-call]
                     else:
-                        start = random_fill(
-                            _seed(random_seed, i, round_idx, 0)
+                        start = _validate_fill_output(
+                            random_fill(_seed(random_seed, i, round_idx, 0)),
+                            n_sites,
                         )
                     tasks.append(
                         _WalkTask(
@@ -284,7 +369,9 @@ def seed_window_configs(
                     )
                 if not tasks:
                     break
-                for window_idx, occ in pool.imap_unordered(_run_walk, tasks):
+                futures = [executor.submit(_run_walk, task) for task in tasks]
+                for future in cf.as_completed(futures):
+                    window_idx, occ = _walk_result(future)
                     if occ is not None and harvest.record(window_idx, occ):
                         n_filled, _ = harvest.fill_status()
                         print(

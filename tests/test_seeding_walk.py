@@ -5,8 +5,18 @@ from __future__ import annotations
 from mchammer.calculators import ClusterExpansionCalculator
 from mchammer_moves import PairSwap
 
-from mchammer_pt.seeding.walk import confined_walk
+from mchammer_pt.seeding.walk import _in_band, confined_walk
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+
+def test_in_band_handles_unbounded_edges():
+    # An unbounded edge is treated as satisfied on that side.
+    assert _in_band(5.0, None, 10.0) is True
+    assert _in_band(5.0, 0.0, None) is True
+    assert _in_band(5.0, None, None) is True
+    assert _in_band(5.0, 0.0, 10.0) is True
+    assert _in_band(-1.0, 0.0, 10.0) is False
+    assert _in_band(11.0, 0.0, 10.0) is False
 
 
 def _setup():
