@@ -177,6 +177,9 @@ def seed_window_configs(
             must be importable by a spawn worker (no Jupyter-cell or
             function-local move classes).
         windows: per-window ``(lo, hi)`` edges; ``None`` is unbounded.
+            A single window is accepted here, but
+            ``WangLandauParallelTempering.process_pool`` (the intended
+            consumer of the result) requires at least two.
         counts: target number of distinct seeds per window (K).
         energy_spacing: WL energy-grid bin size.
         bottom_anchor: ground-state structure. Start for bottom-anchored
