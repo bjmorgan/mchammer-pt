@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-04
+
 ### Added
+
+- ``mchammer_pt.seed_window_configs`` and ``SeedSearchParams``: a
+  public, material-agnostic search that fills each REWL energy window
+  with K distinct, in-band starting configurations, ready for
+  ``WangLandauParallelTempering.process_pool(atoms=...,
+  n_walkers_per_window=...)``. Each window is anchored to the nearer
+  energy end (ground state below, a caller-supplied random fill above)
+  and driven into the band by ``CustomWangLandauEnsemble``'s built-in
+  window search. The ground state, random fill, and move set are all
+  caller-supplied inputs; the search contains no chemistry. Runs a
+  spawn ``multiprocessing.Pool`` of independent confined walks and
+  raises a clear error naming any window the density of states cannot
+  fill.
 
 - ``mchammer-pt-stitch`` gains a ``--multi-run`` flag that merges N
   independent run checkpoints (one per run) into a single consensus

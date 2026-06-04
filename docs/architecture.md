@@ -127,3 +127,47 @@ mechanical:
 - `mchammer_pt/parallel/processes.py` -- `ProcessWangLandauPool`.
 - `mchammer_pt/wl.py` -- `WangLandauParallelTempering`
   orchestrator.
+
+## Window seeding (`seed_window_configs`)
+
+`mchammer_pt.seed_window_configs` is the companion to
+`WangLandauParallelTempering.process_pool(atoms=...)`: it produces the
+per-window list-of-lists of starting structures that the orchestrator's
+`atoms` / `n_walkers_per_window` arguments consume.
+
+It is deliberately separate from the REWL pool machinery. The pool runs
+N persistent replicas coordinated every cycle; seeding runs many short,
+independent confined walks. The seeding orchestrator is a plain spawn
+`multiprocessing.Pool` (not `ProcessWangLandauPool`); it shares only the
+small helpers `AtomsSpec` and `_check_importable` with the pool.
+
+Each walk reuses `mchammer_moves.CustomWangLandauEnsemble`'s built-in
+window search: a penalty walk drives a configuration into the target
+band, then normal WL sampling confines it there. Lower-half windows
+start each walk from the caller's ground-state anchor and climb up;
+upper-half windows start from a fresh `random_fill` and settle down.
+The search is material-agnostic -- ground state, random fill, and moves
+are all caller-supplied -- so a downstream project is a thin adapter that
+provides those three and calls `seed_window_configs`.
+
+The handoff:
+
+    configs = seed_window_configs(ce, moves, windows, counts, spacing,
+                                  bottom_anchor, random_fill,
+                                  random_seed=seed)
+    pt = WangLandauParallelTempering.process_pool(
+        cluster_expansion=ce, atoms=configs, windows=windows,
+        energy_spacing=spacing, block_size=..., random_seed=...,
+        n_walkers_per_window=counts)
+
+The modules:
+
+- `mchammer_pt/seeding/params.py` -- `SeedSearchParams` knobs.
+- `mchammer_pt/seeding/anchoring.py` -- energy-based bottom/top anchor
+  assignment.
+- `mchammer_pt/seeding/bookkeeping.py` -- `WindowHarvest` per-window
+  dedup and K-cap.
+- `mchammer_pt/seeding/walk.py` -- `confined_walk`, one walk -> one
+  in-band seed.
+- `mchammer_pt/seeding/search.py` -- `seed_window_configs` spawn-pool
+  orchestration.
