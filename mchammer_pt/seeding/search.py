@@ -104,6 +104,7 @@ def _validate_inputs(
     windows: Sequence[tuple[float | None, float | None]],
     counts: Sequence[int],
     moves: Sequence[tuple[Move, float]],
+    max_walks_per_window: int,
 ) -> None:
     if len(windows) < 1:
         raise ValueError("windows must be non-empty.")
@@ -120,6 +121,15 @@ def _validate_inputs(
         )
     if any(int(c) < 1 for c in counts):
         raise ValueError(f"all counts must be >= 1; got {list(counts)}.")
+    max_count = max(int(c) for c in counts)
+    if max_walks_per_window < max_count:
+        raise ValueError(
+            f"max_walks_per_window ({max_walks_per_window}) is less than "
+            f"the largest per-window count ({max_count}); a window gains at "
+            f"most one configuration per round, so such a window could never "
+            f"be filled. Increase max_walks_per_window to at least "
+            f"{max_count}."
+        )
     if len(moves) < 1:
         raise ValueError("moves must be non-empty.")
     for move, _weight in moves:
@@ -187,7 +197,7 @@ def seed_window_configs(
         RuntimeError: if any window cannot be filled to its target after
             ``params.max_walks_per_window`` rounds, or if a worker fails.
     """
-    _validate_inputs(windows, counts, moves)
+    _validate_inputs(windows, counts, moves, params.max_walks_per_window)
     windows = [tuple(w) for w in windows]  # type: ignore[misc]
     counts = [int(c) for c in counts]
     n_windows = len(windows)
