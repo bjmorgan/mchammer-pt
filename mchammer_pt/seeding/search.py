@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import multiprocessing as mp
+import numbers
 import os
 import tempfile
 import time
@@ -150,8 +151,13 @@ def _validate_inputs(
             f"counts has {len(counts)} entries but windows has "
             f"{len(windows)}; supply one count per window."
         )
-    if any(int(c) < 1 for c in counts):
-        raise ValueError(f"all counts must be >= 1; got {list(counts)}.")
+    for i, c in enumerate(counts):
+        if not isinstance(c, numbers.Integral):
+            raise ValueError(
+                f"counts[{i}] must be an integer; got {type(c).__name__}."
+            )
+        if c < 1:
+            raise ValueError(f"counts[{i}] must be >= 1; got {c}.")
     max_count = max(int(c) for c in counts)
     if max_walks_per_window < max_count:
         raise ValueError(

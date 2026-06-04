@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass
 
 
@@ -39,14 +40,21 @@ class SeedSearchParams:
                 f"window_search_penalty must be > 0; got "
                 f"{self.window_search_penalty}"
             )
-        if self.walk_sweeps < 1:
-            raise ValueError(f"walk_sweeps must be >= 1; got {self.walk_sweeps}")
-        if self.max_walks_per_window < 1:
-            raise ValueError(
-                f"max_walks_per_window must be >= 1; got "
-                f"{self.max_walks_per_window}"
-            )
-        if self.n_workers is not None and self.n_workers < 1:
-            raise ValueError(
-                f"n_workers must be >= 1 when given; got {self.n_workers}"
-            )
+        for name in ("walk_sweeps", "max_walks_per_window"):
+            value = getattr(self, name)
+            if not isinstance(value, numbers.Integral):
+                raise ValueError(
+                    f"{name} must be an integer; got {type(value).__name__}."
+                )
+            if value < 1:
+                raise ValueError(f"{name} must be >= 1; got {value}")
+        if self.n_workers is not None:
+            if not isinstance(self.n_workers, numbers.Integral):
+                raise ValueError(
+                    f"n_workers must be an integer or None; got "
+                    f"{type(self.n_workers).__name__}."
+                )
+            if self.n_workers < 1:
+                raise ValueError(
+                    f"n_workers must be >= 1 when given; got {self.n_workers}"
+                )

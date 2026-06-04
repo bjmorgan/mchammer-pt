@@ -66,6 +66,11 @@ def test_rejects_count_below_one():
         _validate_inputs([(0.0, 1.0)], [0], _MOVES, 10, 0.5)
 
 
+def test_rejects_non_integer_count():
+    with pytest.raises(ValueError, match="integer"):
+        _validate_inputs([(0.0, 1.0)], [1.5], _MOVES, 10, 0.5)
+
+
 def test_rejects_max_walks_below_max_count():
     with pytest.raises(ValueError, match="max_walks_per_window"):
         _validate_inputs([(0.0, 1.0)], [5], _MOVES, 4, 0.5)

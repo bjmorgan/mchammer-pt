@@ -42,3 +42,16 @@ def test_explicit_values_round_trip():
 def test_rejects_non_positive(kwargs):
     with pytest.raises(ValueError):
         SeedSearchParams(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"walk_sweeps": 2.5},
+        {"max_walks_per_window": 2.5},
+        {"n_workers": 2.5},
+    ],
+)
+def test_rejects_non_integer_int_knobs(kwargs):
+    with pytest.raises(ValueError, match="integer"):
+        SeedSearchParams(**kwargs)
