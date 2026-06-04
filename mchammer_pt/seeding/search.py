@@ -133,7 +133,10 @@ def _validate_inputs(
     counts: Sequence[int],
     moves: Sequence[tuple[Move, float]],
     max_walks_per_window: int,
+    energy_spacing: float,
 ) -> None:
+    if not energy_spacing > 0:
+        raise ValueError(f"energy_spacing must be > 0; got {energy_spacing}.")
     if len(windows) < 1:
         raise ValueError("windows must be non-empty.")
     for i, (lo, hi) in enumerate(windows):
@@ -200,8 +203,8 @@ def _validate_fill_output(atoms: object, template: Atoms, seed: int) -> Atoms:
 
     Raises:
         ValueError: if ``atoms`` is not an ``Atoms``, has a different
-            site count, or has a different cell or atom ordering
-            (per-index positions) from ``template``.
+            site count, cell, periodic boundary conditions, or atom
+            ordering (per-index positions) from ``template``.
     """
     contract = (
         f"the structure from random_fill(seed={seed}) must be on the same "
@@ -220,6 +223,11 @@ def _validate_fill_output(atoms: object, template: Atoms, seed: int) -> Atoms:
         )
     if not np.allclose(atoms.cell.array, template.cell.array, atol=1e-6):
         raise ValueError(f"{contract}; its cell differs from bottom_anchor's.")
+    if not np.array_equal(atoms.pbc, template.pbc):
+        raise ValueError(
+            f"{contract}; its periodic boundary conditions differ from "
+            f"bottom_anchor's."
+        )
     if not np.allclose(atoms.positions, template.positions, atol=1e-6):
         raise ValueError(
             f"{contract}; its atom positions differ from bottom_anchor's. A "
@@ -298,7 +306,9 @@ def seed_window_configs(
             worker process raises or dies unexpectedly (e.g. an
             out-of-memory kill).
     """
-    _validate_inputs(windows, counts, moves, params.max_walks_per_window)
+    _validate_inputs(
+        windows, counts, moves, params.max_walks_per_window, energy_spacing
+    )
     windows = [tuple(w) for w in windows]  # type: ignore[misc]
     counts = [int(c) for c in counts]
     n_windows = len(windows)

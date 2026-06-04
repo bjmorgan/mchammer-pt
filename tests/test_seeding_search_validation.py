@@ -41,34 +41,39 @@ def test_walk_result_passes_through_success():
     assert _walk_result(future) == (2, None)
 
 
+def test_rejects_non_positive_energy_spacing():
+    with pytest.raises(ValueError, match="energy_spacing"):
+        _validate_inputs([(0.0, 1.0)], [1], _MOVES, 10, 0.0)
+
+
 def test_rejects_empty_windows():
     with pytest.raises(ValueError, match="non-empty"):
-        _validate_inputs([], [], _MOVES, 10)
+        _validate_inputs([], [], _MOVES, 10, 0.5)
 
 
 def test_rejects_lo_not_less_than_hi():
     with pytest.raises(ValueError, match="strictly less"):
-        _validate_inputs([(1.0, 1.0)], [1], _MOVES, 10)
+        _validate_inputs([(1.0, 1.0)], [1], _MOVES, 10, 0.5)
 
 
 def test_rejects_counts_length_mismatch():
     with pytest.raises(ValueError, match="one count per window"):
-        _validate_inputs([(0.0, 1.0), (1.0, 2.0)], [1], _MOVES, 10)
+        _validate_inputs([(0.0, 1.0), (1.0, 2.0)], [1], _MOVES, 10, 0.5)
 
 
 def test_rejects_count_below_one():
     with pytest.raises(ValueError, match=">= 1"):
-        _validate_inputs([(0.0, 1.0)], [0], _MOVES, 10)
+        _validate_inputs([(0.0, 1.0)], [0], _MOVES, 10, 0.5)
 
 
 def test_rejects_max_walks_below_max_count():
     with pytest.raises(ValueError, match="max_walks_per_window"):
-        _validate_inputs([(0.0, 1.0)], [5], _MOVES, 4)
+        _validate_inputs([(0.0, 1.0)], [5], _MOVES, 4, 0.5)
 
 
 def test_rejects_empty_moves():
     with pytest.raises(ValueError, match="moves must be non-empty"):
-        _validate_inputs([(0.0, 1.0)], [1], [], 10)
+        _validate_inputs([(0.0, 1.0)], [1], [], 10, 0.5)
 
 
 def test_random_fill_wrong_length_is_caught_at_boundary():
@@ -132,5 +137,29 @@ def test_random_fill_reordered_atoms_is_caught_at_boundary():
             energy_spacing=0.5,
             bottom_anchor=anchor,
             random_fill=reordering_fill,
+            random_seed=0,
+        )
+
+
+def test_random_fill_wrong_pbc_is_caught_at_boundary():
+    # Same cell, positions and ordering, but different periodic boundary
+    # conditions still violates the same-lattice contract.
+    ce = make_wl_ce()
+    anchor = make_wl_atoms(n_au=16)  # fully periodic
+
+    def bad_pbc_fill(seed):
+        a = anchor.copy()
+        a.pbc = [True, True, False]
+        return a
+
+    with pytest.raises(ValueError, match="periodic boundary"):
+        seed_window_configs(
+            cluster_expansion=ce,
+            moves=_MOVES,
+            windows=[(-50.0, 0.0), (-5.0, 50.0)],
+            counts=[1, 1],
+            energy_spacing=0.5,
+            bottom_anchor=anchor,
+            random_fill=bad_pbc_fill,
             random_seed=0,
         )

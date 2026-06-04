@@ -138,8 +138,11 @@ per-window list-of-lists of starting structures that the orchestrator's
 It is deliberately separate from the REWL pool machinery. The pool runs
 N persistent replicas coordinated every cycle; seeding runs many short,
 independent confined walks. The seeding orchestrator is a plain spawn
-`multiprocessing.Pool` (not `ProcessWangLandauPool`); it shares only the
-small helpers `AtomsSpec` and `_check_importable` with the pool.
+`concurrent.futures.ProcessPoolExecutor` (not `ProcessWangLandauPool`);
+it shares only the small helpers `AtomsSpec` and `_check_importable`
+with the pool. The executor surfaces a worker killed by the OS (e.g. an
+out-of-memory kill) as a `BrokenProcessPool` rather than hanging, which
+the orchestrator re-raises as a clear `RuntimeError`.
 
 Each walk reuses `mchammer_moves.CustomWangLandauEnsemble`'s built-in
 window search: a penalty walk drives a configuration into the target

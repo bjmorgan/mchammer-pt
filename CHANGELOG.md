@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and driven into the band by ``CustomWangLandauEnsemble``'s built-in
   window search. The ground state, random fill, and move set are all
   caller-supplied inputs; the search contains no chemistry. Runs a
-  spawn ``multiprocessing.Pool`` of independent confined walks and
-  raises a clear error naming any window the density of states cannot
-  fill.
+  spawn ``concurrent.futures.ProcessPoolExecutor`` of independent
+  confined walks and raises a clear error naming any window the search
+  cannot fill with enough distinct in-band configurations within the
+  walk budget (and surfaces a worker that dies, e.g. an out-of-memory
+  kill, as a ``RuntimeError`` rather than hanging).
 
 - ``mchammer-pt-stitch`` gains a ``--multi-run`` flag that merges N
   independent run checkpoints (one per run) into a single consensus
