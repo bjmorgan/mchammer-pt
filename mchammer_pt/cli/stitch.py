@@ -36,6 +36,8 @@ from mchammer_pt.wl_result import WindowResult
 
 _REQUIRED_PARAMS = ("energy_spacing", "energy_limit_left", "energy_limit_right")
 
+WindowKey = tuple[float | None, float | None]
+
 
 def _parse_window_indices(s: str) -> list[int]:
     """argparse type for ``--windows``: comma-separated 0-based ints."""
@@ -164,9 +166,9 @@ def _get_window_params(
 
 
 def _select_window_keys(
-    by_window: dict[tuple[float | None, float | None], list[BaseDataContainer]],
+    by_window: dict[WindowKey, list[BaseDataContainer]],
     windows_keep: list[int] | None,
-) -> tuple[list[tuple[float | None, float | None]], str | None]:
+) -> tuple[list[WindowKey], str | None]:
     """Return the window keys to keep in energy-sorted order.
 
     Sorts ``by_window`` keys by ``energy_limit_left`` ascending (treating
@@ -178,7 +180,7 @@ def _select_window_keys(
 
     Returns ``(keys, error_message)``. On error the keys list is empty.
     """
-    def sort_key(k: tuple[float | None, float | None]) -> tuple[float, float]:
+    def sort_key(k: WindowKey) -> tuple[float, float]:
         lo, hi = k
         lo_val = float("-inf") if lo is None else float(lo)
         hi_val = float("inf") if hi is None else float(hi)
@@ -218,7 +220,7 @@ def _trim_entropy_bins(
 
 
 def _format_window_summary(
-    kept_keys: list[tuple[float | None, float | None]],
+    kept_keys: list[WindowKey],
     total: int,
 ) -> str:
     """Build the 'kept K of W windows: ...' fragment for the success line."""
@@ -275,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     energy_spacing = float(next(iter(spacings)))  # type: ignore[arg-type]
 
     by_window: dict[
-        tuple[float | None, float | None], list[BaseDataContainer]
+        WindowKey, list[BaseDataContainer]
     ] = defaultdict(list)
     for dc, params in zip(dcs, params_per_dc, strict=True):
         key = (params["energy_limit_left"], params["energy_limit_right"])
@@ -303,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     per_window: list[pd.DataFrame] = []
-    surviving_keys: list[tuple[float | None, float | None]] = []
+    surviving_keys: list[WindowKey] = []
     for lo, hi in kept_keys:
         containers = by_window[(lo, hi)]
         result = WindowResult(
