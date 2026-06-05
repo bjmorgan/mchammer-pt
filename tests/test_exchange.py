@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from mchammer_pt.exchange import matching_for_boundary, metropolis_accept, pair_set_for_cycle
+from mchammer_pt.exchange import (
+    matching_for_boundary,
+    metropolis_accept,
+    pair_set_for_cycle,
+)
 
 
 def test_pair_set_even_cycle_returns_even_indices():
