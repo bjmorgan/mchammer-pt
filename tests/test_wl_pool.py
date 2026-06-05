@@ -1670,3 +1670,108 @@ def test_process_wl_pool_candidate_pairs_match_primitive(tmp_path):
             pool.n_walkers(0), pool.n_walkers(1), np.random.default_rng(5)
         )
     assert got == expected
+
+
+def test_process_pool_exchange_issues_no_energy_or_log_g_ipc(
+    tmp_path, monkeypatch
+):
+    """Exchange acceptance on the process pool is evaluated parent-side.
+
+    The REWL efficiency claim: in the process pool, every term of the
+    exchange acceptance ratio is read from the parent-side per-walker
+    cache (``walker_energy`` / ``walker_log_g``), so the exchange phase
+    issues no per-exchange round-trip to the workers. Concretely, across
+    a full advance+exchange run the pool must send **no** ``"ENERGY"``
+    opcode (the on-demand ``current_energy(i)`` path) and **no**
+    ``"LOG_G_AT"`` opcode (the on-demand ``log_g(i, ...)`` path).
+    Accepted swaps still move configurations, but only via batched
+    ``"GET_OCC"`` / ``"SET_OCC"``.
+
+    All worker traffic funnels through ``request`` / ``broadcast_gather``
+    / ``fanout_gather`` in ``mchammer_pt.parallel.processes``; spying the
+    opcode (``msg[0]``) at those three choke points captures every
+    command sent. A regression that re-introduced a per-exchange energy
+    or ln-g query would show up here as an ``"ENERGY"`` or ``"LOG_G_AT"``
+    opcode.
+    """
+    import mchammer_pt.parallel.processes as proc
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import (
+        make_process_wl_pool_w2,
+        make_wl_atoms,
+        make_wl_ce,
+    )
+
+    seen_opcodes: list[str] = []
+    real_request = proc.request
+    real_broadcast = proc.broadcast_gather
+    real_fanout = proc.fanout_gather
+
+    def spy_request(conn, msg, label):
+        seen_opcodes.append(msg[0])
+        return real_request(conn, msg, label)
+
+    def spy_broadcast(targets, msg):
+        seen_opcodes.append(msg[0])
+        return real_broadcast(targets, msg)
+
+    def spy_fanout(targets):
+        for _conn, _label, msg in targets:
+            seen_opcodes.append(msg[0])
+        return real_fanout(targets)
+
+    # 2 windows x W=2 (M=4 walkers), in-process workers. Both windows
+    # share the same wide energy range, so proposed swaps land in-window
+    # and are accepted -- exercising the GET_OCC/SET_OCC swap path.
+    pool = make_process_wl_pool_w2(tmp_path / "pool")
+    try:
+        pt = WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=pool.windows,
+            energy_spacing=pool.energy_spacing,
+            block_size=20,
+            random_seed=0,
+            pool=pool,
+        )
+        monkeypatch.setattr(proc, "request", spy_request)
+        monkeypatch.setattr(proc, "broadcast_gather", spy_broadcast)
+        monkeypatch.setattr(proc, "fanout_gather", spy_fanout)
+        pt.run(n_cycles=6)
+    finally:
+        if pool.is_open:
+            pool.shutdown()
+
+    opcodes = set(seen_opcodes)
+    # The exchange phase must not query worker energy or ln g.
+    assert "ENERGY" not in opcodes, (
+        f"exchange acceptance sent an ENERGY opcode -- it should read the "
+        f"parent-side cache, not round-trip to workers. opcodes: {opcodes}"
+    )
+    assert "LOG_G_AT" not in opcodes, (
+        f"exchange acceptance sent a LOG_G_AT opcode -- it should read the "
+        f"parent-side cache, not round-trip to workers. opcodes: {opcodes}"
+    )
+    # Every opcode sent must be one of the advance/halve/merge/phase/swap
+    # opcodes; nothing else (in particular no per-exchange energy/ln-g).
+    allowed = {
+        "ADVANCE",
+        "FORCE_HALVE",
+        "SET_ENTROPY",
+        "SET_PHASE",
+        "GET_OCC",
+        "SET_OCC",
+        "CONVERGED",
+        "FINALISE_MERGE",
+    }
+    assert opcodes <= allowed, (
+        f"unexpected opcode(s) {opcodes - allowed} sent during "
+        f"advance+exchange; expected a subset of {allowed}"
+    )
+    # Swaps were accepted, so the batched move path ran. This guards
+    # against the assertion passing vacuously (no swaps -> no IPC at all).
+    assert "GET_OCC" in opcodes and "SET_OCC" in opcodes, (
+        f"no accepted swaps observed (opcodes: {opcodes}); the test setup "
+        f"no longer exercises the exchange move path -- adjust the window "
+        f"overlap or cycle count"
+    )

@@ -236,3 +236,118 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
         f"analytic: max |residual| = {max_dev:.3f} ln-units. "
         f"residual_centred = {residual_centred.tolist()}"
     )
+
+
+@pytest.mark.slow
+def test_rewl_multiwalker_recovers_analytic_4x4_ising_dos() -> None:
+    """Multi-walker (W=2) matching exchange still recovers the exact DOS.
+
+    Multi-walker analogue of
+    ``test_rewl_recovers_analytic_4x4_ising_dos``: identical 4x4 Ising
+    setup, windows, energy spacing, and convergence target, but each
+    window now runs ``n_walkers_per_window=2`` walkers under the
+    matching-exchange coordinator. Matching exchange changes the rate
+    at which configurations cross window boundaries; it must not change
+    the stationary target. So the recovered DOS must still match the
+    brute-force analytic DOS within the *same* tolerances as the
+    single-walker gate — the tolerances are deliberately unchanged
+    because the whole point is that the DOS is invariant under the
+    multi-walker refactor.
+
+    A bug in the matching acceptance ratio, in the per-walker entropy
+    merge at finalise, or in how accepted swaps move configurations
+    between walkers would bias the stationary distribution and push the
+    stitched curve off the exact one, failing this test.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, prototype = _build_4x4_ising()
+    energy_spacing = 4.0
+
+    exact_energies, exact_log_g = _exact_dos(ce, prototype, energy_spacing)
+
+    windows: list[tuple[float | None, float | None]] = [
+        (None, 12.0),
+        (-12.0, None),
+    ]  # overlap [-12, 12]
+
+    rng = np.random.default_rng(0)
+    atoms_per_window = [
+        _find_in_window_config(prototype, ce, w, rng) for w in windows
+    ]
+
+    # Same convergence target as the single-walker gate. With W=2 the
+    # pooled-flatness gate sees twice as many samples per bin per cycle,
+    # so the run converges in far fewer cycles than the W=1 run; the
+    # 5000-cycle cap inherited from the single-walker test is generous.
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=atoms_per_window,
+        windows=windows,
+        energy_spacing=energy_spacing,
+        block_size=len(prototype) * 200,
+        random_seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={
+            "fill_factor_limit": 1e-5,
+            "flatness_limit": 0.7,
+            "trial_move": "flip",
+        },
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=5000)
+    assert pt.cycles_in_segment < 5000, (
+        f"failed to converge within 5000 cycles "
+        f"(got {pt.cycles_in_segment}); raise the cap or relax "
+        f"fill_factor_limit (currently 1e-5)"
+    )
+
+    # One representative container per window. ``run()`` ran
+    # ``finalise_for_reporting``, which merged each window's per-walker
+    # entropies into *every* walker, so walker 0 of each window carries
+    # the merged ln g. ``per_window_data_containers`` also refreshes
+    # each container's ``_last_state`` so the WL fields
+    # (``fill_factor``, ``entropy``, ...) that
+    # ``get_density_of_states_wl`` reads are populated.
+    per_window = pt.pool.per_window_data_containers()
+    dcs = {i: containers[0] for i, containers in enumerate(per_window)}
+    stitched_df, _stitch_errors = get_density_of_states_wl(dcs)
+
+    stitched_log_g = dict(zip(
+        np.round(
+            stitched_df["energy"].to_numpy() / energy_spacing
+        ).astype(int),
+        stitched_df["entropy"].to_numpy(),
+        strict=True,
+    ))
+    exact_bins = np.round(exact_energies / energy_spacing).astype(int)
+    exact_log_g_by_bin = dict(zip(exact_bins, exact_log_g, strict=True))
+
+    shared_bins = sorted(set(stitched_log_g) & set(exact_log_g_by_bin))
+    assert len(shared_bins) >= 5, (
+        f"too few shared bins between stitched and exact DOS: "
+        f"{shared_bins}"
+    )
+
+    stitched = np.array([stitched_log_g[b] for b in shared_bins])
+    exact = np.array([exact_log_g_by_bin[b] for b in shared_bins])
+
+    residual = stitched - exact
+    residual_centred = residual - residual.mean()
+    max_dev = float(np.max(np.abs(residual_centred)))
+    std_dev = float(np.std(residual_centred))
+
+    # Tolerances identical to the single-walker gate: matching exchange
+    # must not change the DOS the run converges to.
+    assert std_dev < 0.3, (
+        f"W=2 REWL-recovered DOS shape diverges from analytic 4x4 Ising "
+        f"DOS: residual std = {std_dev:.3f} ln-units across "
+        f"{len(shared_bins)} bins. residual_centred = "
+        f"{residual_centred.tolist()}"
+    )
+    assert max_dev < 1.0, (
+        f"W=2 REWL-recovered DOS has a bin with large deviation from "
+        f"analytic: max |residual| = {max_dev:.3f} ln-units. "
+        f"residual_centred = {residual_centred.tolist()}"
+    )
