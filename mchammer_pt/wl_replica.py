@@ -302,6 +302,7 @@ class WangLandauReplica:
                 window_entry_step=None,
                 histogram={},
                 reached_energy_window=False,
+                current_energy=0.0,
             ),
         )
 
@@ -443,6 +444,7 @@ class WangLandauReplica:
             ),
             histogram=dict(e._histogram),
             reached_energy_window=bool(e._reached_energy_window),
+            current_energy=self.current_energy(),
         )
 
     def apply_plan(self, plan: CoordinatorPlan) -> None:

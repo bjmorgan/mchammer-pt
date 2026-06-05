@@ -592,6 +592,7 @@ def test_advance_refreshes_walker_states(wl_replica_factory):
     state = replica.walker_states[0]
     assert state.step == int(replica.ensemble.step)
     assert state.fill_factor == float(replica.ensemble._fill_factor)
+    assert state.current_energy == replica.current_energy()
 
 
 def test_apply_plan_halve_only_halves_fill_factor(wl_replica_factory):

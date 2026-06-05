@@ -27,6 +27,7 @@ class WalkerPostBlockState:
     window_entry_step: int | None
     histogram: dict[int, int]
     reached_energy_window: bool
+    current_energy: float
 
 FlatnessMode = Literal["per_walker", "pooled"]
 """Flatness gate mode for collective halving.

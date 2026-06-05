@@ -81,6 +81,7 @@ def _flat_walker(
         window_entry_step=0,
         histogram={k: 100 for k in entropy},
         reached_energy_window=True,
+        current_energy=0.0,
     )
 
 

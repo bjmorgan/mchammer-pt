@@ -439,6 +439,7 @@ def test_summed_histogram_halving_criterion_met_pooled_case():
             window_entry_step=0,
             histogram={0: 100, 1: 1000},
             reached_energy_window=True,
+            current_energy=0.0,
         ),
         WalkerPostBlockState(
             halving_criterion_met=False,
@@ -448,6 +449,7 @@ def test_summed_histogram_halving_criterion_met_pooled_case():
             window_entry_step=0,
             histogram={0: 1000, 1: 100},
             reached_energy_window=True,
+            current_energy=0.0,
         ),
     ]
     # Pooled: {0: 1100, 1: 1100}, mean 1100, limit 880 (0.8 * 1100);
@@ -474,6 +476,7 @@ def test_summed_histogram_halving_criterion_met_false_when_unentered():
             window_entry_step=0,
             histogram={0: 1000, 1: 1000},
             reached_energy_window=True,
+            current_energy=0.0,
         ),
         WalkerPostBlockState(
             halving_criterion_met=False,
@@ -483,6 +486,7 @@ def test_summed_histogram_halving_criterion_met_false_when_unentered():
             window_entry_step=None,
             histogram={},
             reached_energy_window=False,
+            current_energy=0.0,
         ),
     ]
     assert (

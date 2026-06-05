@@ -593,6 +593,7 @@ class ProcessWangLandauWindow:
                 window_entry_step=None,
                 histogram={},
                 reached_energy_window=False,
+                current_energy=0.0,
             )
             for _ in workers
         ]

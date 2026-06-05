@@ -28,6 +28,7 @@ def _state(
     window_entry_step: int | None = 0,
     histogram: dict[int, int] | None = None,
     reached: bool = True,
+    current_energy: float = 0.0,
 ) -> WalkerPostBlockState:
     return WalkerPostBlockState(
         halving_criterion_met=halving_criterion_met,
@@ -37,6 +38,7 @@ def _state(
         window_entry_step=window_entry_step,
         histogram=dict(histogram) if histogram is not None else {0: 100, 1: 100},
         reached_energy_window=reached,
+        current_energy=current_energy,
     )
 
 
@@ -430,6 +432,7 @@ def test_pooled_filled_parity_tracks_one_over_t_gate():
             window_entry_step=0,
             histogram=histogram,
             reached_energy_window=True,
+            current_energy=0.0,
         )
 
     cases = [

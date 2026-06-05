@@ -298,6 +298,7 @@ class WangLandauWorker(BaseWorker):
             ),
             histogram=dict(e._histogram),
             reached_energy_window=bool(e._reached_energy_window),
+            current_energy=self._replica.current_energy(),
         ))
 
     def _handle_log_g_at(self, cmd: tuple[Any, ...]) -> None:
