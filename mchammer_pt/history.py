@@ -99,10 +99,12 @@ class ExchangeHistory:
             ladder; the configuration at that temperature position may
             change on accepted exchanges. Row 0 is the pre-run
             snapshot.
-        replica_labels_per_cycle: which original replica *label* is
-            currently at each temperature index, shape
-            ``(n_cycles+1, n_replicas)``. Labels permute on accepted
-            exchanges.
+        replica_labels_per_cycle: position-indexed carrier labels.
+            ``replica_labels_per_cycle[cycle][position]`` is the carrier
+            id at each ``(window, slot)`` position, shape
+            ``(n_cycles+1, N_w)`` where ``N_w = sum(W_i)`` equals
+            ``n_replicas`` when every window has one walker. Labels
+            permute on accepted exchanges.
         swap_attempted: per-pair attempt counts, shape
             ``(n_replicas-1,)``.
         swap_accepted: per-pair accepted counts, same shape.
@@ -114,12 +116,24 @@ class ExchangeHistory:
     swap_accepted: np.ndarray
 
     @classmethod
-    def empty(cls, n_cycles: int, n_replicas: int) -> ExchangeHistory:
-        """Allocate a zero-filled history of the given shape."""
+    def empty(
+        cls,
+        n_cycles: int,
+        n_replicas: int,
+        n_carriers: int | None = None,
+    ) -> ExchangeHistory:
+        """Allocate a zero-filled history of the given shape.
+
+        ``n_carriers`` is the number of position-indexed carrier labels
+        (the total number of walkers across all windows). It defaults to
+        ``n_replicas`` (the single-walker / canonical case).
+        """
+        if n_carriers is None:
+            n_carriers = n_replicas
         return cls(
             energies_per_cycle=np.zeros((n_cycles + 1, n_replicas), dtype=np.float64),
             replica_labels_per_cycle=np.zeros(
-                (n_cycles + 1, n_replicas), dtype=np.int64
+                (n_cycles + 1, n_carriers), dtype=np.int64
             ),
             swap_attempted=np.zeros(n_replicas - 1, dtype=np.int64),
             swap_accepted=np.zeros(n_replicas - 1, dtype=np.int64),

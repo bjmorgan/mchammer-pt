@@ -358,6 +358,20 @@ def test_concatenate_no_arguments_raises():
         ExchangeHistory.concatenate()
 
 
+def test_empty_defaults_carriers_to_replicas():
+    h = ExchangeHistory.empty(n_cycles=4, n_replicas=3)
+    assert h.replica_labels_per_cycle.shape == (5, 3)
+
+
+def test_empty_widens_labels_to_n_carriers():
+    h = ExchangeHistory.empty(n_cycles=4, n_replicas=3, n_carriers=6)
+    assert h.replica_labels_per_cycle.shape == (5, 6)
+    # energies and swap counts stay keyed on replicas/pairs.
+    assert h.energies_per_cycle.shape == (5, 3)
+    assert h.swap_attempted.shape == (2,)
+    assert h.swap_accepted.shape == (2,)
+
+
 def test_write_hdf5_writes_window_groups_subgroup(tmp_path: Path):
     """When window_groups is non-empty, /orchestrator/window_groups/<g>/
     carries rng_state, exchange_idx, phase. None entries are skipped."""
