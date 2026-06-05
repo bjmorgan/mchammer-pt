@@ -1483,3 +1483,53 @@ def test_process_wl_pool_broadcast_yields_independent_workers(tmp_path):
         occ1_after = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
     assert not np.array_equal(occ0_after, occ1_after)
     np.testing.assert_array_equal(occ1_after, occ1_before)
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on SerialWangLandauPool
+# ---------------------------------------------------------------------------
+
+
+def test_serial_wl_pool_walker_counts_and_positions():
+    """n_walkers, window_of_position, and n_carriers are correct for a mixed pool."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()  # windows with [1, 2] walkers
+    assert [pool.n_walkers(i) for i in range(len(pool))] == [1, 2]
+    assert list(pool.window_of_position()) == [0, 1, 1]
+    assert pool.n_carriers() == 3
+
+
+def test_serial_wl_pool_candidate_pairs_match_primitive():
+    """candidate_pairs delegates to matching_for_boundary with the same RNG seed."""
+    from mchammer_pt.exchange import matching_for_boundary
+
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    got = pool.candidate_pairs(0, 1, np.random.default_rng(5))
+    expected = matching_for_boundary(
+        pool.n_walkers(0), pool.n_walkers(1), np.random.default_rng(5)
+    )
+    assert got == expected
+
+
+def test_serial_wl_pool_swap_by_walker_moves_configs():
+    """swap_walker_configurations exchanges the configurations of the named walkers."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    e_before_00 = pool.walker_energy(0, 0)
+    e_before_10 = pool.walker_energy(1, 0)
+    pool.swap_walker_configurations(0, 0, 1, 0)
+    assert pool.walker_energy(0, 0) == e_before_10
+    assert pool.walker_energy(1, 0) == e_before_00
+
+
+def test_serial_wl_pool_walker_log_g_delegates():
+    """walker_log_g routes to the named walker's own log g."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    e = pool.walker_energy(1, 0)
+    assert pool.walker_log_g(1, 0, e) == pool.log_g(1, e)

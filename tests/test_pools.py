@@ -1480,3 +1480,49 @@ def test_wang_landau_pool_protocol_exists():
     assert issubclass(WangLandauPool, ReplicaPool)
     for name in ("windows", "energy_spacing", "log_g", "log_g_pair", "converged_flags"):
         assert hasattr(WangLandauPool, name) or name in dir(WangLandauPool)
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on SerialPool
+# ---------------------------------------------------------------------------
+
+
+def test_serial_canonical_walker_surface(toy_ce, toy_atoms):
+    """n_walkers, window_of_position, and n_carriers are trivial for single-walker rungs."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        assert [pool.n_walkers(i) for i in range(len(pool))] == [1] * len(pool)
+        assert list(pool.window_of_position()) == list(range(len(pool)))
+        assert pool.n_carriers() == len(pool)
+    finally:
+        pool.shutdown()
+
+
+def test_serial_canonical_candidate_pairs_do_not_consume_rng(toy_ce, toy_atoms):
+    """candidate_pairs returns [(0, 0)] without drawing from the RNG."""
+    pool = _make_serial(toy_ce, toy_atoms)
+    try:
+        rng = np.random.default_rng(0)
+        before = rng.bit_generator.state
+        assert pool.candidate_pairs(0, 1, rng) == [(0, 0)]
+        assert rng.bit_generator.state == before
+    finally:
+        pool.shutdown()
+
+
+def test_serial_canonical_swap_walker_delegates(toy_ce, toy_atoms):
+    """swap_walker_configurations delegates to swap_configurations."""
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=300.0, random_seed=1),
+        Replica(toy_ce, toy_atoms, temperature=10000.0, random_seed=2),
+    ]
+    pool = SerialPool(replicas)
+    try:
+        pool.advance_all(200)
+        e0 = pool.current_energy(0)
+        e1 = pool.current_energy(1)
+        pool.swap_walker_configurations(0, 0, 1, 0)
+        assert pool.current_energy(0) == e1
+        assert pool.current_energy(1) == e0
+    finally:
+        pool.shutdown()

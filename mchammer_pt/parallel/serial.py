@@ -14,6 +14,7 @@ from mchammer.observers.base_observer import (
     BaseObserver,
 )
 
+from ..exchange import matching_for_boundary
 from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
@@ -92,6 +93,32 @@ class SerialPool:
         except BaseException:
             self._replicas[i].set_occupations(occ_i)
             raise
+
+    def n_walkers(self, i: int) -> int:
+        """Single-walker rungs: always 1."""
+        return 1
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Single-walker rungs exchange the one pair ``(0, 0)``.
+
+        Returns the fixed pair WITHOUT drawing from ``rng``, so the
+        exchange RNG stream is unchanged from the pre-matching behaviour.
+        """
+        return [(0, 0)]
+
+    def window_of_position(self) -> np.ndarray:
+        """One position per rung: the identity mapping."""
+        return np.arange(len(self._replicas), dtype=np.int64)
+
+    def n_carriers(self) -> int:
+        """One walker per rung."""
+        return len(self._replicas)
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Delegate to ``swap_configurations`` (rungs are single-walker)."""
+        self.swap_configurations(i, j)
 
     def attach_observer(
         self,
@@ -351,6 +378,54 @@ class SerialWangLandauPool:
             self._replicas[j].set_occupations(occ_i)
         except BaseException:
             self._replicas[i].set_occupations(occ_i)
+            raise
+
+    def n_walkers(self, i: int) -> int:
+        """Number of walkers in window ``i``."""
+        return self._replicas[i].n_walkers
+
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Current energy of ``walker`` in window ``i``."""
+        return self._replicas[i].walker_energy(walker)
+
+    def walker_log_g(self, i: int, walker: int, energy: float) -> float:
+        """Density-of-states ``log g(E)`` for ``walker`` in window ``i``."""
+        return self._replicas[i].walker_log_g(walker, energy)
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Random matching of windows ``i`` and ``j`` walkers for exchange.
+
+        Each returned ``(a, b)`` pairs walker ``a`` of window ``i`` with
+        walker ``b`` of window ``j``; pairs are disjoint in each
+        coordinate. See :func:`mchammer_pt.exchange.matching_for_boundary`.
+        """
+        return matching_for_boundary(self.n_walkers(i), self.n_walkers(j), rng)
+
+    def window_of_position(self) -> np.ndarray:
+        """Window index of each ``(window, walker)`` position, in order."""
+        counts = [self.n_walkers(i) for i in range(len(self._replicas))]
+        return np.repeat(np.arange(len(counts), dtype=np.int64), counts)
+
+    def n_carriers(self) -> int:
+        """Total number of walker positions across all windows."""
+        return sum(self.n_walkers(i) for i in range(len(self._replicas)))
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Swap the configurations of walker ``a`` in window ``i`` and
+        walker ``b`` in window ``j``.
+
+        Rolls back the first assignment if the second fails, so a raising
+        ``set_walker_occupations`` leaves both walkers unchanged.
+        """
+        occ_i = self._replicas[i].walker_occupations(a)
+        occ_j = self._replicas[j].walker_occupations(b)
+        self._replicas[i].set_walker_occupations(a, occ_j)
+        try:
+            self._replicas[j].set_walker_occupations(b, occ_i)
+        except BaseException:
+            self._replicas[i].set_walker_occupations(a, occ_i)
             raise
 
     def log_g(self, i: int, energy: float) -> float:
