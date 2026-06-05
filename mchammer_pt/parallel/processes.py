@@ -292,6 +292,10 @@ class ProcessPool:
         """Single-walker rungs: always 1."""
         return 1
 
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Energy of rung ``i`` (single-walker; ``walker`` is always 0)."""
+        return self.current_energy(i)
+
     def candidate_pairs(
         self, i: int, j: int, rng: np.random.Generator
     ) -> list[tuple[int, int]]:
@@ -313,6 +317,12 @@ class ProcessPool:
     def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
         """Delegate to ``swap_configurations`` (rungs are single-walker)."""
         self.swap_configurations(i, j)
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply accepted walker-config swaps, one at a time."""
+        self._check_open()
+        for i, a, j, b in swaps:
+            self.swap_walker_configurations(i, a, j, b)
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()

@@ -98,6 +98,10 @@ class SerialPool:
         """Single-walker rungs: always 1."""
         return 1
 
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Energy of rung ``i`` (single-walker; ``walker`` is always 0)."""
+        return self.current_energy(i)
+
     def candidate_pairs(
         self, i: int, j: int, rng: np.random.Generator
     ) -> list[tuple[int, int]]:
@@ -119,6 +123,11 @@ class SerialPool:
     def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
         """Delegate to ``swap_configurations`` (rungs are single-walker)."""
         self.swap_configurations(i, j)
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply accepted walker-config swaps, one at a time."""
+        for i, a, j, b in swaps:
+            self.swap_walker_configurations(i, a, j, b)
 
     def attach_observer(
         self,
@@ -427,6 +436,11 @@ class SerialWangLandauPool:
         except BaseException:
             self._replicas[i].set_walker_occupations(a, occ_i)
             raise
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply accepted walker-config swaps, one at a time."""
+        for i, a, j, b in swaps:
+            self.swap_walker_configurations(i, a, j, b)
 
     def log_g(self, i: int, energy: float) -> float:
         return self._replicas[i].log_g(energy)

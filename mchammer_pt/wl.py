@@ -25,7 +25,6 @@ from .checkpoint import (
     _compute_ensemble_kwargs_hash,
     _write_checkpoint,
 )
-from .exchange import pair_set_for_cycle
 from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
@@ -403,30 +402,34 @@ class WangLandauParallelTempering(BaseParallelTempering):
         """
         return self._pool.merge_events
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
         """Log of the REWL exchange acceptance ratio.
 
-        Standard REWL detailed balance (Vogel/Li/Wuest 2013):
+        Standard REWL detailed balance (Vogel/Li/Wuest 2013) for walker
+        ``a`` of window ``i`` against walker ``b`` of window ``j``:
 
             log A = ln g_i(E_i) - ln g_i(E_j) + ln g_j(E_j) - ln g_j(E_i)
 
-        When the swap would move a replica to an energy outside its own
+        When the swap would move a walker to an energy outside its own
         window, the configuration is forbidden in that window's restricted
         state space, so the swap is rejected with probability 1
-        (log_r = -inf). `WangLandauPool.log_g_pair` returns -inf for
+        (log_r = -inf). `WangLandauPool.walker_log_g` returns -inf for
         out-of-window energies; we detect that and short-circuit rather
-        than letting the formula yield +inf (which `_try_exchange` would
-        treat as a diagnostic failure).
+        than letting the formula yield +inf (which `_propose_boundary`
+        would treat as a diagnostic failure).
         """
-        E_i = self._pool.current_energy(i)
-        E_j = self._pool.current_energy(j)
-        g_i_Ei, g_i_Ej, g_j_Ei, g_j_Ej = self._pool.log_g_pair(i, j, E_i, E_j)
+        E_i = self._pool.walker_energy(i, a)
+        E_j = self._pool.walker_energy(j, b)
+        g_i_Ei = self._pool.walker_log_g(i, a, E_i)
+        g_i_Ej = self._pool.walker_log_g(i, a, E_j)
+        g_j_Ei = self._pool.walker_log_g(j, b, E_i)
+        g_j_Ej = self._pool.walker_log_g(j, b, E_j)
         # Per the WangLandauReplica always-in-window invariant, the
         # "same-bin" terms log g_i(E_i) and log g_j(E_j) are never
         # -inf. Only the "cross-bin" terms can be -inf, which we
         # short-circuit below.
         if g_i_Ej == -np.inf or g_j_Ei == -np.inf:
-            # Swap would land at least one replica outside its window.
+            # Swap would land at least one walker outside its window.
             return -float(np.inf)
         return float((g_i_Ei - g_i_Ej) + (g_j_Ej - g_j_Ei))
 
@@ -458,7 +461,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
         far the run got.
         """
         n_replicas = len(self._pool)
-        history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
+        history = ExchangeHistory.empty(
+            n_cycles=n_cycles,
+            n_replicas=n_replicas,
+            n_carriers=self._pool.n_carriers(),
+        )
         self._history = history
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
@@ -466,8 +473,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         try:
             for c in range(n_cycles):
                 self._pool.advance_all(self._block_size)
-                for pair in pair_set_for_cycle(n_replicas, c):
-                    self._try_exchange(int(pair), int(pair) + 1, c, history)
+                self._exchange_phase(c, history)
                 history.energies_per_cycle[c + 1] = self._pool.current_energies()
                 history.replica_labels_per_cycle[c + 1] = self._replica_labels
                 self.cycles_in_segment = c + 1

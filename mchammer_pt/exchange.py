@@ -59,7 +59,7 @@ def matching_for_boundary(
     lo = rng.permutation(n_walkers_lo)
     hi = rng.permutation(n_walkers_hi)
     k = min(n_walkers_lo, n_walkers_hi)
-    return [(int(a), int(b)) for a, b in zip(lo[:k], hi[:k])]
+    return [(int(a), int(b)) for a, b in zip(lo[:k], hi[:k], strict=True)]
 
 
 def metropolis_accept(log_prob_ratio: float, rng: np.random.Generator) -> bool:

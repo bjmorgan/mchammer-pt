@@ -230,7 +230,8 @@ class CanonicalParallelTempering(BaseParallelTempering):
         """
         _write_checkpoint(self, path)
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
+        # Canonical PT is single-walker per rung; a and b are always 0.
         E_i = self._pool.current_energy(i)
         E_j = self._pool.current_energy(j)
         return float((self._beta[i] - self._beta[j]) * (E_i - E_j))

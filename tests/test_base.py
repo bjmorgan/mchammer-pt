@@ -13,14 +13,14 @@ from mchammer_pt.replica import Replica
 class _AlwaysAcceptPT(BaseParallelTempering):
     """Concrete subclass whose exchange always accepts."""
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
         return 0.0
 
 
 class _AlwaysRejectPT(BaseParallelTempering):
     """Concrete subclass whose exchange always rejects."""
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
         return -1e9
 
 
@@ -182,7 +182,7 @@ def test_non_finite_log_ratio_raises_with_diagnostic_context(toy_ce, toy_atoms):
     """A NaN/inf log ratio raises RuntimeError naming cycle/pair/energies."""
 
     class _NaNPT(BaseParallelTempering):
-        def _log_prob_ratio(self, i: int, j: int) -> float:
+        def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
             return float("nan")
 
     pt = _NaNPT(
@@ -322,6 +322,15 @@ def test_attach_observer_raises_on_non_observable_pool(toy_ce, toy_atoms):
         def swap_configurations(self, i: int, j: int) -> None:
             raise NotImplementedError
 
+        def n_walkers(self, i: int) -> int:
+            return 1
+
+        def n_carriers(self) -> int:
+            return 2
+
+        def window_of_position(self) -> np.ndarray:
+            return np.arange(2, dtype=np.int64)
+
         def data_containers(self) -> list[BaseDataContainer]:
             raise NotImplementedError
 
@@ -402,11 +411,11 @@ def test_final_configurations_before_run(toy_ce, toy_atoms):
         )
 
 
-def test_try_exchange_accepts_minus_inf_log_ratio(toy_ce, toy_atoms):
+def test_propose_boundary_accepts_minus_inf_log_ratio(toy_ce, toy_atoms):
     """A -inf log-prob ratio rejects the swap cleanly, not raises."""
 
     class _MinusInfPT(BaseParallelTempering):
-        def _log_prob_ratio(self, i, j):
+        def _log_prob_ratio(self, i, a, j, b):
             return -np.inf
 
     replicas = [
@@ -424,11 +433,11 @@ def test_try_exchange_accepts_minus_inf_log_ratio(toy_ce, toy_atoms):
     assert history.swap_accepted.sum() == 0
 
 
-def test_try_exchange_still_rejects_plus_inf(toy_ce, toy_atoms):
+def test_propose_boundary_still_rejects_plus_inf(toy_ce, toy_atoms):
     """+inf log-ratio is still illegal."""
 
     class _PlusInfPT(BaseParallelTempering):
-        def _log_prob_ratio(self, i, j):
+        def _log_prob_ratio(self, i, a, j, b):
             return np.inf
 
     replicas = [

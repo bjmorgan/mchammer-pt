@@ -64,12 +64,12 @@ def test_wl_pt_log_prob_ratio_identical_states_gives_zero():
         random_seed=0,
     )
     pool = pt.pool
-    bin0 = pool.replicas[0].ensemble._get_bin_index(pool.current_energy(0))
+    bin0 = pool.replicas[0].ensemble._get_bin_index(pool.walker_energy(0, 0))
     # Asymmetric entropies; identical configurations -> the four lookups
     # collapse to two within-bin values which subtract to zero per replica.
     pool.replicas[0].ensemble._entropy = {bin0: 3.0}
     pool.replicas[1].ensemble._entropy = {bin0: 5.0}
-    log_r = pt._log_prob_ratio(0, 1)
+    log_r = pt._log_prob_ratio(0, 0, 1, 0)
     # (g_i_Ej - g_i_Ei) + (g_j_Ei - g_j_Ej) = (3 - 3) + (5 - 5) = 0
     assert log_r == pytest.approx(0.0)
 
@@ -87,7 +87,7 @@ def test_wl_pt_log_prob_ratio_uses_cross_bin_entropies(monkeypatch):
         random_seed=0,
     )
     pool = pt.pool
-    e_i = pool.current_energy(0)
+    e_i = pool.walker_energy(0, 0)
     bin_i = pool.replicas[0].ensemble._get_bin_index(e_i)
     e_j_fake = e_i + 1.0  # 10 bins above e_i (spacing=0.1)
     bin_j = pool.replicas[0].ensemble._get_bin_index(e_j_fake)
@@ -96,11 +96,11 @@ def test_wl_pt_log_prob_ratio_uses_cross_bin_entropies(monkeypatch):
     pool.replicas[0].ensemble._entropy = {bin_i: 1.0, bin_j: 2.0}
     pool.replicas[1].ensemble._entropy = {bin_i: 4.0, bin_j: 7.0}
 
-    def fake_current_energy(idx):
+    def fake_walker_energy(idx, walker):
         return e_i if idx == 0 else e_j_fake
 
-    monkeypatch.setattr(pool, "current_energy", fake_current_energy)
-    log_r = pt._log_prob_ratio(0, 1)
+    monkeypatch.setattr(pool, "walker_energy", fake_walker_energy)
+    log_r = pt._log_prob_ratio(0, 0, 1, 0)
     # log_r = (g_i(E_i) - g_i(E_j)) + (g_j(E_j) - g_j(E_i))
     #       = (1 - 2) + (7 - 4)
     #       = -1 + 3 = +2
@@ -126,7 +126,7 @@ def test_wl_pt_log_prob_ratio_rejects_out_of_window_partner(monkeypatch):
         random_seed=0,
     )
     pool = pt.pool
-    e_i = pool.current_energy(0)
+    e_i = pool.walker_energy(0, 0)
     bin_i = pool.replicas[0].ensemble._get_bin_index(e_i)
     pool.replicas[0].ensemble._entropy = {bin_i: 1.0}
     pool.replicas[1].ensemble._entropy = {bin_i: 4.0}
@@ -135,11 +135,11 @@ def test_wl_pt_log_prob_ratio_rejects_out_of_window_partner(monkeypatch):
     # replica 0's window: choose E_j beyond replica 0's right edge.
     e_j_out = pool.replicas[0].energy_window[1] + 10.0
 
-    def fake_current_energy(idx):
+    def fake_walker_energy(idx, walker):
         return e_i if idx == 0 else e_j_out
 
-    monkeypatch.setattr(pool, "current_energy", fake_current_energy)
-    log_r = pt._log_prob_ratio(0, 1)
+    monkeypatch.setattr(pool, "walker_energy", fake_walker_energy)
+    log_r = pt._log_prob_ratio(0, 0, 1, 0)
     assert log_r == -float("inf")
 
 
@@ -1088,6 +1088,61 @@ def test_wl_pt_n_walkers_2_run_returns_correct_history_shape():
     # 2 windows, 3 cycles -> energies shape (4, 2), one pair -> swap_attempted (1,)
     assert history.energies_per_cycle.shape == (4, 2)
     assert history.swap_attempted.shape == (1,)
+
+
+def test_wl_pt_w2_matching_attempts_two_per_active_cycle():
+    """A W=2 boundary attempts a full 2x2 matching: 2 swaps per active cycle.
+
+    Two two-walker windows give n_carriers = 4. Boundary 0 is active on
+    even cycles only (cycles 0 and 2 over a 3-cycle run); each active
+    cycle proposes min(W_i, W_j) = 2 disjoint walker pairs. So
+    swap_attempted[0] = 2 active cycles x 2 pairs = 4, and the label
+    width equals n_carriers = 4.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(e0 - 100.0, e0 + 100.0), (e0 - 100.0, e0 + 100.0)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    history = pt.run(n_cycles=3)
+    assert pt.pool.n_carriers() == 4
+    assert history.replica_labels_per_cycle.shape[1] == 4
+    # Cycles 0 and 2 are even (pair 0 active); cycle 1 is odd (no pairs).
+    # Each active cycle proposes a 2x2 matching = 2 attempts.
+    assert history.swap_attempted[0] == 4
+
+
+def test_wl_pt_single_walker_matching_one_attempt_per_active_cycle():
+    """A W=1 boundary attempts exactly one swap per active cycle.
+
+    With single-walker windows the matching collapses to the single
+    pair (0, 0): one attempt per active cycle and a label width equal
+    to len(pool), matching the pre-matching behaviour byte-for-byte.
+    """
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=5,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    history = pt.run(n_cycles=3)
+    assert pt.pool.n_carriers() == len(pt.pool)
+    assert history.replica_labels_per_cycle.shape[1] == len(pt.pool)
+    # Boundary 0 active on cycles 0 and 2: one attempt each.
+    assert history.swap_attempted[0] == 2
 
 
 def test_wl_pt_process_pool_resume_round_trip_preserves_non_default_ensemble(
