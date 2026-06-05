@@ -1226,6 +1226,19 @@ class ProcessWangLandauPool:
                 )
             )
         fanout_gather(set_targets)
+        # Keep the parent-side energy cache consistent without an IPC
+        # round trip: a swap moves each walker's configuration to the
+        # other, so their cached current energies swap too. The entropy
+        # estimate stays with the walker (only the configuration moves).
+        for i, a, j, b in swaps:
+            state_ia = self._slots[i].walker_states[a]
+            state_jb = self._slots[j].walker_states[b]
+            self._slots[i].walker_states[a] = replace(
+                state_ia, current_energy=state_jb.current_energy
+            )
+            self._slots[j].walker_states[b] = replace(
+                state_jb, current_energy=state_ia.current_energy
+            )
 
     def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
         """Swap a single walker pair (delegates to the batched path)."""

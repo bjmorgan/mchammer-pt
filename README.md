@@ -148,6 +148,10 @@ from mchammer_pt import (
 )
 print("acceptance:", swap_acceptance_rates(pt.history))
 print("round-trips:", round_trip_counts(pt.history.replica_labels_per_cycle))
+# The single-argument form above is for one walker per rung (canonical PT
+# and single-walker REWL). For multi-walker REWL pass the window mapping:
+#   round_trip_counts(pt.history.replica_labels_per_cycle,
+#                     pt.pool.window_of_position(), len(pt.pool))
 for r in range(len(pt.pool)):
     tau = energy_autocorrelation_time(pt.history.energies_per_cycle[:, r])
     print(f"replica {r}: tau = {tau:.1f} cycles")

@@ -386,6 +386,42 @@ def test_process_wl_pool_attach_observer_fires(tmp_path):
         assert isinstance(snapshot["counter"], StatefulCounter)
 
 
+def test_process_wl_pool_apply_swaps_updates_energy_cache(tmp_path):
+    """apply_swaps keeps the parent-side energy cache consistent with the swap.
+
+    ``walker_energy`` / ``current_energies`` read the block-boundary cache
+    with no IPC, so ``apply_swaps`` must swap the cached energies of the
+    swapped walkers — otherwise the per-window energy trace would record a
+    pre-swap energy and diverge from the serial backend (which reads the
+    live potential).
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        seeds=[0, 1],
+    ) as pool:
+        # Populate the parent-side cache from a block of MC; the two
+        # single-walker windows diverge to distinct energies.
+        pool.advance_all(50)
+        e_cache_0 = pool.walker_energy(0, 0)
+        e_cache_1 = pool.walker_energy(1, 0)
+        assert e_cache_0 != e_cache_1, (
+            "test setup did not produce distinct cached energies"
+        )
+
+        pool.apply_swaps([(0, 0, 1, 0)])
+
+        # Cache (no IPC) now reflects the swapped energies, and the
+        # per-window trace agrees.
+        assert pool.walker_energy(0, 0) == e_cache_1
+        assert pool.walker_energy(1, 0) == e_cache_0
+        assert pool.current_energies()[0] == e_cache_1
+        assert pool.current_energies()[1] == e_cache_0
+
+
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
     """After a swap, each worker's _potential reflects the new configuration."""
     from tests._in_process_pool import make_in_process_wl_pool

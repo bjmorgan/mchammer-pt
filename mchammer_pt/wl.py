@@ -203,7 +203,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
             `WangLandauWindowGroup`; the coordinator runs a collective
             flatness gate and halves all walkers in lockstep. With
             count > 1 the group also merges entropies across walkers
-            (cadence controlled by ``merge_cadence``). Same-pool resume
+            (cadence controlled by ``merge_cadence``). At each active
+            window boundary a random matching pairs the two windows'
+            walkers and attempts one swap per pair, so per-walker
+            exchange rate does not dilute as walkers are added. Same-pool
+            resume
             for windows with count > 1 is structurally correct but not
             bit-identical: ``run()``'s end-of-run merge destroys the
             pre-merge per-walker entropy state that bit-identity would

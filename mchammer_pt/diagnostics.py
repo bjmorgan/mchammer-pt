@@ -43,6 +43,22 @@ def round_trip_counts(
     Returns:
         1-D array of shape ``(N_w,)`` giving the round-trip count for
         each carrier id.
+
+    Note:
+        The defaults are the single-walker case (one walker per rung:
+        canonical PT and single-walker REWL). For multi-walker REWL,
+        pass ``window_of_position`` and ``n_windows`` so each
+        ``(window, walker)`` position maps to its window rung::
+
+            round_trip_counts(
+                pt.history.replica_labels_per_cycle,
+                pt.pool.window_of_position(),
+                len(pt.pool),
+            )
+
+        Calling the single-argument form on a multi-walker run treats
+        each walker position as its own rung and yields meaningless
+        counts.
     """
     labels = np.asarray(replica_labels_per_cycle)
     n_cycles_plus_one, n_positions = labels.shape
