@@ -217,6 +217,54 @@ class WangLandauWindowGroup:
         return self._replicas[0].log_g(energy)
 
     @property
+    def n_walkers(self) -> int:
+        """Number of walkers in this slot."""
+        return len(self._replicas)
+
+    def walker_energy(self, walker: int) -> float:
+        """Current energy of walker ``walker`` (index 0..n_walkers-1).
+
+        Args:
+            walker: index of the walker within the slot.
+
+        Returns:
+            Current energy in eV.
+        """
+        return self._replicas[walker].current_energy()
+
+    def walker_occupations(self, walker: int) -> np.ndarray:
+        """Current site occupations of walker ``walker`` (index 0..n_walkers-1).
+
+        Args:
+            walker: index of the walker within the slot.
+
+        Returns:
+            Copy of the walker's occupation array.
+        """
+        return self._replicas[walker].current_occupations()
+
+    def set_walker_occupations(self, walker: int, occupations: np.ndarray) -> None:
+        """Overwrite the configuration of walker ``walker`` (index 0..n_walkers-1).
+
+        Args:
+            walker: index of the walker within the slot.
+            occupations: new occupation array.
+        """
+        self._replicas[walker].set_occupations(occupations)
+
+    def walker_log_g(self, walker: int, energy: float) -> float:
+        """Density-of-states ln g(E) for walker ``walker`` (index 0..n_walkers-1).
+
+        Args:
+            walker: index of the walker within the slot.
+            energy: energy at which to evaluate ln g.
+
+        Returns:
+            ln g(energy) for the named walker, or -inf if outside its window.
+        """
+        return self._replicas[walker].log_g(energy)
+
+    @property
     def converged(self) -> bool:
         return all(r.converged for r in self._replicas)
 

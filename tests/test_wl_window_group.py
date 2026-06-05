@@ -360,6 +360,39 @@ def test_halving_criterion_met_one_walker_not_flat_returns_false():
     assert group.halving_criterion_met() is False
 
 
+@pytest.fixture
+def two_walker_group():
+    """A WangLandauWindowGroup with two independent walkers."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    return WangLandauWindowGroup(_make_replicas(2), random_seed=0)
+
+
+def test_group_n_walkers(two_walker_group):
+    assert two_walker_group.n_walkers == 2
+
+
+def test_group_walker_energy_indexes_each_walker(two_walker_group):
+    group = two_walker_group
+    assert group.walker_energy(0) == group._replicas[0].current_energy()
+    assert group.walker_energy(1) == group._replicas[1].current_energy()
+
+
+def test_group_walker_log_g_indexes_each_walker(two_walker_group):
+    group = two_walker_group
+    e0 = group.walker_energy(0)
+    # Delegates to the named walker's own log g, not to any other quantity.
+    assert group.walker_log_g(0, e0) == group._replicas[0].log_g(e0)
+    assert group.walker_log_g(1, e0) == group._replicas[1].log_g(e0)
+
+
+def test_group_set_walker_occupations_targets_named_walker(two_walker_group):
+    group = two_walker_group
+    occ1 = group.walker_occupations(1).copy()
+    group.set_walker_occupations(0, occ1)
+    assert (group.walker_occupations(0) == occ1).all()
+
+
 
 
 

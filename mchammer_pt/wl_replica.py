@@ -349,6 +349,66 @@ class WangLandauReplica:
             return -float(np.inf)
         return float(e._entropy.get(bin_idx, 0.0))
 
+    @property
+    def n_walkers(self) -> int:
+        """Number of walkers in this slot (always 1 for a bare replica)."""
+        return 1
+
+    def walker_energy(self, walker: int) -> float:
+        """Current energy of walker ``walker`` (index 0..n_walkers-1).
+
+        A bare replica holds exactly one walker; ``walker`` is
+        structurally always 0.
+
+        Args:
+            walker: index of the walker within the slot.
+
+        Returns:
+            Current energy in eV.
+        """
+        return self.current_energy()
+
+    def walker_occupations(self, walker: int) -> np.ndarray:
+        """Current site occupations of walker ``walker`` (index 0..n_walkers-1).
+
+        A bare replica holds exactly one walker; ``walker`` is
+        structurally always 0.
+
+        Args:
+            walker: index of the walker within the slot.
+
+        Returns:
+            Copy of the walker's occupation array.
+        """
+        return self.current_occupations()
+
+    def set_walker_occupations(self, walker: int, occupations: np.ndarray) -> None:
+        """Overwrite the configuration of walker ``walker`` (index 0..n_walkers-1).
+
+        A bare replica holds exactly one walker; ``walker`` is
+        structurally always 0.
+
+        Args:
+            walker: index of the walker within the slot.
+            occupations: new occupation array.
+        """
+        self.set_occupations(occupations)
+
+    def walker_log_g(self, walker: int, energy: float) -> float:
+        """Density-of-states ln g(E) for walker ``walker`` (index 0..n_walkers-1).
+
+        A bare replica holds exactly one walker; ``walker`` is
+        structurally always 0.
+
+        Args:
+            walker: index of the walker within the slot.
+            energy: energy at which to evaluate ln g.
+
+        Returns:
+            ln g(energy), or -inf if ``energy`` is outside the window.
+        """
+        return self.log_g(energy)
+
     def set_occupations(self, occupations: np.ndarray) -> None:
         """Overwrite the replica's configuration and refresh WL-specific caches.
 

@@ -111,6 +111,23 @@ def wl_replica_factory():
     return _make_wl_replica
 
 
+def test_replica_n_walkers_is_one(wl_replica_factory):
+    assert wl_replica_factory().n_walkers == 1
+
+
+def test_replica_walker_accessors_delegate_to_single_walker(wl_replica_factory):
+    replica = wl_replica_factory()
+    assert replica.walker_energy(0) == replica.current_energy()
+    assert (replica.walker_occupations(0) == replica.current_occupations()).all()
+    # log g at the current energy matches the no-arg form
+    e = replica.current_energy()
+    assert replica.walker_log_g(0, e) == replica.log_g(e)
+    # set_walker_occupations routes to the single walker's set_occupations
+    occ = replica.current_occupations()
+    replica.set_walker_occupations(0, occ)
+    assert (replica.walker_occupations(0) == occ).all()
+
+
 def test_wl_replica_constructs_with_in_window_initial_energy():
     """A WL replica builds when its initial energy falls in window."""
     from mchammer_pt.wl_replica import WangLandauReplica
