@@ -594,9 +594,8 @@ class ProcessWangLandauWindow:
 
     Attributes:
         workers: list of (Process, Connection) pairs, one per walker.
-        exchange_idx: index of the worker currently chosen for
-            replica exchange (re-rolled by the coordinator each block).
-        rng: per-window RNG for exchange-walker selection.
+        rng: per-window RNG whose state is checkpointed for
+            reproducible resume.
         phase: collective WL phase, either ``"halving"`` or
             ``"1_over_t"``. Flipped by the coordinator after a
             collective BP switch.
@@ -615,7 +614,6 @@ class ProcessWangLandauWindow:
         _validate_merge_cadence(merge_cadence)
         self.workers = workers
         self.rng = rng
-        self.exchange_idx: int = 0
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._schedule: Schedule = schedule
@@ -634,10 +632,6 @@ class ProcessWangLandauWindow:
             )
             for _ in workers
         ]
-
-    def exchange_conn(self) -> Connection:
-        """Connection to the current exchange-representative walker."""
-        return self.workers[self.exchange_idx][1]
 
     def collect_entropy_snapshots(self) -> list[dict[int, float]]:
         return [dict(s.entropy) for s in self.walker_states]
@@ -1076,12 +1070,6 @@ class ProcessWangLandauPool:
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.switch_to_phase is not None:
                         slot.phase = plan.switch_to_phase
-
-            # Exchange-walker selection (local-only, no IPC).
-            for slot in self._slots:
-                slot.exchange_idx = int(
-                    slot.rng.integers(0, len(slot.workers))
-                )
         except Exception:
             self.shutdown()
             raise
@@ -1148,18 +1136,8 @@ class ProcessWangLandauPool:
         )
 
     def swap_configurations(self, i: int, j: int) -> None:
-        self._check_open()
-        conn_i = self._slots[i].exchange_conn()
-        conn_j = self._slots[j].exchange_conn()
-        occ_i, occ_j = broadcast_gather(
-            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
-        )
-        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
-        try:
-            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
-        except BaseException:
-            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
-            raise
+        """Swap walker 0 of window ``i`` with walker 0 of window ``j``."""
+        self.apply_swaps([(i, 0, j, 0)])
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()
@@ -1332,9 +1310,8 @@ class ProcessWangLandauPool:
                     walker-minor order, each from a worker's
                     ``SNAPSHOT_FOR_CHECKPOINT`` handler.
                 ``"group_state"``: list of length N (one per window slot).
-                    Dict containing ``rng_state``, ``exchange_idx``, and
-                    ``phase`` for W>1 slots (pulled from the
-                    orchestrator-side
+                    Dict containing ``rng_state`` and ``phase`` for W>1
+                    slots (pulled from the orchestrator-side
                     :class:`ProcessWangLandauWindow`); ``None`` for W=1
                     slots.
         """
@@ -1350,7 +1327,6 @@ class ProcessWangLandauPool:
             if len(slot.workers) > 1:
                 group_state.append({
                     "rng_state": _serialise_rng_state(slot.rng),
-                    "exchange_idx": int(slot.exchange_idx),
                     "phase": slot.phase,
                 })
             else:
@@ -1366,7 +1342,7 @@ class ProcessWangLandauPool:
         """Push saved per-walker and group-level state into the live pool.
 
         Per-walker state is fanned out to each worker over IPC; group-level
-        state (rng, exchange_idx, phase) is assigned directly to each
+        state (rng, phase) is assigned directly to each
         :class:`ProcessWangLandauWindow` on the orchestrator side — no
         worker involvement.
 
@@ -1377,9 +1353,8 @@ class ProcessWangLandauPool:
             per_walker_extras: flat list of M extras dicts, same order.
                 Each must carry a ``"sites_by_species"`` key.
             group_state: list of length N (one entry per window slot).
-                Must be a dict for W>1 slots — carrying ``rng_state``,
-                ``exchange_idx``, and ``phase`` — and ``None`` for W=1
-                slots.
+                Must be a dict for W>1 slots — carrying ``rng_state``
+                and ``phase`` — and ``None`` for W=1 slots.
 
         Raises:
             RuntimeError: pool is shut down, or any worker reports an
@@ -1422,7 +1397,7 @@ class ProcessWangLandauPool:
                 recv_reply(conn, "RESTORE_STATE", f"window {g} walker {w}")
 
         # Group-level state: assign directly to ProcessWangLandauWindow.
-        required_keys = {"rng_state", "exchange_idx", "phase"}
+        required_keys = {"rng_state", "phase"}
         for g, (slot, gs) in enumerate(
             zip(self._slots, group_state, strict=True)
         ):
@@ -1443,15 +1418,7 @@ class ProcessWangLandauPool:
                     f"window {g}: group_state missing required keys "
                     f"{sorted(missing)}; corrupted checkpoint."
                 )
-            exchange_idx = int(gs["exchange_idx"])
-            if not 0 <= exchange_idx < len(slot.workers):
-                raise ValueError(
-                    f"window {g}: group_state['exchange_idx']={exchange_idx} "
-                    f"is outside the valid range [0, {len(slot.workers)}); "
-                    f"corrupted checkpoint."
-                )
             slot.rng.bit_generator.state = json.loads(gs["rng_state"])
-            slot.exchange_idx = exchange_idx
             slot.phase = gs["phase"]
 
     def attach_observer(

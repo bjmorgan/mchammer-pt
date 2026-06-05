@@ -62,9 +62,6 @@ class _StubWLSlot:
     def apply_plan(self, plan: CoordinatorPlan) -> None:
         self.applied_plans.append(plan)
 
-    def reroll_exchange_idx(self) -> None:
-        pass
-
 
 def _flat_walker(
     *,

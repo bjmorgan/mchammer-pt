@@ -364,10 +364,6 @@ class SerialWangLandauPool:
         for slot, plan in zip(self._replicas, plans, strict=True):
             slot.apply_plan(plan)
 
-        # Re-roll exchange-walker selection per slot.
-        for slot in self._replicas:
-            slot.reroll_exchange_idx()
-
     def current_energies(self) -> np.ndarray:
         return np.array(
             [r.walker_energy(0) for r in self._replicas], dtype=np.float64
@@ -380,14 +376,8 @@ class SerialWangLandauPool:
         return self._replicas[i].walker_occupations(0)
 
     def swap_configurations(self, i: int, j: int) -> None:
-        occ_i = self._replicas[i].current_occupations()
-        occ_j = self._replicas[j].current_occupations()
-        self._replicas[i].set_occupations(occ_j)
-        try:
-            self._replicas[j].set_occupations(occ_i)
-        except BaseException:
-            self._replicas[i].set_occupations(occ_i)
-            raise
+        """Swap walker 0 of window ``i`` with walker 0 of window ``j``."""
+        self.swap_walker_configurations(i, 0, j, 0)
 
     def n_walkers(self, i: int) -> int:
         """Number of walkers in window ``i``."""
@@ -632,9 +622,9 @@ class SerialWangLandauPool:
                     window-major / walker-minor order (length M = sum
                     of walkers_per_window across slots).
                 "group_state": list of length N (one per window slot).
-                    Each entry is a dict with ``rng_state``,
-                    ``exchange_idx``, ``phase`` for W>1 slots, or
-                    ``None`` for bare-replica W=1 slots.
+                    Each entry is a dict with ``rng_state`` and
+                    ``phase`` for W>1 slots, or ``None`` for
+                    bare-replica W=1 slots.
         """
         from ..wl_window_group import WangLandauWindowGroup
 

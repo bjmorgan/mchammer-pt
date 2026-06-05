@@ -315,11 +315,11 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         history, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "4":
+        if schema_version not in ("4", "5"):
             raise ValueError(
                 f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
+                f"mchammer-pt understands '4' and '5' only. For v3 "
+                f"checkpoints, resume with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
@@ -441,11 +441,11 @@ class CanonicalParallelTempering(BaseParallelTempering):
 
         history, containers, meta = read_hdf5(path)
         schema_version = meta.get("schema_version")
-        if schema_version != "4":
+        if schema_version not in ("4", "5"):
             raise ValueError(
                 f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
+                f"mchammer-pt understands '4' and '5' only. For v3 "
+                f"checkpoints, resume with mchammer-pt 0.9.0 or earlier."
             )
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:

@@ -763,7 +763,7 @@ def test_wl_pt_resume_rejects_unknown_schema_version(tmp_path):
 
 
 def test_wl_pt_resume_rejects_v3_schema(tmp_path):
-    """v4 readers refuse v3 files with a message pointing at 0.9.0."""
+    """v5 readers refuse v3 files with a message pointing at 0.9.0."""
     import h5py
 
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -783,6 +783,78 @@ def test_wl_pt_resume_rejects_v3_schema(tmp_path):
         f["meta"].attrs["schema_version"] = "3"
     with pytest.raises(ValueError, match="0.9.0"):
         WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
+
+
+def test_wl_pt_resume_rejects_schema4_multi_walker(tmp_path):
+    """A schema-4 file with a window_groups subgroup is an old multi-walker
+    checkpoint; its window-indexed labels are incompatible, so resume must
+    reject it with a clear message rather than silently mis-restoring."""
+    import h5py
+    import numpy as np
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=2,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    # Downgrade to the old multi-walker layout: schema "4" plus the
+    # exchange_idx dataset the format used to write per window group.
+    with h5py.File(cp, "r+") as f:
+        f["meta"].attrs["schema_version"] = "4"
+        for g in ("0", "1"):
+            f[f"orchestrator/window_groups/{g}"].create_dataset(
+                "exchange_idx", data=np.int32(0)
+            )
+
+    with pytest.raises(ValueError, match="multi-walker|regenerate"):
+        WangLandauParallelTempering.resume(cp, cluster_expansion=make_wl_ce())
+
+
+def test_wl_pt_resume_accepts_schema4_single_walker(tmp_path):
+    """A single-walker schema-4 checkpoint has no window_groups subgroup; its
+    labels are width n_windows == N_w, so it remains loadable under schema 5."""
+    import h5py
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    e0 = _initial_energy()
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 50.0), (e0 - 50.0, None)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        n_walkers_per_window=1,
+    )
+    pt.run(n_cycles=2)
+    cp = tmp_path / "wl.hdf5"
+    pt.save_checkpoint(cp)
+
+    # A single-walker run writes no window_groups; relabel it as schema 4.
+    with h5py.File(cp, "r+") as f:
+        assert "window_groups" not in f["orchestrator"]
+        f["meta"].attrs["schema_version"] = "4"
+
+    resumed = WangLandauParallelTempering.resume(
+        cp, cluster_expansion=make_wl_ce(),
+    )
+    assert len(resumed.pool) == 2
+    for slot in resumed.pool.replicas:
+        assert isinstance(slot, WangLandauReplica)
+    assert resumed._replica_labels.tolist() == pt._replica_labels.tolist()
 
 
 def test_wl_pt_resume_rejects_mismatched_ce(tmp_path):
@@ -1521,7 +1593,7 @@ def test_wl_pt_v4_checkpoint_has_walkers_per_window_in_meta(tmp_path):
     pt.save_checkpoint(path)
 
     with h5py.File(path, "r") as f:
-        assert f["meta"].attrs["schema_version"] == "4"
+        assert f["meta"].attrs["schema_version"] == "5"
         wpw = np.asarray(f["meta"].attrs["walkers_per_window"])
         assert wpw.tolist() == [1, 1]  # two windows in the simple fixture
 
@@ -1577,6 +1649,14 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
     path = tmp_path / "ckpt.h5"
     pt.save_checkpoint(path)
 
+    # Schema 5: window-group subgroups carry no exchange_idx.
+    import h5py
+
+    with h5py.File(path, "r") as f:
+        assert f["meta"].attrs["schema_version"] == "5"
+        for g in ("0", "1"):
+            assert "exchange_idx" not in f[f"orchestrator/window_groups/{g}"]
+
     resumed = WangLandauParallelTempering.resume(
         path, cluster_expansion=make_wl_ce(),
     )
@@ -1586,6 +1666,10 @@ def test_wl_pt_resume_w2_round_trips(tmp_path):
     for slot in resumed.pool.replicas:
         assert isinstance(slot, WangLandauWindowGroup)
         assert len(slot.walker_states) == 2
+
+    # Walker-indexed replica labels (width N_w = 4) round-trip exactly.
+    assert resumed._replica_labels.tolist() == pt._replica_labels.tolist()
+    assert len(resumed._replica_labels) == 4
 
     history = resumed.run(n_cycles=2)
     assert history.energies_per_cycle.shape == (3, 2)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
@@ -145,20 +144,6 @@ def test_merge_entropies_min_value_is_zero():
 
 
 
-def test_exchange_methods_target_same_replica():
-    """current_energy, current_occupations, set_occupations all target _exchange_idx."""
-    from mchammer_pt.wl_window_group import WangLandauWindowGroup
-
-    replicas = _make_replicas(2)
-    group = WangLandauWindowGroup(replicas, random_seed=0)
-    group._exchange_idx = 1
-
-    assert group.current_energy() == replicas[1].current_energy()
-    assert np.array_equal(
-        group.current_occupations(), replicas[1].current_occupations()
-    )
-
-
 def test_log_g_returns_merged_value():
     """log_g delegates to replica 0 (all identical after merge)."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
@@ -292,7 +277,7 @@ def test_mismatched_flatness_limits_raises():
 
 def test_window_group_snapshot_returns_per_walker_and_group_dicts():
     """snapshot_for_checkpoint returns a dict with per_walker
-    (list of len W) and group (dict with rng_state, exchange_idx, phase)."""
+    (list of len W) and group (dict with rng_state, phase)."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     group = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
@@ -302,9 +287,8 @@ def test_window_group_snapshot_returns_per_walker_and_group_dicts():
     assert len(snap["per_walker"]) == 2
     for entry in snap["per_walker"]:
         assert "sites_by_species" in entry
-    assert set(snap["group_state"].keys()) == {"rng_state", "exchange_idx", "phase"}
+    assert set(snap["group_state"].keys()) == {"rng_state", "phase"}
     assert isinstance(snap["group_state"]["rng_state"], str)
-    assert isinstance(snap["group_state"]["exchange_idx"], int)
     assert snap["group_state"]["phase"] in {"halving", "1_over_t"}
 
 
@@ -821,16 +805,15 @@ def test_finalise_for_reporting_idempotent():
 
 
 def test_window_group_restore_state_round_trips_exchange_rng():
-    """After snapshot -> mutate -> restore, the next exchange index
-    selection produces the same draw as the unmutated group would."""
+    """After snapshot -> mutate -> restore, the group RNG produces the
+    same next draw as the unmutated group would."""
     from mchammer_pt.wl_window_group import WangLandauWindowGroup
 
     group_a = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
     group_b = WangLandauWindowGroup(_make_replicas(2), random_seed=0)
 
-    # Drift group_b's exchange RNG so it diverges from group_a.
-    for _ in range(5):
-        group_b.reroll_exchange_idx()
+    # Drift group_b's RNG so it diverges from group_a.
+    group_b._rng.integers(0, 100, size=5)
 
     snap = group_a.snapshot_for_checkpoint()
     group_b.restore_state(
@@ -838,10 +821,8 @@ def test_window_group_restore_state_round_trips_exchange_rng():
         per_walker_extras=snap["per_walker"],
         group_state=snap["group_state"],
     )
-    # Both groups must now produce identical next exchange indices.
-    group_a.reroll_exchange_idx()
-    group_b.reroll_exchange_idx()
-    assert group_a.exchange_idx == group_b.exchange_idx
+    # Both groups must now produce identical next RNG draws.
+    assert group_a._rng.integers(0, 100) == group_b._rng.integers(0, 100)
 
 
 def test_window_group_restore_state_rejects_wrong_length_containers():

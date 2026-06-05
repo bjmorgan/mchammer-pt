@@ -221,8 +221,8 @@ def write_hdf5(
     be supplied (the ``/orchestrator`` group must exist). Each non-``None``
     element at index ``g`` is stored under
     ``/orchestrator/window_groups/<g>/`` with datasets ``rng_state``
-    (JSON string), ``exchange_idx`` (int32), and ``phase`` (string).
-    ``None`` entries are skipped, leaving no subgroup for that index.
+    (JSON string) and ``phase`` (string). ``None`` entries are
+    skipped, leaving no subgroup for that index.
 
     Writes are atomic: the file is first written to a sibling ``.tmp``
     path and renamed on success via ``os.replace``. A partial or failed
@@ -304,9 +304,6 @@ def write_hdf5(
                         sub = wg_parent.create_group(str(g))
                         sub.create_dataset(
                             "rng_state", data=str(entry["rng_state"])
-                        )
-                        sub.create_dataset(
-                            "exchange_idx", data=np.int32(entry["exchange_idx"])
                         )
                         sub.create_dataset("phase", data=str(entry["phase"]))
         os.replace(tmp_target, path)

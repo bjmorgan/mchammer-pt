@@ -5,9 +5,9 @@ checkpoint format: identity hashes for the CE and ensemble kwargs,
 the `CheckpointWriter` `CycleCallback`, and the writer/reader
 helpers used by every `BaseParallelTempering` subclass that
 supports checkpoint and resume (`CanonicalParallelTempering` and
-`WangLandauParallelTempering` as of schema version ``"4"``).
+`WangLandauParallelTempering` as of schema version ``"5"``).
 
-The on-disk schema (version ``"4"``) is HDF5 with these top-level
+The on-disk schema (version ``"5"``) is HDF5 with these top-level
 groups: ``meta`` (run metadata as attrs; six shared keys —
 ``schema_version``, ``block_size``, ``random_seed``,
 ``ce_identity``, ``ensemble_cls_fqn``, ``ensemble_kwargs_hash`` —
@@ -22,8 +22,7 @@ format — flat in window-major / walker-minor order, length
 RNG state, the replica-label permutation, and — for REWL with
 ``walkers_per_window[g] > 1`` — one ``/orchestrator/window_groups/<g>/``
 subgroup per multi-walker window carrying ``rng_state`` (group
-exchange-walker selection RNG), ``exchange_idx`` (current swap
-walker), and ``phase`` (collective WL phase); W=1 windows omit
+exchange RNG) and ``phase`` (collective WL phase); W=1 windows omit
 the subgroup entirely); and ``sites_by_species`` (one JSON dataset
 per walker carrying the path-dependent
 ``ConfigurationManager._sites_by_species`` cache that bit-identical
@@ -31,7 +30,10 @@ resume requires alongside ``_last_state``).
 
 Schema v4 is a hard break from v3 — v3 checkpoints are refused by
 v4 readers with a message pointing at the last v3-capable release
-(0.9.0).
+(0.9.0). Schema v5 drops the per-window ``exchange_idx``. Single-
+walker v4 checkpoints still load under a v5 reader; v4 multi-walker
+checkpoints are refused, since their window-indexed replica labels
+are incompatible with v5's walker-indexed labels.
 """
 
 from __future__ import annotations
@@ -210,6 +212,56 @@ def _read_replica_extra(path: Path | str) -> list[dict[str, Any]]:
     return extras
 
 
+def _has_window_groups(path: Path | str) -> bool:
+    """Whether the checkpoint at `path` carries a ``window_groups`` subgroup.
+
+    A present ``/orchestrator/window_groups/`` group marks a multi-walker
+    REWL checkpoint. The writer omits the group entirely for all-W=1 runs,
+    so absence means single-walker.
+    """
+    with h5py.File(Path(path), "r") as f:
+        return (
+            "orchestrator" in f and "window_groups" in f["orchestrator"]
+        )
+
+
+def _validate_wl_schema_version(
+    path: Path | str, schema_version: object
+) -> None:
+    """Gate a REWL checkpoint by its on-disk ``schema_version``.
+
+    Schema ``"5"`` is the current format. Schema ``"4"`` is accepted only
+    for single-walker runs: a ``"4"`` checkpoint that carries a
+    ``window_groups`` subgroup is an old multi-walker file whose
+    window-indexed replica labels are incompatible with the walker-indexed
+    labels schema 5 writes, and is refused. Any other version is
+    refused with a pointer at the last v3-capable release.
+
+    Args:
+        path: checkpoint path, for error messages.
+        schema_version: the ``schema_version`` attribute read from ``/meta``.
+
+    Raises:
+        ValueError: the version is unsupported, or a ``"4"`` multi-walker
+            checkpoint is presented.
+    """
+    if schema_version == "5":
+        return
+    if schema_version == "4":
+        if _has_window_groups(path):
+            raise ValueError(
+                f"{path}: checkpoint is schema 4 with multi-walker windows, "
+                f"whose label layout is incompatible with this version; "
+                f"regenerate the run with the current version."
+            )
+        return
+    raise ValueError(
+        f"{path}: unsupported schema_version {schema_version!r}; this "
+        f"mchammer-pt understands '4' and '5' only. For v3 checkpoints, "
+        f"resume with mchammer-pt 0.9.0 or earlier."
+    )
+
+
 def _read_orchestrator_state(path: Path | str) -> dict[str, np.ndarray | str]:
     """Read the orchestrator-level state from a checkpoint file.
 
@@ -261,7 +313,7 @@ def _read_window_groups(
     path: Path | str,
     containers: Sequence[Any] | None = None,
 ) -> list[dict[str, Any] | None]:
-    """Read per-window group-level state from a v4 checkpoint.
+    """Read per-window group-level state from a v5 checkpoint.
 
     Args:
         path: HDF5 file written by `_write_checkpoint`.
@@ -277,10 +329,9 @@ def _read_window_groups(
 
     Returns:
         One entry per window. Each entry is a dict with keys
-        ``rng_state`` (JSON str), ``exchange_idx`` (int), and
-        ``phase`` (str) when ``/orchestrator/window_groups/<g>/``
-        exists; ``None`` when the subgroup is absent (the W=1
-        convention).
+        ``rng_state`` (JSON str) and ``phase`` (str) when
+        ``/orchestrator/window_groups/<g>/`` exists; ``None`` when the
+        subgroup is absent (the W=1 convention).
 
     Raises:
         FileNotFoundError: if `path` does not exist.
@@ -323,7 +374,6 @@ def _read_window_groups(
                     if isinstance(rng_raw, bytes)
                     else str(rng_raw)
                 ),
-                "exchange_idx": int(sub["exchange_idx"][()]),
                 "phase": (
                     phase_raw.decode("utf-8")
                     if isinstance(phase_raw, bytes)
@@ -392,7 +442,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
     each replica's `_last_state` is populated and the on-disk
     container round-trips through ``_restart_ensemble``.
 
-    The function packs these into the schema-``"4"`` HDF5 layout
+    The function packs these into the schema-``"5"`` HDF5 layout
     described in this module's docstring.
     """
     from .history import write_hdf5
@@ -404,7 +454,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
             "a populated `_last_state` until a run completes."
         )
     meta: dict[str, MetaValue] = {
-        "schema_version": "4",
+        "schema_version": "5",
         "block_size": int(pt._block_size),  # type: ignore[attr-defined]
         "random_seed": int(pt._random_seed),  # type: ignore[attr-defined]
         "ce_identity": pt._ce_identity,  # type: ignore[attr-defined]

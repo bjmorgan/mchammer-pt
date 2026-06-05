@@ -511,7 +511,7 @@ def test_serial_wl_pool_attach_observer_class_dispatches_to_all_walkers():
 
 
 def test_serial_wl_pool_swap_configurations_with_window_groups():
-    """swap_configurations exchanges the exchange-walker's occupations across groups."""
+    """swap_configurations exchanges walker 0's occupations across groups."""
     pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
 
     occ0_before = pool.current_occupations(0).copy()
@@ -524,13 +524,15 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
 
 
 def test_serial_wl_pool_trace_tracks_walker_zero():
-    """The per-window trace deterministically reads walker 0, not a representative."""
+    """The per-window trace deterministically reads walker 0."""
     pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
     pool.advance_all(30)
-    # Point each group's exchange representative away from walker 0 so a
-    # representative-based trace would diverge from the walker-0 trace.
+    # Drive walker 1 to a configuration distinct from walker 0 so a trace
+    # that read any other walker would diverge from the walker-0 trace.
     for slot in pool._replicas:
-        slot._exchange_idx = 1
+        occ = slot.walker_occupations(0).copy()
+        occ[[0, -1]] = occ[[-1, 0]]
+        slot.set_walker_occupations(1, occ)
 
     energies = pool.current_energies()
     for i in range(len(pool)):
@@ -1176,9 +1178,7 @@ def test_serial_wl_pool_snapshot_returns_per_walker_and_group_state():
     assert len(snap["group_state"]) == 2
     assert snap["group_state"][0] is None  # W=1 slot
     assert isinstance(snap["group_state"][1], dict)
-    assert set(snap["group_state"][1].keys()) == {
-        "rng_state", "exchange_idx", "phase",
-    }
+    assert set(snap["group_state"][1].keys()) == {"rng_state", "phase"}
 
 
 def test_serial_wl_pool_restore_round_trips_via_snapshot():
@@ -1190,18 +1190,19 @@ def test_serial_wl_pool_restore_round_trips_via_snapshot():
     containers = pool_a.data_containers()
 
     pool_b = make_serial_wl_pool_mixed()  # fresh; same construction args
-    # Drift pool_b so its exchange RNG advances in the W=2 slot.
-    pool_b._replicas[1].reroll_exchange_idx()
+    # Drift pool_b so its W=2 slot's group RNG advances.
+    pool_b._replicas[1]._rng.integers(0, 100, size=5)
 
     pool_b.restore_replica_state(
         containers=containers,
         per_walker_extras=snap["per_walker"],
         group_state=snap["group_state"],
     )
-    # The W>1 slot must now match.
-    pool_a._replicas[1].reroll_exchange_idx()
-    pool_b._replicas[1].reroll_exchange_idx()
-    assert pool_a._replicas[1].exchange_idx == pool_b._replicas[1].exchange_idx
+    # The W>1 slot's group RNG must now produce identical draws.
+    assert (
+        pool_a._replicas[1]._rng.integers(0, 100)
+        == pool_b._replicas[1]._rng.integers(0, 100)
+    )
 
 
 def test_serial_wl_pool_restore_rejects_wrong_lengths():
@@ -1259,14 +1260,16 @@ def test_process_wl_pool_snapshot_returns_structured_dict(tmp_path):
         assert len(snap["per_walker"]) == 4
         assert len(snap["group_state"]) == 2
         for gs in snap["group_state"]:
-            assert set(gs.keys()) == {"rng_state", "exchange_idx", "phase"}
+            assert set(gs.keys()) == {"rng_state", "phase"}
     finally:
         pool.shutdown()
 
 
 def test_process_wl_pool_restore_round_trips_w2(tmp_path):
     """Snapshot a W=2 process pool, restore into a fresh one; group-level
-    state (exchange_idx, phase) matches the snapshot."""
+    state (rng_state, phase) matches the snapshot."""
+    import json
+
     from tests._wl_fixtures import make_process_wl_pool_w2
 
     pool_a = make_process_wl_pool_w2(tmp_path / "a")
@@ -1285,7 +1288,7 @@ def test_process_wl_pool_restore_round_trips_w2(tmp_path):
         )
         for slot, gs in zip(pool_b._slots, snap["group_state"], strict=True):
             if gs is not None:
-                assert slot.exchange_idx == gs["exchange_idx"]
+                assert slot.rng.bit_generator.state == json.loads(gs["rng_state"])
                 assert slot.phase == gs["phase"]
     finally:
         pool_b.shutdown()

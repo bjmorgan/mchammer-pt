@@ -50,7 +50,8 @@ class WangLandauWindowGroup:
         replicas: pre-constructed WangLandauReplica instances, all with
             the same energy window, energy spacing, schedule, and
             flatness limit.
-        random_seed: seed for the exchange-walker selection RNG.
+        random_seed: seed for the per-window RNG whose state is
+            checkpointed for reproducible resume.
     """
 
     def __init__(
@@ -89,7 +90,6 @@ class WangLandauWindowGroup:
                 )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
-        self._exchange_idx: int = 0
         self._schedule: Schedule = cast(Schedule, sched0)
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
@@ -144,10 +144,6 @@ class WangLandauWindowGroup:
                         t = r.ensemble.step - entry + 1
                         r.ensemble._fill_factor = 1.0 / t
 
-    def reroll_exchange_idx(self) -> None:
-        """Re-select the exchange-representative walker."""
-        self._exchange_idx = int(self._rng.integers(0, len(self._replicas)))
-
     def finalise_for_reporting(self) -> None:
         """Merge per-walker entropies; write the result into every walker.
 
@@ -196,22 +192,8 @@ class WangLandauWindowGroup:
         return self._schedule
 
     @property
-    def exchange_idx(self) -> int:
-        """Index of the walker currently chosen as the exchange representative."""
-        return self._exchange_idx
-
-    @property
     def flatness_limit(self) -> float:
         return float(self._replicas[0].ensemble._flatness_limit)
-
-    def current_energy(self) -> float:
-        return self._replicas[self._exchange_idx].current_energy()
-
-    def current_occupations(self) -> np.ndarray:
-        return self._replicas[self._exchange_idx].current_occupations()
-
-    def set_occupations(self, occupations: np.ndarray) -> None:
-        self._replicas[self._exchange_idx].set_occupations(occupations)
 
     def log_g(self, energy: float) -> float:
         return self._replicas[0].log_g(energy)
@@ -363,8 +345,7 @@ class WangLandauWindowGroup:
                     carries ``sites_by_species`` for the walker's
                     configuration cache).
                 "group_state": dict with ``rng_state`` (JSON str of the exchange
-                    RNG state), ``exchange_idx`` (current swap-walker
-                    index), and ``phase`` (collective WL phase taken from
+                    RNG state) and ``phase`` (collective WL phase taken from
                     walker 0's ensemble).
         """
         from .checkpoint import _serialise_rng_state
@@ -373,7 +354,6 @@ class WangLandauWindowGroup:
             "per_walker": [r.snapshot_for_checkpoint() for r in self._replicas],
             "group_state": {
                 "rng_state": _serialise_rng_state(self._rng),
-                "exchange_idx": int(self._exchange_idx),
                 "phase": self._replicas[0].ensemble._phase,
             },
         }
@@ -392,13 +372,12 @@ class WangLandauWindowGroup:
         Args:
             containers: one container per walker, in walker order.
             per_walker_extras: one per-walker extras dict per walker.
-            group_state: dict with ``rng_state``, ``exchange_idx``, ``phase``.
+            group_state: dict with ``rng_state`` and ``phase``.
 
         Raises:
             ValueError: lengths of ``containers`` and ``per_walker_extras``
-                do not both equal the walker count, ``group_state`` is
-                missing a required key, or ``exchange_idx`` falls outside
-                ``[0, len(self._replicas))`` (corruption signal).
+                do not both equal the walker count, or ``group_state`` is
+                missing a required key (corruption signal).
         """
         import json
 
@@ -412,19 +391,12 @@ class WangLandauWindowGroup:
                 f"restore_state expects {len(self._replicas)} per_walker_extras, "
                 f"got {len(per_walker_extras)}"
             )
-        required_keys = {"rng_state", "exchange_idx", "phase"}
+        required_keys = {"rng_state", "phase"}
         missing = required_keys - group_state.keys()
         if missing:
             raise ValueError(
                 f"restore_state: group_state missing required keys "
                 f"{sorted(missing)}; corrupted checkpoint."
-            )
-        exchange_idx = int(group_state["exchange_idx"])
-        if not 0 <= exchange_idx < len(self._replicas):
-            raise ValueError(
-                f"restore_state: group_state['exchange_idx']={exchange_idx} "
-                f"is outside the valid range [0, {len(self._replicas)}); "
-                f"corrupted checkpoint."
             )
         for replica, container, extra in zip(
             self._replicas, containers, per_walker_extras, strict=True
@@ -434,7 +406,6 @@ class WangLandauWindowGroup:
                 sites_by_species=extra["sites_by_species"],
             )
         self._rng.bit_generator.state = json.loads(group_state["rng_state"])
-        self._exchange_idx = exchange_idx
 
     def attach_mchammer_observer(self, observer: BaseObserver) -> None:
         """Attach observer to all W replicas; each receives its own copy."""

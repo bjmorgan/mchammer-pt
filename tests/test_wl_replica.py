@@ -688,15 +688,6 @@ def test_apply_plan_switch_to_phase_flips_and_recomputes_fill_factor(
     assert replica.ensemble._fill_factor == 1.0 / expected_t
 
 
-def test_reroll_exchange_idx_is_noop(wl_replica_factory):
-    """Single-walker reroll has no observable effect."""
-    replica = wl_replica_factory()
-    replica.advance(50)
-    f_before = float(replica.ensemble._fill_factor)
-    replica.reroll_exchange_idx()
-    assert replica.ensemble._fill_factor == f_before
-
-
 def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):
     """WangLandauReplica satisfies the runtime-checkable Protocol."""
     from mchammer_pt.wl_replica import WangLandauSlot

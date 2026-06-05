@@ -190,7 +190,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             exchange-proposal RNG are deterministically spawned.
         pool: optional `WangLandauPool` to use as backend.
         data_container_file: optional path; if given, `run` writes a
-            schema-4 checkpoint to it on completion.
+            schema-5 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
             ``CoordinatedWangLandauEnsemble``; must be a subclass of
             it. To use the 1/t schedule, pass
@@ -572,18 +572,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             _read_replica_extra,
             _read_window_groups,
             _validate_kwargs_hash,
+            _validate_wl_schema_version,
         )
         from .history import read_hdf5
         from .wl_window_group import WangLandauWindowGroup
 
         _, containers, meta = read_hdf5(path)
-        schema_version = meta.get("schema_version")
-        if schema_version != "4":
-            raise ValueError(
-                f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
-            )
+        _validate_wl_schema_version(path, meta.get("schema_version"))
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
             raise ValueError(f"{path}: CE identity mismatch.")
@@ -684,17 +679,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 )
                 # Per-walker MC state was restored inside restart_from
                 # above; restore_state would redo that work. Apply only
-                # the group-level fields here, validating exchange_idx
-                # the same way restore_state would.
-                exchange_idx = int(gs["exchange_idx"])
-                if not 0 <= exchange_idx < nw:
-                    raise ValueError(
-                        f"{path}: /orchestrator/window_groups/{g}/exchange_idx "
-                        f"= {exchange_idx} is outside the valid range "
-                        f"[0, {nw}); corrupted checkpoint."
-                    )
+                # the group-level RNG state here.
                 group._rng.bit_generator.state = json.loads(gs["rng_state"])
-                group._exchange_idx = exchange_idx
                 slots.append(group)
             offset += nw
 
@@ -768,17 +754,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
             _read_replica_extra,
             _read_window_groups,
             _validate_kwargs_hash,
+            _validate_wl_schema_version,
         )
         from .history import read_hdf5
 
         _, containers, meta = read_hdf5(path)
-        schema_version = meta.get("schema_version")
-        if schema_version != "4":
-            raise ValueError(
-                f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
-            )
+        _validate_wl_schema_version(path, meta.get("schema_version"))
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
             raise ValueError(f"{path}: CE identity mismatch.")
