@@ -135,15 +135,6 @@ def test_serial_wl_pool_log_g_delegates_to_replicas():
     assert pool.log_g(0, e_i + 1000.0) == -np.inf
 
 
-def test_serial_wl_pool_log_g_pair_returns_four_tuple():
-    pool = _make_serial_wl_pool()
-    e_i = pool.current_energy(0)
-    e_j = pool.current_energy(1)
-    result = pool.log_g_pair(0, 1, e_i, e_j)
-    assert len(result) == 4
-    assert all(isinstance(x, float) for x in result)
-
-
 def test_serial_wl_pool_converged_flags_initial_false():
     pool = _make_serial_wl_pool()
     flags = pool.converged_flags()
@@ -163,27 +154,6 @@ def _wl_pool_factory_kwargs(tmp_path):
         )
     )
     return ce_path, atoms, e0
-
-
-def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms, atoms],
-        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0, 1],
-    ) as pool:
-        e_i = pool.current_energy(0)
-        e_j = pool.current_energy(1)
-        result = pool.log_g_pair(0, 1, e_i, e_j)
-        assert len(result) == 4
-        # Unvisited bins in window default to 0.0.
-        assert all(x == 0.0 for x in result)
-        flags = pool.converged_flags()
-        assert flags.dtype == bool
-        assert not flags.any()
 
 
 def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
@@ -551,6 +521,23 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
 
     assert np.array_equal(pool.current_occupations(0), occ1_before)
     assert np.array_equal(pool.current_occupations(1), occ0_before)
+
+
+def test_serial_wl_pool_trace_tracks_walker_zero():
+    """The per-window trace deterministically reads walker 0, not a representative."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+    pool.advance_all(30)
+    # Point each group's exchange representative away from walker 0 so a
+    # representative-based trace would diverge from the walker-0 trace.
+    for slot in pool._replicas:
+        slot._exchange_idx = 1
+
+    energies = pool.current_energies()
+    for i in range(len(pool)):
+        assert energies[i] == pool.walker_energy(i, 0)
+        assert (
+            pool.current_occupations(i) == pool._replicas[i].walker_occupations(0)
+        ).all()
 
 
 def test_serial_pool_resolves_bins_filled_by_mode():

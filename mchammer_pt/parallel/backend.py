@@ -78,6 +78,36 @@ class ReplicaPool(Protocol):
         """
         ...
 
+    def n_walkers(self, i: int) -> int:
+        """Number of walkers carried by position ``i`` (1 for canonical)."""
+        ...
+
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Current energy of ``walker`` at position ``i``."""
+        ...
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Random walker matching across the boundary of positions ``i`` and ``j``."""
+        ...
+
+    def window_of_position(self) -> np.ndarray:
+        """Window index of each ``(window, walker)`` carrier, in order."""
+        ...
+
+    def n_carriers(self) -> int:
+        """Total number of walker carriers across all positions."""
+        ...
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Atomically swap walker ``a`` at position ``i`` with walker ``b`` at ``j``."""
+        ...
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply a batch of accepted ``(i, a, j, b)`` walker-config swaps."""
+        ...
+
     def data_containers(self) -> list[BaseDataContainer]:
         """One native mchammer ``BaseDataContainer`` per replica.
 
@@ -140,8 +170,8 @@ class WangLandauPool(ReplicaPool, Protocol):
     """A ReplicaPool driving Wang-Landau ensembles.
 
     Each replica owns a fixed energy window. The orchestrator queries
-    per-window log-density-of-states via `log_g`; the batched
-    `log_g_pair` halves round-trip cost on process-parallel pools.
+    per-window log-density-of-states via `log_g`; per-walker exchange
+    acceptance reads `walker_log_g` and `walker_energy`.
     `converged_flags` reports per-replica convergence so the
     orchestrator can stop on global convergence.
     """
@@ -166,15 +196,8 @@ class WangLandauPool(ReplicaPool, Protocol):
         """Return ln g at the given energy for replica i, or -inf out of window."""
         ...
 
-    def log_g_pair(
-        self, i: int, j: int, E_i: float, E_j: float,
-    ) -> tuple[float, float, float, float]:
-        """Returns (log_g_i_at_E_i, log_g_i_at_E_j, log_g_j_at_E_i, log_g_j_at_E_j).
-
-        Taking the energies as inputs (rather than looking them up
-        internally) saves two worker round-trips in the ProcessPool
-        path. Serial pools may implement it as four `log_g` calls.
-        """
+    def walker_log_g(self, i: int, walker: int, energy: float) -> float:
+        """Return ln g at ``energy`` for ``walker`` in window ``i`` (-inf if out)."""
         ...
 
     def converged_flags(self) -> np.ndarray:

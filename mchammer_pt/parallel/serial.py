@@ -370,14 +370,14 @@ class SerialWangLandauPool:
 
     def current_energies(self) -> np.ndarray:
         return np.array(
-            [r.current_energy() for r in self._replicas], dtype=np.float64
+            [r.walker_energy(0) for r in self._replicas], dtype=np.float64
         )
 
     def current_energy(self, i: int) -> float:
-        return self._replicas[i].current_energy()
+        return self._replicas[i].walker_energy(0)
 
     def current_occupations(self, i: int) -> np.ndarray:
-        return self._replicas[i].current_occupations()
+        return self._replicas[i].walker_occupations(0)
 
     def swap_configurations(self, i: int, j: int) -> None:
         occ_i = self._replicas[i].current_occupations()
@@ -444,17 +444,6 @@ class SerialWangLandauPool:
 
     def log_g(self, i: int, energy: float) -> float:
         return self._replicas[i].log_g(energy)
-
-    def log_g_pair(
-        self, i: int, j: int, E_i: float, E_j: float,
-    ) -> tuple[float, float, float, float]:
-        r_i, r_j = self._replicas[i], self._replicas[j]
-        return (
-            r_i.log_g(E_i),
-            r_i.log_g(E_j),
-            r_j.log_g(E_i),
-            r_j.log_g(E_j),
-        )
 
     def converged_flags(self) -> np.ndarray:
         return np.array([r.converged for r in self._replicas], dtype=bool)

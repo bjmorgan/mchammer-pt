@@ -1130,20 +1130,22 @@ class ProcessWangLandauPool:
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        targets = [
-            (slot.exchange_conn(), i)
-            for i, slot in enumerate(self._slots)
-        ]
-        payloads = broadcast_gather(targets, ("ENERGY",))
-        return np.array(payloads, dtype=np.float64)
+        return np.array(
+            [float(slot.walker_states[0].current_energy) for slot in self._slots],
+            dtype=np.float64,
+        )
 
     def current_energy(self, i: int) -> float:
+        # Authoritative live query of window i's walker 0, not the
+        # block-boundary cache that walker_energy() reads.
         self._check_open()
-        return float(request(self._slots[i].exchange_conn(), ("ENERGY",), i))
+        return float(request(self._slots[i].workers[0][1], ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
-        return np.asarray(request(self._slots[i].exchange_conn(), ("GET_OCC",), i))
+        return np.asarray(
+            request(self._slots[i].workers[0][1], ("GET_OCC",), i)
+        )
 
     def swap_configurations(self, i: int, j: int) -> None:
         self._check_open()
@@ -1164,20 +1166,6 @@ class ProcessWangLandauPool:
         _, conn = self._slots[i].workers[0]
         g_at_E, _ = request(conn, ("LOG_G_AT", float(energy), float(energy)), i)
         return float(g_at_E)
-
-    def log_g_pair(
-        self, i: int, j: int, E_i: float, E_j: float,
-    ) -> tuple[float, float, float, float]:
-        self._check_open()
-        _, conn_i = self._slots[i].workers[0]
-        _, conn_j = self._slots[j].workers[0]
-        (g_i_Ei, g_i_Ej), (g_j_Ei, g_j_Ej) = broadcast_gather(
-            [(conn_i, i), (conn_j, j)],
-            ("LOG_G_AT", float(E_i), float(E_j)),
-        )
-        return (
-            float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
-        )
 
     def n_walkers(self, i: int) -> int:
         """Number of walkers in window ``i``."""
