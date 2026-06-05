@@ -107,8 +107,8 @@ class SerialPool:
     ) -> list[tuple[int, int]]:
         """Single-walker rungs exchange the one pair ``(0, 0)``.
 
-        Returns the fixed pair WITHOUT drawing from ``rng``, so the
-        exchange RNG stream is unchanged from the pre-matching behaviour.
+        Returns the fixed pair without drawing from ``rng``, so the
+        exchange RNG stream is left untouched.
         """
         return [(0, 0)]
 

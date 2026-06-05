@@ -54,6 +54,44 @@ def test_hdf5_round_trip(tmp_path: Path):
     assert containers_back == []
 
 
+def test_window_of_position_round_trips_and_drives_round_trips(tmp_path: Path):
+    """A multi-walker history persists window_of_position, so round_trip_counts
+    works on the history read back from disk (no live pool needed)."""
+    from mchammer_pt.diagnostics import round_trip_counts
+
+    # Two windows, two walkers each: N_w = 4 positions over 2 rungs.
+    wop = np.array([0, 0, 1, 1], dtype=np.int64)
+    h = ExchangeHistory.empty(
+        n_cycles=2, n_replicas=2, n_carriers=4, window_of_position=wop
+    )
+    # Carrier 0 traverses bottom -> top -> bottom (one round trip).
+    h.replica_labels_per_cycle[:] = np.array([
+        [0, 1, 2, 3],
+        [2, 1, 0, 3],
+        [0, 1, 2, 3],
+    ])
+    write_hdf5(tmp_path / "pt.h5", history=h, replica_containers=[], meta={})
+    h_back, _, _ = read_hdf5(tmp_path / "pt.h5")
+
+    np.testing.assert_array_equal(h_back.window_of_position, wop)
+    # Restored history is self-describing: n_windows derived from the map.
+    counts = round_trip_counts(
+        h_back.replica_labels_per_cycle, h_back.window_of_position
+    )
+    assert counts[0] == 1
+    assert counts.sum() == 2  # carriers 0 and 2 mirror each other
+
+
+def test_window_of_position_absent_reads_as_none(tmp_path: Path):
+    """A history written without window_of_position reads back as None
+    (back-compatible single-walker / pre-existing files)."""
+    h = _make_history()  # constructed without window_of_position
+    assert h.window_of_position is None
+    write_hdf5(tmp_path / "pt.h5", history=h, replica_containers=[], meta={})
+    h_back, _, _ = read_hdf5(tmp_path / "pt.h5")
+    assert h_back.window_of_position is None
+
+
 def test_hdf5_round_trip_with_containers(tmp_path: Path, toy_ce, toy_atoms):
     from mchammer.calculators import ClusterExpansionCalculator
     from mchammer.ensembles import CanonicalEnsemble

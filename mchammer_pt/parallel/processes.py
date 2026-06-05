@@ -301,8 +301,8 @@ class ProcessPool:
     ) -> list[tuple[int, int]]:
         """Single-walker rungs exchange the one pair ``(0, 0)``.
 
-        Returns the fixed pair WITHOUT drawing from ``rng``, so the
-        exchange RNG stream is unchanged from the pre-matching behaviour.
+        Returns the fixed pair without drawing from ``rng``, so the
+        exchange RNG stream is left untouched.
         """
         return [(0, 0)]
 
@@ -904,6 +904,7 @@ class ProcessWangLandauPool:
             for i, slot in enumerate(self._slots):
                 for w, (_, conn) in enumerate(slot.workers):
                     recv_reply(conn, "STARTUP", f"window {i} walker {w}")
+            self._prime_energy_cache()
         except BaseException:
             self.shutdown()
             raise
@@ -1124,8 +1125,8 @@ class ProcessWangLandauPool:
         )
 
     def current_energy(self, i: int) -> float:
-        # Authoritative live query of window i's walker 0, not the
-        # block-boundary cache that walker_energy() reads.
+        # Live ENERGY query of window i's walker 0 (one IPC round trip),
+        # so callers get an up-to-date value between block boundaries.
         self._check_open()
         return float(request(self._slots[i].workers[0][1], ("ENERGY",), i))
 
@@ -1160,7 +1161,9 @@ class ProcessWangLandauPool:
         bin_left = None if left is None else int(round(left / spacing))
         bin_right = None if right is None else int(round(right / spacing))
         entropy = self._slots[i].walker_states[walker].entropy
-        return log_g_at(entropy, energy, spacing, bin_left, bin_right)
+        return log_g_at(
+            entropy, energy, spacing, bin_left=bin_left, bin_right=bin_right
+        )
 
     def candidate_pairs(
         self, i: int, j: int, rng: np.random.Generator
@@ -1192,40 +1195,49 @@ class ProcessWangLandauPool:
         no aliased walkers. One ``GET_OCC`` fan-out reads every involved
         walker's occupations; one ``SET_OCC`` fan-out writes the swapped
         configurations.
+
+        The move is not atomic across workers (the ``SET_OCC`` fan-out has
+        no rollback). To avoid leaving a half-swapped pool live for a
+        downstream caller, a worker IPC failure shuts the pool down and
+        re-raises, matching :meth:`advance_all`.
         """
         if not swaps:
             return
         self._check_open()
-        involved: list[tuple[int, int]] = []
-        for i, a, j, b in swaps:
-            involved.append((i, a))
-            involved.append((j, b))
-        get_targets = [
-            (self._slots[s].workers[w][1], f"window {s} walker {w}")
-            for s, w in involved
-        ]
-        occ_list = broadcast_gather(get_targets, ("GET_OCC",))
-        occ = {
-            sw: np.asarray(o, dtype=np.int64)
-            for sw, o in zip(involved, occ_list, strict=True)
-        }
-        set_targets = []
-        for i, a, j, b in swaps:
-            set_targets.append(
-                (
-                    self._slots[i].workers[a][1],
-                    f"window {i} walker {a}",
-                    ("SET_OCC", occ[(j, b)]),
+        try:
+            involved: list[tuple[int, int]] = []
+            for i, a, j, b in swaps:
+                involved.append((i, a))
+                involved.append((j, b))
+            get_targets = [
+                (self._slots[s].workers[w][1], f"window {s} walker {w}")
+                for s, w in involved
+            ]
+            occ_list = broadcast_gather(get_targets, ("GET_OCC",))
+            occ = {
+                sw: np.asarray(o, dtype=np.int64)
+                for sw, o in zip(involved, occ_list, strict=True)
+            }
+            set_targets = []
+            for i, a, j, b in swaps:
+                set_targets.append(
+                    (
+                        self._slots[i].workers[a][1],
+                        f"window {i} walker {a}",
+                        ("SET_OCC", occ[(j, b)]),
+                    )
                 )
-            )
-            set_targets.append(
-                (
-                    self._slots[j].workers[b][1],
-                    f"window {j} walker {b}",
-                    ("SET_OCC", occ[(i, a)]),
+                set_targets.append(
+                    (
+                        self._slots[j].workers[b][1],
+                        f"window {j} walker {b}",
+                        ("SET_OCC", occ[(i, a)]),
+                    )
                 )
-            )
-        fanout_gather(set_targets)
+            fanout_gather(set_targets)
+        except Exception:
+            self.shutdown()
+            raise
         # Keep the parent-side energy cache consistent without an IPC
         # round trip: a swap moves each walker's configuration to the
         # other, so their cached current energies swap too. The entropy
@@ -1433,6 +1445,34 @@ class ProcessWangLandauPool:
                 )
             slot.rng.bit_generator.state = json.loads(gs["rng_state"])
             slot.phase = gs["phase"]
+
+        # Restored configurations change each walker's energy; refresh the
+        # parent-side cache so the post-resume history snapshot is correct.
+        self._prime_energy_cache()
+
+    def _prime_energy_cache(self) -> None:
+        """Fill each walker's cached ``current_energy`` from a live query.
+
+        The per-walker energy cache (``walker_states``) is otherwise
+        populated only by :meth:`advance_all`. Priming it at construction
+        and after resume means :meth:`current_energies` returns the true
+        initial energies for the pre-run history snapshot rather than the
+        0.0 placeholder. This one-off query runs outside the per-cycle
+        exchange loop, so it does not reintroduce per-exchange IPC.
+        """
+        targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
+        ]
+        energies = broadcast_gather(targets, ("ENERGY",))
+        idx = 0
+        for slot in self._slots:
+            for w in range(len(slot.workers)):
+                slot.walker_states[w] = replace(
+                    slot.walker_states[w], current_energy=float(energies[idx])
+                )
+                idx += 1
 
     def attach_observer(
         self,

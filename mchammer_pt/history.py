@@ -108,12 +108,18 @@ class ExchangeHistory:
         swap_attempted: per-pair attempt counts, shape
             ``(n_replicas-1,)``.
         swap_accepted: per-pair accepted counts, same shape.
+        window_of_position: shape ``(N_w,)``, the window rung index of
+            each label position, or ``None`` for the single-walker case
+            (where position == window). Carried so that
+            `round_trip_counts` can interpret a multi-walker label array
+            read back from disk, when the live pool is gone.
     """
 
     energies_per_cycle: np.ndarray
     replica_labels_per_cycle: np.ndarray
     swap_attempted: np.ndarray
     swap_accepted: np.ndarray
+    window_of_position: np.ndarray | None = None
 
     @classmethod
     def empty(
@@ -121,12 +127,16 @@ class ExchangeHistory:
         n_cycles: int,
         n_replicas: int,
         n_carriers: int | None = None,
+        window_of_position: np.ndarray | None = None,
     ) -> ExchangeHistory:
         """Allocate a zero-filled history of the given shape.
 
         ``n_carriers`` is the number of position-indexed carrier labels
         (the total number of walkers across all windows). It defaults to
         ``n_replicas`` (the single-walker / canonical case).
+        ``window_of_position`` maps each label position to its window
+        rung; pass it for multi-walker runs so the history is
+        self-describing, or leave it ``None`` for the single-walker case.
         """
         if n_carriers is None:
             n_carriers = n_replicas
@@ -137,6 +147,11 @@ class ExchangeHistory:
             ),
             swap_attempted=np.zeros(n_replicas - 1, dtype=np.int64),
             swap_accepted=np.zeros(n_replicas - 1, dtype=np.int64),
+            window_of_position=(
+                None
+                if window_of_position is None
+                else np.asarray(window_of_position, dtype=np.int64)
+            ),
         )
 
     @classmethod
@@ -182,6 +197,8 @@ class ExchangeHistory:
             replica_labels_per_cycle=np.concatenate(label_parts, axis=0),
             swap_attempted=swap_attempted,
             swap_accepted=swap_accepted,
+            # Static across segments of the same ladder; carry the first.
+            window_of_position=histories[0].window_of_position,
         )
 
 
@@ -247,6 +264,11 @@ def write_hdf5(
             )
             exchanges.create_dataset("swap_attempted", data=history.swap_attempted)
             exchanges.create_dataset("swap_accepted", data=history.swap_accepted)
+            if history.window_of_position is not None:
+                exchanges.create_dataset(
+                    "window_of_position",
+                    data=np.asarray(history.window_of_position, dtype=np.int64),
+                )
 
             meta_group = f.create_group("meta")
             for key, value in meta.items():
@@ -360,6 +382,11 @@ def read_hdf5(
             replica_labels_per_cycle=np.array(exchanges["replica_labels_per_cycle"]),
             swap_attempted=np.array(exchanges["swap_attempted"]),
             swap_accepted=np.array(exchanges["swap_accepted"]),
+            window_of_position=(
+                np.array(exchanges["window_of_position"])
+                if "window_of_position" in exchanges
+                else None
+            ),
         )
         meta: dict[str, MetaValue] = {}
         for key, value in f["meta"].attrs.items():

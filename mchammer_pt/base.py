@@ -199,6 +199,7 @@ class BaseParallelTempering(ABC):
             n_cycles=n_cycles,
             n_replicas=n_replicas,
             n_carriers=self._pool.n_carriers(),
+            window_of_position=self._pool.window_of_position(),
         )
         # Publish the in-progress history on `self._history` before the loop
         # so cycle callbacks (e.g. `CheckpointWriter`) can read live

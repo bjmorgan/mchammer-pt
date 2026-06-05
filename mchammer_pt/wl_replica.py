@@ -99,6 +99,7 @@ def log_g_at(
     entropy: dict[int, float],
     energy: float,
     energy_spacing: float,
+    *,
     bin_left: int | None,
     bin_right: int | None,
 ) -> float:
@@ -388,7 +389,11 @@ class WangLandauReplica:
         """
         e = self._ensemble
         return log_g_at(
-            e._entropy, energy, self._energy_spacing, e._bin_left, e._bin_right
+            e._entropy,
+            energy,
+            self._energy_spacing,
+            bin_left=e._bin_left,
+            bin_right=e._bin_right,
         )
 
     @property
@@ -397,58 +402,19 @@ class WangLandauReplica:
         return 1
 
     def walker_energy(self, walker: int) -> float:
-        """Current energy of walker ``walker`` (index 0..n_walkers-1).
-
-        A bare replica holds exactly one walker; ``walker`` is
-        structurally always 0.
-
-        Args:
-            walker: index of the walker within the slot.
-
-        Returns:
-            Current energy in eV.
-        """
+        """Current energy of the single walker (``walker`` is always 0)."""
         return self.current_energy()
 
     def walker_occupations(self, walker: int) -> np.ndarray:
-        """Current site occupations of walker ``walker`` (index 0..n_walkers-1).
-
-        A bare replica holds exactly one walker; ``walker`` is
-        structurally always 0.
-
-        Args:
-            walker: index of the walker within the slot.
-
-        Returns:
-            Copy of the walker's occupation array.
-        """
+        """Current occupations of the single walker (``walker`` is always 0)."""
         return self.current_occupations()
 
     def set_walker_occupations(self, walker: int, occupations: np.ndarray) -> None:
-        """Overwrite the configuration of walker ``walker`` (index 0..n_walkers-1).
-
-        A bare replica holds exactly one walker; ``walker`` is
-        structurally always 0.
-
-        Args:
-            walker: index of the walker within the slot.
-            occupations: new occupation array.
-        """
+        """Set the single walker's configuration (``walker`` is always 0)."""
         self.set_occupations(occupations)
 
     def walker_log_g(self, walker: int, energy: float) -> float:
-        """Density-of-states ln g(E) for walker ``walker`` (index 0..n_walkers-1).
-
-        A bare replica holds exactly one walker; ``walker`` is
-        structurally always 0.
-
-        Args:
-            walker: index of the walker within the slot.
-            energy: energy at which to evaluate ln g.
-
-        Returns:
-            ln g(energy), or -inf if ``energy`` is outside the window.
-        """
+        """``ln g(energy)`` for the single walker (``walker`` is always 0)."""
         return self.log_g(energy)
 
     def set_occupations(self, occupations: np.ndarray) -> None:

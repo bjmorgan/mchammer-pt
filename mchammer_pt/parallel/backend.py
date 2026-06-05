@@ -101,7 +101,11 @@ class ReplicaPool(Protocol):
         ...
 
     def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
-        """Atomically swap walker ``a`` at position ``i`` with walker ``b`` at ``j``."""
+        """Swap walker ``a`` of window ``i`` with walker ``b`` of window ``j``.
+
+        Not guaranteed atomic across a multiprocessing backend; on a worker
+        failure the pool is shut down rather than left half-swapped.
+        """
         ...
 
     def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:

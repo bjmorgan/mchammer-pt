@@ -37,8 +37,9 @@ def round_trip_counts(
         window_of_position: shape ``(N_w,)``, the window index for each
             position. Defaults to ``arange(N_w)`` (one position per
             window: the single-walker case).
-        n_windows: number of window rungs. Defaults to the number of
-            positions (single-walker case).
+        n_windows: number of window rungs. When ``window_of_position``
+            is given it defaults to ``window_of_position.max() + 1``;
+            otherwise to the number of positions (single-walker case).
 
     Returns:
         1-D array of shape ``(N_w,)`` giving the round-trip count for
@@ -47,13 +48,13 @@ def round_trip_counts(
     Note:
         The defaults are the single-walker case (one walker per rung:
         canonical PT and single-walker REWL). For multi-walker REWL,
-        pass ``window_of_position`` and ``n_windows`` so each
-        ``(window, walker)`` position maps to its window rung::
+        pass ``window_of_position`` so each ``(window, walker)`` position
+        maps to its window rung. ``ExchangeHistory`` carries the mapping,
+        so this works on a history read back from disk::
 
             round_trip_counts(
-                pt.history.replica_labels_per_cycle,
-                pt.pool.window_of_position(),
-                len(pt.pool),
+                history.replica_labels_per_cycle,
+                history.window_of_position,
             )
 
         Calling the single-argument form on a multi-walker run treats
@@ -64,10 +65,14 @@ def round_trip_counts(
     n_cycles_plus_one, n_positions = labels.shape
     if window_of_position is None:
         window_of_position = np.arange(n_positions, dtype=np.int64)
+        if n_windows is None:
+            n_windows = n_positions
     else:
         window_of_position = np.asarray(window_of_position)
-    if n_windows is None:
-        n_windows = n_positions
+        if n_windows is None:
+            # Derive the rung count from the mapping so callers can pass
+            # just ``history.window_of_position``.
+            n_windows = int(window_of_position.max()) + 1
     top = n_windows - 1
     counts = np.zeros(n_positions, dtype=np.int64)
     # Per carrier: 0 = no endpoint yet, 1 = last endpoint was bottom,

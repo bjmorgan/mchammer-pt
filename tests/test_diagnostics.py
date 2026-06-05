@@ -144,16 +144,12 @@ def test_energy_autocorrelation_time_detects_strong_correlation():
 def test_canonical_round_trip_counts_pinned_for_seeded_run(toy_ce, toy_atoms):
     """A seeded canonical PT run produces a fixed round-trip-count vector.
 
-    Canonical PT (W=1) is the unchanged-byte path through the
-    matching-exchange refactor: with one walker per temperature the
-    matching reduces to the single deterministic pair, so the swap
-    trajectory -- and hence the per-carrier round-trip counts -- must be
-    identical to before. This pins the counts for a fixed seed so any
-    drift in the W=1 exchange path (carrier-label bookkeeping, swap
-    acceptance, or the boundary alternation) is caught.
-
-    The expected vector was recorded from one run and confirmed
-    reproducible across repeated constructions with the same seed.
+    Canonical PT has one walker per temperature, so the matching reduces
+    to a single deterministic pair and the swap trajectory -- and hence
+    the per-carrier round-trip counts -- is fully determined by the seed.
+    Pinning the counts catches any drift in the W=1 exchange path
+    (carrier-label bookkeeping, swap acceptance, or boundary
+    alternation).
     """
     pt = CanonicalParallelTempering(
         cluster_expansion=toy_ce,

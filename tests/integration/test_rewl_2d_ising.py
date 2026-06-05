@@ -240,24 +240,20 @@ def test_rewl_recovers_analytic_4x4_ising_dos() -> None:
 
 @pytest.mark.slow
 def test_rewl_multiwalker_recovers_analytic_4x4_ising_dos() -> None:
-    """Multi-walker (W=2) matching exchange still recovers the exact DOS.
+    """Multi-walker (W=2) matching exchange recovers the exact DOS.
 
-    Multi-walker analogue of
-    ``test_rewl_recovers_analytic_4x4_ising_dos``: identical 4x4 Ising
-    setup, windows, energy spacing, and convergence target, but each
-    window now runs ``n_walkers_per_window=2`` walkers under the
-    matching-exchange coordinator. Matching exchange changes the rate
-    at which configurations cross window boundaries; it must not change
-    the stationary target. So the recovered DOS must still match the
-    brute-force analytic DOS within the *same* tolerances as the
-    single-walker gate — the tolerances are deliberately unchanged
-    because the whole point is that the DOS is invariant under the
-    multi-walker refactor.
+    Same 4x4 Ising setup, windows, energy spacing, and convergence
+    target as the single-walker gate, but each window runs
+    ``n_walkers_per_window=2`` under the matching-exchange coordinator.
+    Matching changes the rate at which configurations cross window
+    boundaries, not the stationary target, so the recovered DOS matches
+    the brute-force analytic DOS within the same tolerances regardless
+    of walker count.
 
-    A bug in the matching acceptance ratio, in the per-walker entropy
-    merge at finalise, or in how accepted swaps move configurations
-    between walkers would bias the stationary distribution and push the
-    stitched curve off the exact one, failing this test.
+    A bug in the matching acceptance ratio, the per-walker entropy merge
+    at finalise, or how accepted swaps move configurations between
+    walkers would bias the stationary distribution and push the stitched
+    curve off the exact one.
     """
     from mchammer_pt.wl import WangLandauParallelTempering
     from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble

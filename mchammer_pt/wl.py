@@ -168,6 +168,29 @@ def _spawn_wl_seeds(
     return walker_seeds, group_seeds, master_seed
 
 
+def _restored_replica_labels(
+    raw: object,
+    pt: WangLandauParallelTempering,
+    path: Path | str,
+) -> np.ndarray:
+    """Validate and coerce the restored orchestrator replica-label array.
+
+    The labels are position-indexed over ``N_w = sum(walkers_per_window)``.
+    A length mismatch against the freshly reconstructed pool signals a
+    corrupted or mismatched checkpoint; this mirrors the adjacent
+    ``walkers_per_window`` and container-length corruption guards.
+    """
+    labels = np.asarray(raw, dtype=np.int64)
+    expected = pt._pool.n_carriers()
+    if labels.shape != (expected,):
+        raise ValueError(
+            f"{path}: orchestrator replica_labels has shape {tuple(labels.shape)} "
+            f"but the reconstructed pool has {expected} carriers; "
+            f"corrupted or mismatched checkpoint."
+        )
+    return labels
+
+
 class WangLandauParallelTempering(BaseParallelTempering):
     """REWL orchestrator across a sequence of energy windows.
 
@@ -206,12 +229,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
             (cadence controlled by ``merge_cadence``). At each active
             window boundary a random matching pairs the two windows'
             walkers and attempts one swap per pair, so per-walker
-            exchange rate does not dilute as walkers are added. Same-pool
-            resume
-            for windows with count > 1 is structurally correct but not
-            bit-identical: ``run()``'s end-of-run merge destroys the
-            pre-merge per-walker entropy state that bit-identity would
-            require.
+            exchange rate does not dilute as walkers are added.
+            Same-pool resume for windows with count > 1 is structurally
+            correct but not bit-identical: ``run()``'s end-of-run merge
+            destroys the pre-merge per-walker entropy state that
+            bit-identity would require.
         flatness_mode: ``"per_walker"`` (every walker independently
             flat; published Vogel et al. 2013) or ``"pooled"`` (default;
             summed histogram flat -- a single combined bin sees ``W x``
@@ -469,6 +491,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             n_cycles=n_cycles,
             n_replicas=n_replicas,
             n_carriers=self._pool.n_carriers(),
+            window_of_position=self._pool.window_of_position(),
         )
         self._history = history
         history.energies_per_cycle[0] = self._pool.current_energies()
@@ -717,8 +740,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
         pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
-        pt._replica_labels = np.asarray(
-            orchestrator_state["replica_labels"], dtype=np.int64
+        pt._replica_labels = _restored_replica_labels(
+            orchestrator_state["replica_labels"], pt, path
         )
         rng_state_raw = orchestrator_state["rng_state"]
         assert isinstance(rng_state_raw, str)
@@ -838,8 +861,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
-            pt._replica_labels = np.asarray(
-                orchestrator_state["replica_labels"], dtype=np.int64
+            pt._replica_labels = _restored_replica_labels(
+                orchestrator_state["replica_labels"], pt, path
             )
             rng_state_raw = orchestrator_state["rng_state"]
             assert isinstance(rng_state_raw, str)

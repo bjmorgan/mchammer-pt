@@ -386,6 +386,30 @@ def test_process_wl_pool_attach_observer_fires(tmp_path):
         assert isinstance(snapshot["counter"], StatefulCounter)
 
 
+def test_process_wl_pool_current_energies_primed_before_advance(tmp_path):
+    """current_energies() returns true initial energies before any advance_all.
+
+    ``run()`` writes ``energies_per_cycle[0]`` from ``current_energies()``
+    before the first block. The cache is primed at construction, so row 0
+    records the real initial energies, not the 0.0 placeholder.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        seeds=[0, 1],
+    ) as pool:
+        live = np.array([
+            float(request(pool._slots[i].workers[0][1], ("ENERGY",), i))
+            for i in range(len(pool))
+        ])
+        primed = pool.current_energies()
+        np.testing.assert_array_equal(primed, live)
+        assert not np.all(primed == 0.0)
+
+
 def test_process_wl_pool_apply_swaps_updates_energy_cache(tmp_path):
     """apply_swaps keeps the parent-side energy cache consistent with the swap.
 
@@ -420,6 +444,50 @@ def test_process_wl_pool_apply_swaps_updates_energy_cache(tmp_path):
         assert pool.walker_energy(1, 0) == e_cache_0
         assert pool.current_energies()[0] == e_cache_1
         assert pool.current_energies()[1] == e_cache_0
+
+
+def test_process_wl_pool_apply_swaps_cross_index_multi_swap_cache(tmp_path):
+    """A batch of disjoint cross-index swaps keeps every walker's cached
+    energy aligned with the configuration it now holds.
+
+    The single-pair tests would miss a transposition or read-after-mutate
+    bug in the cache fix-up; this drives two simultaneous ``a != b`` swaps
+    and checks both the cache permutation and live-worker agreement.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        n_walkers_per_window=2,
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(50)
+        pre = {
+            (i, w): pool.walker_energy(i, w)
+            for i in range(len(pool))
+            for w in range(pool.n_walkers(i))
+        }
+        # Two disjoint cross-index swaps covering all four walkers.
+        swaps = [(0, 0, 1, 1), (0, 1, 1, 0)]
+        pool.apply_swaps(swaps)
+
+        # Cache fix-up: each swapped walker now caches its partner's energy
+        # (exact permutation of the recorded pre-swap cache values).
+        for i, a, j, b in swaps:
+            assert pool.walker_energy(i, a) == pre[(j, b)]
+            assert pool.walker_energy(j, b) == pre[(i, a)]
+
+        # The cache agrees with the live worker (configs physically moved).
+        # `approx` absorbs the running-total vs fresh-recompute float
+        # difference between the MC potential and post-SET_OCC recompute.
+        for i in range(len(pool)):
+            for w in range(pool.n_walkers(i)):
+                live = float(
+                    request(pool._slots[i].workers[w][1], ("ENERGY",), i)
+                )
+                assert pool.walker_energy(i, w) == pytest.approx(live)
 
 
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):

@@ -241,8 +241,10 @@ def test_log_g_at_matches_replica_and_bin_bounds(wl_replica_factory):
         left - 5.0,
         right + 5.0,
     ):
-        assert log_g_at(e._entropy, energy, spacing, bin_left, bin_right) == \
-            replica.log_g(energy)
+        assert log_g_at(
+            e._entropy, energy, spacing,
+            bin_left=bin_left, bin_right=bin_right,
+        ) == replica.log_g(energy)
 
 
 def test_wl_replica_set_occupations_refreshes_potential():
