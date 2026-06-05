@@ -1503,7 +1503,6 @@ def test_serial_wl_pool_walker_counts_and_positions():
 def test_serial_wl_pool_candidate_pairs_match_primitive():
     """candidate_pairs delegates to matching_for_boundary with the same RNG seed."""
     from mchammer_pt.exchange import matching_for_boundary
-
     from tests._wl_fixtures import make_serial_wl_pool_mixed
 
     pool = make_serial_wl_pool_mixed()
@@ -1533,3 +1532,151 @@ def test_serial_wl_pool_walker_log_g_delegates():
     pool = make_serial_wl_pool_mixed()
     e = pool.walker_energy(1, 0)
     assert pool.walker_log_g(1, 0, e) == pool.log_g(1, e)
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on ProcessWangLandauPool
+# ---------------------------------------------------------------------------
+
+
+def test_process_wl_pool_caches_walker_energy_after_advance(tmp_path):
+    """walker_energy returns a finite per-walker energy from the cache."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(20)
+        assert pool.n_walkers(0) == 2
+        for i in range(len(pool)):
+            for w in range(pool.n_walkers(i)):
+                assert np.isfinite(pool.walker_energy(i, w))
+
+
+def test_process_wl_pool_walker_log_g_matches_direct_query(tmp_path):
+    """The cached parent-side walker_log_g equals the worker's own log g.
+
+    walker_log_g reads the entropy snapshot cached in the parent (no
+    IPC); the comparison value comes from a direct ``LOG_G_AT`` request
+    to that walker's worker connection. Equality proves the parent's
+    bin-bounds derivation agrees with the worker's live ensemble.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(20)
+        for w in range(pool.n_walkers(0)):
+            e = pool.walker_energy(0, w)
+            cached = pool.walker_log_g(0, w, e)
+            _, conn = pool._slots[0].workers[w]
+            direct, _ = request(conn, ("LOG_G_AT", float(e), float(e)), w)
+            assert cached == float(direct)
+
+
+def test_process_wl_pool_apply_swaps_moves_configs(tmp_path):
+    """apply_swaps physically exchanges configurations between processes.
+
+    Energies are re-read directly from the workers (not the stale
+    parent cache, which apply_swaps does not refresh) to prove the
+    occupations moved across the process boundary.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, b],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        _, c_i = pool._slots[0].workers[0]
+        _, c_j = pool._slots[1].workers[0]
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(ea)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(eb)
+
+        pool.apply_swaps([(0, 0, 1, 0)])
+
+        # Re-read from the workers, not the (unrefreshed) parent cache.
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(eb)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(ea)
+
+
+def test_process_wl_pool_swap_walker_configurations_delegates(tmp_path):
+    """swap_walker_configurations moves a single walker pair via apply_swaps."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, b],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        _, c_i = pool._slots[0].workers[0]
+        _, c_j = pool._slots[1].workers[0]
+        pool.swap_walker_configurations(0, 0, 1, 0)
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(eb)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(ea)
+
+
+def test_process_wl_pool_walker_counts_and_positions(tmp_path):
+    """n_walkers, window_of_position, n_carriers for a mixed [2, 1] pool."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        assert [pool.n_walkers(i) for i in range(len(pool))] == [2, 1]
+        assert list(pool.window_of_position()) == [0, 0, 1]
+        assert pool.n_carriers() == 3
+
+
+def test_process_wl_pool_candidate_pairs_match_primitive(tmp_path):
+    """candidate_pairs delegates to matching_for_boundary with the same seed."""
+    from mchammer_pt.exchange import matching_for_boundary
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        got = pool.candidate_pairs(0, 1, np.random.default_rng(5))
+        expected = matching_for_boundary(
+            pool.n_walkers(0), pool.n_walkers(1), np.random.default_rng(5)
+        )
+    assert got == expected

@@ -1488,7 +1488,8 @@ def test_wang_landau_pool_protocol_exists():
 
 
 def test_serial_canonical_walker_surface(toy_ce, toy_atoms):
-    """n_walkers, window_of_position, and n_carriers are trivial for single-walker rungs."""
+    """n_walkers, window_of_position, and n_carriers are trivial for
+    single-walker rungs."""
     pool = _make_serial(toy_ce, toy_atoms)
     try:
         assert [pool.n_walkers(i) for i in range(len(pool))] == [1] * len(pool)
@@ -1517,6 +1518,49 @@ def test_serial_canonical_swap_walker_delegates(toy_ce, toy_atoms):
         Replica(toy_ce, toy_atoms, temperature=10000.0, random_seed=2),
     ]
     pool = SerialPool(replicas)
+    try:
+        pool.advance_all(200)
+        e0 = pool.current_energy(0)
+        e1 = pool.current_energy(1)
+        pool.swap_walker_configurations(0, 0, 1, 0)
+        assert pool.current_energy(0) == e1
+        assert pool.current_energy(1) == e0
+    finally:
+        pool.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on ProcessPool
+# ---------------------------------------------------------------------------
+
+
+def test_process_canonical_walker_surface(toy_ce, toy_atoms, tmp_path: Path):
+    """n_walkers, window_of_position, n_carriers, candidate_pairs on the process
+    pool."""
+    pool = _make_process(toy_ce, toy_atoms, tmp_path)
+    try:
+        assert [pool.n_walkers(i) for i in range(len(pool))] == [1] * len(pool)
+        assert list(pool.window_of_position()) == list(range(len(pool)))
+        assert pool.n_carriers() == len(pool)
+        # candidate_pairs returns the fixed pair without consuming the RNG.
+        rng = np.random.default_rng(0)
+        before = rng.bit_generator.state
+        assert pool.candidate_pairs(0, 1, rng) == [(0, 0)]
+        assert rng.bit_generator.state == before
+    finally:
+        pool.shutdown()
+
+
+def test_process_canonical_swap_walker_delegates(toy_ce, toy_atoms, tmp_path: Path):
+    """swap_walker_configurations delegates to swap_configurations."""
+    ce_path = tmp_path / "toy.ce"
+    toy_ce.write(str(ce_path))
+    pool = ProcessPool(
+        ce_path=ce_path,
+        initial_atoms=toy_atoms,
+        temperatures=[300.0, 10000.0],
+        seeds=[1, 2],
+    )
     try:
         pool.advance_all(200)
         e0 = pool.current_energy(0)

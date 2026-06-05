@@ -30,6 +30,7 @@ from mchammer.observers.base_observer import (
 )
 
 from ..checkpoint import _compute_ensemble_kwargs_hash, _serialise_rng_state
+from ..exchange import matching_for_boundary
 from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
@@ -53,7 +54,7 @@ from ..wl_ensemble import (
 )
 from ..wl_initial_structures import expand_initial_structures
 from ..wl_merge_diagnostics import MergeEvent
-from ..wl_replica import WangLandauReplica
+from ..wl_replica import WangLandauReplica, log_g_at
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
@@ -286,6 +287,32 @@ class ProcessPool:
         except BaseException:
             request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
+
+    def n_walkers(self, i: int) -> int:
+        """Single-walker rungs: always 1."""
+        return 1
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Single-walker rungs exchange the one pair ``(0, 0)``.
+
+        Returns the fixed pair WITHOUT drawing from ``rng``, so the
+        exchange RNG stream is unchanged from the pre-matching behaviour.
+        """
+        return [(0, 0)]
+
+    def window_of_position(self) -> np.ndarray:
+        """One position per rung: the identity mapping."""
+        return np.arange(len(self._workers), dtype=np.int64)
+
+    def n_carriers(self) -> int:
+        """One walker per rung."""
+        return len(self._workers)
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Delegate to ``swap_configurations`` (rungs are single-walker)."""
+        self.swap_configurations(i, j)
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
@@ -1141,6 +1168,92 @@ class ProcessWangLandauPool:
         return (
             float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
         )
+
+    def n_walkers(self, i: int) -> int:
+        """Number of walkers in window ``i``."""
+        return len(self._slots[i].workers)
+
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Cached current energy of ``walker`` in window ``i`` (no IPC)."""
+        return float(self._slots[i].walker_states[walker].current_energy)
+
+    def walker_log_g(self, i: int, walker: int, energy: float) -> float:
+        """``ln g(E)`` for ``walker`` in window ``i`` from cached entropy (no IPC)."""
+        left, right = self._windows[i]
+        spacing = self._energy_spacing
+        bin_left = None if left is None else int(round(left / spacing))
+        bin_right = None if right is None else int(round(right / spacing))
+        entropy = self._slots[i].walker_states[walker].entropy
+        return log_g_at(entropy, energy, spacing, bin_left, bin_right)
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Random matching of windows ``i`` and ``j`` walkers for exchange.
+
+        Each returned ``(a, b)`` pairs walker ``a`` of window ``i`` with
+        walker ``b`` of window ``j``; pairs are disjoint in each
+        coordinate. See :func:`mchammer_pt.exchange.matching_for_boundary`.
+        """
+        return matching_for_boundary(self.n_walkers(i), self.n_walkers(j), rng)
+
+    def window_of_position(self) -> np.ndarray:
+        """Window index of each ``(window, walker)`` position, in order."""
+        counts = [self.n_walkers(i) for i in range(len(self._slots))]
+        return np.repeat(np.arange(len(counts), dtype=np.int64), counts)
+
+    def n_carriers(self) -> int:
+        """Total number of walker positions across all windows."""
+        return sum(self.n_walkers(i) for i in range(len(self._slots)))
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply a batch of accepted walker-config swaps in two IPC rounds.
+
+        ``swaps`` is a list of ``(i, a, j, b)`` meaning swap walker ``a``
+        of window ``i`` with walker ``b`` of window ``j``. The controller
+        guarantees the swaps are disjoint (no walker appears in two
+        swaps in one cycle), so the gather/scatter target sets contain
+        no aliased walkers. One ``GET_OCC`` fan-out reads every involved
+        walker's occupations; one ``SET_OCC`` fan-out writes the swapped
+        configurations.
+        """
+        if not swaps:
+            return
+        self._check_open()
+        involved: list[tuple[int, int]] = []
+        for i, a, j, b in swaps:
+            involved.append((i, a))
+            involved.append((j, b))
+        get_targets = [
+            (self._slots[s].workers[w][1], f"window {s} walker {w}")
+            for s, w in involved
+        ]
+        occ_list = broadcast_gather(get_targets, ("GET_OCC",))
+        occ = {
+            sw: np.asarray(o, dtype=np.int64)
+            for sw, o in zip(involved, occ_list, strict=True)
+        }
+        set_targets = []
+        for i, a, j, b in swaps:
+            set_targets.append(
+                (
+                    self._slots[i].workers[a][1],
+                    f"window {i} walker {a}",
+                    ("SET_OCC", occ[(j, b)]),
+                )
+            )
+            set_targets.append(
+                (
+                    self._slots[j].workers[b][1],
+                    f"window {j} walker {b}",
+                    ("SET_OCC", occ[(i, a)]),
+                )
+            )
+        fanout_gather(set_targets)
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Swap a single walker pair (delegates to the batched path)."""
+        self.apply_swaps([(i, a, j, b)])
 
     def converged_flags(self) -> np.ndarray:
         self._check_open()

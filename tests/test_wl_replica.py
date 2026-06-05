@@ -219,6 +219,32 @@ def test_wl_replica_log_g_returns_zero_for_unvisited_in_window_bin():
     assert replica.log_g(e0) == 0.0
 
 
+def test_log_g_at_matches_replica_and_bin_bounds(wl_replica_factory):
+    from mchammer_pt.wl_replica import log_g_at
+
+    replica = wl_replica_factory()
+    replica.advance(200)
+    e = replica.ensemble
+    spacing = replica.energy_spacing
+    left, right = replica.energy_window
+    # The parent derives bin bounds from the window energies; assert that
+    # derivation matches icet's own integer bin bounds exactly.
+    bin_left = None if left is None else int(round(left / spacing))
+    bin_right = None if right is None else int(round(right / spacing))
+    assert bin_left == e._bin_left
+    assert bin_right == e._bin_right
+    # log_g_at reproduces replica.log_g across in- and out-of-window energies.
+    for energy in (
+        replica.current_energy(),
+        left + spacing,
+        right - spacing,
+        left - 5.0,
+        right + 5.0,
+    ):
+        assert log_g_at(e._entropy, energy, spacing, bin_left, bin_right) == \
+            replica.log_g(energy)
+
+
 def test_wl_replica_set_occupations_refreshes_potential():
     """After set_occupations, _potential and current_energy reflect the new state."""
     from mchammer_pt.wl_replica import WangLandauReplica
