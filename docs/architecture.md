@@ -64,8 +64,12 @@ Both `SerialWangLandauPool.advance_all` and
    rounds (FORCE_HALVE / SET_ENTROPY / SET_PHASE), each parallelised
    across walkers of all slots that need the action.
 
-After apply, both pools re-roll the exchange-walker index on each slot
-(no-op for W=1 slots; meaningful for W>1).
+Exchange across a window boundary draws a random matching of the two
+windows' walkers and attempts one swap per disjoint pair, so per-walker
+exchange rate does not dilute as walkers are added (for W=1 the matching
+is the single pair). Acceptance is evaluated entirely parent-side from
+the per-walker `(energy, entropy)` snapshots gathered each block, and
+the accepted swaps are applied in one batched IPC round.
 
 ## Policy lives at the pool
 

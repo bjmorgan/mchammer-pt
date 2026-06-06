@@ -135,15 +135,6 @@ def test_serial_wl_pool_log_g_delegates_to_replicas():
     assert pool.log_g(0, e_i + 1000.0) == -np.inf
 
 
-def test_serial_wl_pool_log_g_pair_returns_four_tuple():
-    pool = _make_serial_wl_pool()
-    e_i = pool.current_energy(0)
-    e_j = pool.current_energy(1)
-    result = pool.log_g_pair(0, 1, e_i, e_j)
-    assert len(result) == 4
-    assert all(isinstance(x, float) for x in result)
-
-
 def test_serial_wl_pool_converged_flags_initial_false():
     pool = _make_serial_wl_pool()
     flags = pool.converged_flags()
@@ -163,27 +154,6 @@ def _wl_pool_factory_kwargs(tmp_path):
         )
     )
     return ce_path, atoms, e0
-
-
-def test_process_wl_pool_log_g_pair_round_trips(tmp_path):
-    from mchammer_pt.parallel.processes import ProcessWangLandauPool
-    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
-    with ProcessWangLandauPool(
-        ce_path=ce_path,
-        initial_atoms=[atoms, atoms],
-        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
-        energy_spacing=0.1,
-        seeds=[0, 1],
-    ) as pool:
-        e_i = pool.current_energy(0)
-        e_j = pool.current_energy(1)
-        result = pool.log_g_pair(0, 1, e_i, e_j)
-        assert len(result) == 4
-        # Unvisited bins in window default to 0.0.
-        assert all(x == 0.0 for x in result)
-        flags = pool.converged_flags()
-        assert flags.dtype == bool
-        assert not flags.any()
 
 
 def test_process_wl_pool_per_window_stats_returns_metrics(tmp_path):
@@ -416,6 +386,131 @@ def test_process_wl_pool_attach_observer_fires(tmp_path):
         assert isinstance(snapshot["counter"], StatefulCounter)
 
 
+def test_process_wl_pool_current_energies_primed_before_advance(tmp_path):
+    """current_energies() returns true initial energies before any advance_all.
+
+    ``run()`` writes ``energies_per_cycle[0]`` from ``current_energies()``
+    before the first block. The cache is primed at construction, so row 0
+    records the real initial energies, not the 0.0 placeholder.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        seeds=[0, 1],
+    ) as pool:
+        live = np.array([
+            float(request(pool._slots[i].workers[0][1], ("ENERGY",), i))
+            for i in range(len(pool))
+        ])
+        primed = pool.current_energies()
+        np.testing.assert_array_equal(primed, live)
+        assert not np.all(primed == 0.0)
+
+
+def test_process_wl_pool_apply_swaps_updates_energy_cache(tmp_path):
+    """apply_swaps keeps the parent-side energy cache consistent with the swap.
+
+    ``walker_energy`` / ``current_energies`` read the block-boundary cache
+    with no IPC, so ``apply_swaps`` must swap the cached energies of the
+    swapped walkers — otherwise the per-window energy trace would record a
+    pre-swap energy and diverge from the serial backend (which reads the
+    live potential).
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        seeds=[0, 1],
+    ) as pool:
+        # Populate the parent-side cache from a block of MC; the two
+        # single-walker windows diverge to distinct energies.
+        pool.advance_all(50)
+        e_cache_0 = pool.walker_energy(0, 0)
+        e_cache_1 = pool.walker_energy(1, 0)
+        assert e_cache_0 != e_cache_1, (
+            "test setup did not produce distinct cached energies"
+        )
+
+        pool.apply_swaps([(0, 0, 1, 0)])
+
+        # Cache (no IPC) now reflects the swapped energies, and the
+        # per-window trace agrees.
+        assert pool.walker_energy(0, 0) == e_cache_1
+        assert pool.walker_energy(1, 0) == e_cache_0
+        assert pool.current_energies()[0] == e_cache_1
+        assert pool.current_energies()[1] == e_cache_0
+
+
+def test_process_wl_pool_apply_swaps_cross_index_multi_swap_cache(tmp_path):
+    """A batch of disjoint cross-index swaps keeps every walker's cached
+    energy aligned with the configuration it now holds.
+
+    The single-pair tests would miss a transposition or read-after-mutate
+    bug in the cache fix-up; this drives two simultaneous ``a != b`` swaps
+    and checks both the cache permutation and live-worker agreement.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        n_walkers_per_window=2,
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(50)
+        pre = {
+            (i, w): pool.walker_energy(i, w)
+            for i in range(len(pool))
+            for w in range(pool.n_walkers(i))
+        }
+        # Two disjoint cross-index swaps covering all four walkers.
+        swaps = [(0, 0, 1, 1), (0, 1, 1, 0)]
+        pool.apply_swaps(swaps)
+
+        # Cache fix-up: each swapped walker now caches its partner's energy
+        # (exact permutation of the recorded pre-swap cache values).
+        for i, a, j, b in swaps:
+            assert pool.walker_energy(i, a) == pre[(j, b)]
+            assert pool.walker_energy(j, b) == pre[(i, a)]
+
+        # The cache agrees with the live worker (configs physically moved).
+        # `approx` absorbs the running-total vs fresh-recompute float
+        # difference between the MC potential and post-SET_OCC recompute.
+        for i in range(len(pool)):
+            for w in range(pool.n_walkers(i)):
+                live = float(
+                    request(pool._slots[i].workers[w][1], ("ENERGY",), i)
+                )
+                assert pool.walker_energy(i, w) == pytest.approx(live)
+
+
+def test_process_wl_pool_apply_swaps_rejects_overlapping(tmp_path):
+    """apply_swaps fails loudly if a walker appears in two swaps.
+
+    The matching exchange guarantees disjoint swaps; an overlap would
+    silently overwrite the occupations dict and move the wrong configs.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        n_walkers_per_window=2,
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(10)
+        with pytest.raises(ValueError, match="overlapping swaps"):
+            # walker (0, 0) appears in both swaps.
+            pool.apply_swaps([(0, 0, 1, 0), (0, 0, 1, 1)])
+
+
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
     """After a swap, each worker's _potential reflects the new configuration."""
     from tests._in_process_pool import make_in_process_wl_pool
@@ -541,7 +636,7 @@ def test_serial_wl_pool_attach_observer_class_dispatches_to_all_walkers():
 
 
 def test_serial_wl_pool_swap_configurations_with_window_groups():
-    """swap_configurations exchanges the exchange-walker's occupations across groups."""
+    """swap_configurations exchanges walker 0's occupations across groups."""
     pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
 
     occ0_before = pool.current_occupations(0).copy()
@@ -551,6 +646,25 @@ def test_serial_wl_pool_swap_configurations_with_window_groups():
 
     assert np.array_equal(pool.current_occupations(0), occ1_before)
     assert np.array_equal(pool.current_occupations(1), occ0_before)
+
+
+def test_serial_wl_pool_trace_tracks_walker_zero():
+    """The per-window trace deterministically reads walker 0."""
+    pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
+    pool.advance_all(30)
+    # Drive walker 1 to a configuration distinct from walker 0 so a trace
+    # that read any other walker would diverge from the walker-0 trace.
+    for slot in pool._replicas:
+        occ = slot.walker_occupations(0).copy()
+        occ[[0, -1]] = occ[[-1, 0]]
+        slot.set_walker_occupations(1, occ)
+
+    energies = pool.current_energies()
+    for i in range(len(pool)):
+        assert energies[i] == pool.walker_energy(i, 0)
+        assert (
+            pool.current_occupations(i) == pool._replicas[i].walker_occupations(0)
+        ).all()
 
 
 def test_serial_pool_resolves_bins_filled_by_mode():
@@ -1189,9 +1303,7 @@ def test_serial_wl_pool_snapshot_returns_per_walker_and_group_state():
     assert len(snap["group_state"]) == 2
     assert snap["group_state"][0] is None  # W=1 slot
     assert isinstance(snap["group_state"][1], dict)
-    assert set(snap["group_state"][1].keys()) == {
-        "rng_state", "exchange_idx", "phase",
-    }
+    assert set(snap["group_state"][1].keys()) == {"rng_state", "phase"}
 
 
 def test_serial_wl_pool_restore_round_trips_via_snapshot():
@@ -1203,18 +1315,19 @@ def test_serial_wl_pool_restore_round_trips_via_snapshot():
     containers = pool_a.data_containers()
 
     pool_b = make_serial_wl_pool_mixed()  # fresh; same construction args
-    # Drift pool_b so its exchange RNG advances in the W=2 slot.
-    pool_b._replicas[1].reroll_exchange_idx()
+    # Drift pool_b so its W=2 slot's group RNG advances.
+    pool_b._replicas[1]._rng.integers(0, 100, size=5)
 
     pool_b.restore_replica_state(
         containers=containers,
         per_walker_extras=snap["per_walker"],
         group_state=snap["group_state"],
     )
-    # The W>1 slot must now match.
-    pool_a._replicas[1].reroll_exchange_idx()
-    pool_b._replicas[1].reroll_exchange_idx()
-    assert pool_a._replicas[1].exchange_idx == pool_b._replicas[1].exchange_idx
+    # The W>1 slot's group RNG must now produce identical draws.
+    assert (
+        pool_a._replicas[1]._rng.integers(0, 100)
+        == pool_b._replicas[1]._rng.integers(0, 100)
+    )
 
 
 def test_serial_wl_pool_restore_rejects_wrong_lengths():
@@ -1272,14 +1385,16 @@ def test_process_wl_pool_snapshot_returns_structured_dict(tmp_path):
         assert len(snap["per_walker"]) == 4
         assert len(snap["group_state"]) == 2
         for gs in snap["group_state"]:
-            assert set(gs.keys()) == {"rng_state", "exchange_idx", "phase"}
+            assert set(gs.keys()) == {"rng_state", "phase"}
     finally:
         pool.shutdown()
 
 
 def test_process_wl_pool_restore_round_trips_w2(tmp_path):
     """Snapshot a W=2 process pool, restore into a fresh one; group-level
-    state (exchange_idx, phase) matches the snapshot."""
+    state (rng_state, phase) matches the snapshot."""
+    import json
+
     from tests._wl_fixtures import make_process_wl_pool_w2
 
     pool_a = make_process_wl_pool_w2(tmp_path / "a")
@@ -1298,7 +1413,7 @@ def test_process_wl_pool_restore_round_trips_w2(tmp_path):
         )
         for slot, gs in zip(pool_b._slots, snap["group_state"], strict=True):
             if gs is not None:
-                assert slot.exchange_idx == gs["exchange_idx"]
+                assert slot.rng.bit_generator.state == json.loads(gs["rng_state"])
                 assert slot.phase == gs["phase"]
     finally:
         pool_b.shutdown()
@@ -1483,3 +1598,305 @@ def test_process_wl_pool_broadcast_yields_independent_workers(tmp_path):
         occ1_after = np.asarray(request(c1, ("GET_OCC",), "w0w1"))
     assert not np.array_equal(occ0_after, occ1_after)
     np.testing.assert_array_equal(occ1_after, occ1_before)
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on SerialWangLandauPool
+# ---------------------------------------------------------------------------
+
+
+def test_serial_wl_pool_walker_counts_and_positions():
+    """n_walkers, window_of_position, and n_carriers are correct for a mixed pool."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()  # windows with [1, 2] walkers
+    assert [pool.n_walkers(i) for i in range(len(pool))] == [1, 2]
+    assert list(pool.window_of_position()) == [0, 1, 1]
+    assert pool.n_carriers() == 3
+
+
+def test_serial_wl_pool_candidate_pairs_match_primitive():
+    """candidate_pairs delegates to matching_for_boundary with the same RNG seed."""
+    from mchammer_pt.exchange import matching_for_boundary
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    got = pool.candidate_pairs(0, 1, np.random.default_rng(5))
+    expected = matching_for_boundary(
+        pool.n_walkers(0), pool.n_walkers(1), np.random.default_rng(5)
+    )
+    assert got == expected
+
+
+def test_serial_wl_pool_swap_by_walker_moves_configs():
+    """swap_walker_configurations exchanges the configurations of the named walkers."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    e_before_00 = pool.walker_energy(0, 0)
+    e_before_10 = pool.walker_energy(1, 0)
+    pool.swap_walker_configurations(0, 0, 1, 0)
+    assert pool.walker_energy(0, 0) == e_before_10
+    assert pool.walker_energy(1, 0) == e_before_00
+
+
+def test_serial_wl_pool_walker_log_g_delegates():
+    """walker_log_g routes to the named walker's own log g."""
+    from tests._wl_fixtures import make_serial_wl_pool_mixed
+
+    pool = make_serial_wl_pool_mixed()
+    e = pool.walker_energy(1, 0)
+    assert pool.walker_log_g(1, 0, e) == pool.log_g(1, e)
+
+
+# ---------------------------------------------------------------------------
+# Matching-exchange surface on ProcessWangLandauPool
+# ---------------------------------------------------------------------------
+
+
+def test_process_wl_pool_caches_walker_energy_after_advance(tmp_path):
+    """walker_energy returns a finite per-walker energy from the cache."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(20)
+        assert pool.n_walkers(0) == 2
+        for i in range(len(pool)):
+            for w in range(pool.n_walkers(i)):
+                assert np.isfinite(pool.walker_energy(i, w))
+
+
+def test_process_wl_pool_walker_log_g_matches_direct_query(tmp_path):
+    """The cached parent-side walker_log_g equals the worker's own log g.
+
+    walker_log_g reads the entropy snapshot cached in the parent (no
+    IPC); the comparison value comes from a direct ``LOG_G_AT`` request
+    to that walker's worker connection. Equality proves the parent's
+    bin-bounds derivation agrees with the worker's live ensemble.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms],
+        windows=[(e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0],
+        n_walkers_per_window=2,
+    ) as pool:
+        pool.advance_all(20)
+        for w in range(pool.n_walkers(0)):
+            e = pool.walker_energy(0, w)
+            cached = pool.walker_log_g(0, w, e)
+            _, conn = pool._slots[0].workers[w]
+            direct, _ = request(conn, ("LOG_G_AT", float(e), float(e)), w)
+            assert cached == float(direct)
+
+
+def test_process_wl_pool_apply_swaps_moves_configs(tmp_path):
+    """apply_swaps physically exchanges configurations between processes.
+
+    Energies are re-read directly from the workers (independent of the
+    parent-side cache) to prove the occupations moved across the process
+    boundary, not merely that the cache was rearranged.
+    """
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, b],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        _, c_i = pool._slots[0].workers[0]
+        _, c_j = pool._slots[1].workers[0]
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(ea)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(eb)
+
+        pool.apply_swaps([(0, 0, 1, 0)])
+
+        # Re-read from the workers, not the (unrefreshed) parent cache.
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(eb)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(ea)
+
+
+def test_process_wl_pool_swap_walker_configurations_delegates(tmp_path):
+    """swap_walker_configurations moves a single walker pair via apply_swaps."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, b],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+    ) as pool:
+        _, c_i = pool._slots[0].workers[0]
+        _, c_j = pool._slots[1].workers[0]
+        pool.swap_walker_configurations(0, 0, 1, 0)
+        assert float(request(c_i, ("ENERGY",), "i0")) == pytest.approx(eb)
+        assert float(request(c_j, ("ENERGY",), "j0")) == pytest.approx(ea)
+
+
+def test_process_wl_pool_walker_counts_and_positions(tmp_path):
+    """n_walkers, window_of_position, n_carriers for a mixed [2, 1] pool."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        assert [pool.n_walkers(i) for i in range(len(pool))] == [2, 1]
+        assert list(pool.window_of_position()) == [0, 0, 1]
+        assert pool.n_carriers() == 3
+
+
+def test_process_wl_pool_candidate_pairs_match_primitive(tmp_path):
+    """candidate_pairs delegates to matching_for_boundary with the same seed."""
+    from mchammer_pt.exchange import matching_for_boundary
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, _atoms, _e0 = _wl_pool_factory_kwargs(tmp_path)
+    a, b, ea, eb = _distinct_in_window_pair_for_pool(ce_path)
+    lo, hi = min(ea, eb) - 1.0, max(ea, eb) + 1.0
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[a, a],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        n_walkers_per_window=[2, 1],
+    ) as pool:
+        got = pool.candidate_pairs(0, 1, np.random.default_rng(5))
+        expected = matching_for_boundary(
+            pool.n_walkers(0), pool.n_walkers(1), np.random.default_rng(5)
+        )
+    assert got == expected
+
+
+def test_process_pool_exchange_issues_no_energy_or_log_g_ipc(
+    tmp_path, monkeypatch
+):
+    """Exchange acceptance on the process pool is evaluated parent-side.
+
+    The REWL efficiency claim: in the process pool, every term of the
+    exchange acceptance ratio is read from the parent-side per-walker
+    cache (``walker_energy`` / ``walker_log_g``), so the exchange phase
+    issues no per-exchange round-trip to the workers. Concretely, across
+    a full advance+exchange run the pool must send **no** ``"ENERGY"``
+    opcode (the on-demand ``current_energy(i)`` path) and **no**
+    ``"LOG_G_AT"`` opcode (the on-demand ``log_g(i, ...)`` path).
+    Accepted swaps still move configurations, but only via batched
+    ``"GET_OCC"`` / ``"SET_OCC"``.
+
+    All worker traffic funnels through ``request`` / ``broadcast_gather``
+    / ``fanout_gather`` in ``mchammer_pt.parallel.processes``; spying the
+    opcode (``msg[0]``) at those three choke points captures every
+    command sent. A regression that re-introduced a per-exchange energy
+    or ln-g query would show up here as an ``"ENERGY"`` or ``"LOG_G_AT"``
+    opcode.
+    """
+    import mchammer_pt.parallel.processes as proc
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from tests._wl_fixtures import (
+        make_process_wl_pool_w2,
+        make_wl_atoms,
+        make_wl_ce,
+    )
+
+    seen_opcodes: list[str] = []
+    real_request = proc.request
+    real_broadcast = proc.broadcast_gather
+    real_fanout = proc.fanout_gather
+
+    def spy_request(conn, msg, label):
+        seen_opcodes.append(msg[0])
+        return real_request(conn, msg, label)
+
+    def spy_broadcast(targets, msg):
+        seen_opcodes.append(msg[0])
+        return real_broadcast(targets, msg)
+
+    def spy_fanout(targets):
+        for _conn, _label, msg in targets:
+            seen_opcodes.append(msg[0])
+        return real_fanout(targets)
+
+    # 2 windows x W=2 (M=4 walkers), in-process workers. Both windows
+    # share the same wide energy range, so proposed swaps land in-window
+    # and are accepted -- exercising the GET_OCC/SET_OCC swap path.
+    pool = make_process_wl_pool_w2(tmp_path / "pool")
+    try:
+        pt = WangLandauParallelTempering(
+            cluster_expansion=make_wl_ce(),
+            atoms=[make_wl_atoms(), make_wl_atoms()],
+            windows=pool.windows,
+            energy_spacing=pool.energy_spacing,
+            block_size=20,
+            random_seed=0,
+            pool=pool,
+        )
+        monkeypatch.setattr(proc, "request", spy_request)
+        monkeypatch.setattr(proc, "broadcast_gather", spy_broadcast)
+        monkeypatch.setattr(proc, "fanout_gather", spy_fanout)
+        pt.run(n_cycles=6)
+    finally:
+        if pool.is_open:
+            pool.shutdown()
+
+    opcodes = set(seen_opcodes)
+    # The exchange phase must not query worker energy or ln g.
+    assert "ENERGY" not in opcodes, (
+        f"exchange acceptance sent an ENERGY opcode -- it should read the "
+        f"parent-side cache, not round-trip to workers. opcodes: {opcodes}"
+    )
+    assert "LOG_G_AT" not in opcodes, (
+        f"exchange acceptance sent a LOG_G_AT opcode -- it should read the "
+        f"parent-side cache, not round-trip to workers. opcodes: {opcodes}"
+    )
+    # Every opcode sent must be one of the advance/halve/merge/phase/swap
+    # opcodes; nothing else (in particular no per-exchange energy/ln-g).
+    allowed = {
+        "ADVANCE",
+        "FORCE_HALVE",
+        "SET_ENTROPY",
+        "SET_PHASE",
+        "GET_OCC",
+        "SET_OCC",
+        "CONVERGED",
+        "FINALISE_MERGE",
+    }
+    assert opcodes <= allowed, (
+        f"unexpected opcode(s) {opcodes - allowed} sent during "
+        f"advance+exchange; expected a subset of {allowed}"
+    )
+    # Swaps were accepted, so the batched move path ran. This guards
+    # against the assertion passing vacuously (no swaps -> no IPC at all).
+    assert "GET_OCC" in opcodes and "SET_OCC" in opcodes, (
+        f"no accepted swaps observed (opcodes: {opcodes}); the test setup "
+        f"no longer exercises the exchange move path -- adjust the window "
+        f"overlap or cycle count"
+    )

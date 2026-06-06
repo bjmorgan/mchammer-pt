@@ -7,7 +7,7 @@ or their observable variants); the orchestrator routes queries
 through it and never holds replica state directly.
 
 Ensemble-specific subclasses override exactly one method:
-`_log_prob_ratio(i, j)`.
+`_log_prob_ratio(i, a, j, b)`.
 """
 
 from __future__ import annotations
@@ -65,7 +65,11 @@ class BaseParallelTempering(ABC):
         self._rng = np.random.default_rng(int(random_seed))
         self._callbacks: list[ExchangeCallback] = []
         self._cycle_callbacks: list[CycleCallback] = []
-        self._replica_labels = np.arange(len(pool), dtype=np.int64)
+        self._replica_labels = np.arange(pool.n_carriers(), dtype=np.int64)
+        _counts = [pool.n_walkers(i) for i in range(len(pool))]
+        self._position_offset = np.concatenate(
+            ([0], np.cumsum(_counts))
+        )[:-1].astype(np.int64)
         self._history: ExchangeHistory | None = None
         self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
 
@@ -191,7 +195,12 @@ class BaseParallelTempering(ABC):
         partial history (rows past the failure point are zeros).
         """
         n_replicas = len(self._pool)
-        history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
+        history = ExchangeHistory.empty(
+            n_cycles=n_cycles,
+            n_replicas=n_replicas,
+            n_carriers=self._pool.n_carriers(),
+            window_of_position=self._pool.window_of_position(),
+        )
         # Publish the in-progress history on `self._history` before the loop
         # so cycle callbacks (e.g. `CheckpointWriter`) can read live
         # orchestrator state via `self`, and so an exception inside the loop
@@ -201,8 +210,7 @@ class BaseParallelTempering(ABC):
         history.replica_labels_per_cycle[0] = self._replica_labels
         for c in range(n_cycles):
             self._pool.advance_all(self._block_size)
-            for pair in pair_set_for_cycle(n_replicas, c):
-                self._try_exchange(int(pair), int(pair) + 1, c, history)
+            self._exchange_phase(c, history)
             history.energies_per_cycle[c + 1] = self._pool.current_energies()
             history.replica_labels_per_cycle[c + 1] = self._replica_labels
             for cb in self._cycle_callbacks:
@@ -212,8 +220,9 @@ class BaseParallelTempering(ABC):
     # --- abstract hook ----
 
     @abstractmethod
-    def _log_prob_ratio(self, i: int, j: int) -> float:
-        """Log of the exchange acceptance ratio for adjacent replicas i, j."""
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
+        """Log of the exchange acceptance ratio for walker ``a`` of replica
+        ``i`` against walker ``b`` of replica ``j``."""
         ...
 
     def _checkpoint_meta(self) -> dict[str, MetaValue]:
@@ -229,37 +238,71 @@ class BaseParallelTempering(ABC):
 
     # --- internals ----
 
-    def _try_exchange(
+    def _exchange_phase(self, cycle: int, history: ExchangeHistory) -> None:
+        """Propose and apply exchanges for one cycle's active boundaries.
+
+        Active boundaries (even/odd alternation) are non-overlapping, so
+        the per-boundary matchings are disjoint; accepted swaps across all
+        active boundaries are collected and applied in one batch.
+        """
+        n_replicas = len(self._pool)
+        accepted: list[tuple[int, int, int, int]] = []
+        for pair in pair_set_for_cycle(n_replicas, cycle):
+            self._propose_boundary(int(pair), int(pair) + 1, cycle, history, accepted)
+        if accepted:
+            self._pool.apply_swaps(accepted)
+            # Permute the carrier labels only after the configurations
+            # physically move, so _replica_labels never diverges from pool
+            # state if apply_swaps raises. The accepted swaps are disjoint,
+            # so the position swaps commute and order is immaterial.
+            for i, a, j, b in accepted:
+                p1 = int(self._position_offset[i] + a)
+                p2 = int(self._position_offset[j] + b)
+                self._replica_labels[[p1, p2]] = self._replica_labels[[p2, p1]]
+
+    def _propose_boundary(
         self,
         i: int,
         j: int,
         cycle: int,
         history: ExchangeHistory,
+        accepted: list[tuple[int, int, int, int]],
     ) -> None:
-        log_r = self._log_prob_ratio(i, j)
-        if np.isnan(log_r) or log_r == np.inf:
-            E_i = self._pool.current_energy(i)
-            E_j = self._pool.current_energy(j)
-            raise RuntimeError(
-                f"Non-finite log-probability ratio on cycle {cycle}, "
-                f"pair ({i}, {j}): log_r = {log_r}, "
-                f"E_i = {E_i}, E_j = {E_j}. "
-                f"Check for NaN/+inf replica energies (diverged MC, "
-                f"bad cluster expansion, or a REWL replica that has "
-                f"drifted outside its own window). Negative-infinity ratios "
-                f"are legal (e.g. out-of-window partner energy in REWL)."
-            )
-        accepted = metropolis_accept(log_r, self._rng)
+        """Propose one boundary's matched walker swaps.
+
+        Draws the random walker matching for boundary ``(i, j)`` and, for
+        each ``(a, b)`` pair, evaluates the acceptance ratio, records the
+        attempt and fires exchange callbacks under ``pair_index =
+        min(i, j)``, and on acceptance appends ``(i, a, j, b)`` to
+        ``accepted``. Both the physical configuration move and the carrier
+        label permutation are deferred to the caller, which applies them
+        as a batch only after ``apply_swaps`` succeeds, so the orchestrator
+        labels never diverge from the pool state on a failure path.
+        """
         pair_index = min(i, j)
-        history.swap_attempted[pair_index] += 1
-        for callback in self._callbacks:
-            callback.on_exchange(
-                cycle=cycle,
-                pair_index=pair_index,
-                accepted=accepted,
-                log_prob_ratio=log_r,
-            )
-        if accepted:
-            self._pool.swap_configurations(i, j)
-            self._replica_labels[[i, j]] = self._replica_labels[[j, i]]
-            history.swap_accepted[pair_index] += 1
+        for a, b in self._pool.candidate_pairs(i, j, self._rng):
+            log_r = self._log_prob_ratio(i, a, j, b)
+            if np.isnan(log_r) or log_r == np.inf:
+                E_i = self._pool.walker_energy(i, a)
+                E_j = self._pool.walker_energy(j, b)
+                raise RuntimeError(
+                    f"Non-finite log-probability ratio on cycle {cycle}, "
+                    f"boundary ({i}, {j}) walkers ({a}, {b}): log_r = {log_r}, "
+                    f"E_i = {E_i}, E_j = {E_j}. "
+                    f"Check for NaN/+inf replica energies (diverged MC, "
+                    f"bad cluster expansion, or a REWL replica that has "
+                    f"drifted outside its own window). Negative-infinity ratios "
+                    f"are legal (e.g. out-of-window partner energy in REWL)."
+                )
+            is_accepted = metropolis_accept(log_r, self._rng)
+            history.swap_attempted[pair_index] += 1
+            for callback in self._callbacks:
+                callback.on_exchange(
+                    cycle=cycle,
+                    pair_index=pair_index,
+                    accepted=is_accepted,
+                    log_prob_ratio=log_r,
+                )
+            if is_accepted:
+                accepted.append((i, a, j, b))
+                history.swap_accepted[pair_index] += 1

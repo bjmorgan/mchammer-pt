@@ -177,4 +177,7 @@ def make_in_process_wl_pool(
         f"{CoordinatedWangLandauEnsemble.__qualname__}"
     )
     pool._ensemble_kwargs_hash = ""
+    # Mirror __init__: prime the per-walker energy cache so current_energies()
+    # returns real energies before the first advance_all.
+    pool._prime_energy_cache()
     return pool

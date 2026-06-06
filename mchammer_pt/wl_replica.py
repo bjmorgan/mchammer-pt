@@ -95,6 +95,48 @@ def _coerce_wl_last_state_keys_to_int(last_state: dict[str, Any]) -> None:
         last_state[tag] = converted
 
 
+def log_g_at(
+    entropy: dict[int, float],
+    energy: float,
+    energy_spacing: float,
+    *,
+    bin_left: int | None,
+    bin_right: int | None,
+) -> float:
+    """Density-of-states ``ln g`` at ``energy`` from a cached entropy dict.
+
+    Mirrors :meth:`WangLandauReplica.log_g` without needing a live
+    ensemble: the bin index is ``round(energy / energy_spacing)`` (icet's
+    convention), the window is the inclusive bin range
+    ``[bin_left, bin_right]`` (``None`` meaning unbounded on that side),
+    and an unvisited in-window bin has ``ln g = 0``. Out-of-window
+    energies return ``-inf``. This lets the parent process evaluate REWL
+    exchange acceptance from per-walker entropy snapshots without an IPC
+    round trip to the worker.
+
+    Args:
+        entropy: ``{bin_index: entropy_value}`` snapshot for the walker.
+        energy: energy at which to evaluate ``ln g``.
+        energy_spacing: bin width in eV.
+        bin_left: inclusive lower window bin index, or ``None`` if the
+            window is unbounded below.
+        bin_right: inclusive upper window bin index, or ``None`` if the
+            window is unbounded above.
+
+    Returns:
+        ``ln g(energy)``, or ``-inf`` if ``energy`` is outside the window
+        or not a finite number.
+    """
+    if not np.isfinite(energy):
+        return -float(np.inf)
+    bin_idx = int(round(energy / energy_spacing))
+    if bin_left is not None and bin_idx < bin_left:
+        return -float(np.inf)
+    if bin_right is not None and bin_idx > bin_right:
+        return -float(np.inf)
+    return float(entropy.get(bin_idx, 0.0))
+
+
 @runtime_checkable
 class WangLandauSlot(Protocol):
     """Structural interface shared by single-walker and multi-walker WL slots.
@@ -123,13 +165,15 @@ class WangLandauSlot(Protocol):
     @property
     def walker_states(self) -> Sequence[WalkerPostBlockState]: ...
     def apply_plan(self, plan: CoordinatorPlan) -> None: ...
-    def reroll_exchange_idx(self) -> None: ...
     def halving_criterion_met(self) -> bool: ...
     def advance(self, n_steps: int) -> None: ...
-    def current_energy(self) -> float: ...
-    def current_occupations(self) -> np.ndarray: ...
-    def set_occupations(self, occupations: np.ndarray) -> None: ...
     def log_g(self, energy: float) -> float: ...
+    @property
+    def n_walkers(self) -> int: ...
+    def walker_energy(self, walker: int) -> float: ...
+    def walker_occupations(self, walker: int) -> np.ndarray: ...
+    def set_walker_occupations(self, walker: int, occupations: np.ndarray) -> None: ...
+    def walker_log_g(self, walker: int, energy: float) -> float: ...
     def data_container(self) -> WangLandauDataContainer: ...
     def all_data_containers(self) -> list[WangLandauDataContainer]: ...
     def refresh_last_state(self) -> None: ...
@@ -302,6 +346,7 @@ class WangLandauReplica:
                 window_entry_step=None,
                 histogram={},
                 reached_energy_window=False,
+                current_energy=0.0,
             ),
         )
 
@@ -343,10 +388,34 @@ class WangLandauReplica:
         them as singly-degenerate for REWL exchange acceptance.
         """
         e = self._ensemble
-        bin_idx = e._get_bin_index(energy)
-        if bin_idx is None or not e._inside_energy_window(bin_idx):
-            return -float(np.inf)
-        return float(e._entropy.get(bin_idx, 0.0))
+        return log_g_at(
+            e._entropy,
+            energy,
+            self._energy_spacing,
+            bin_left=e._bin_left,
+            bin_right=e._bin_right,
+        )
+
+    @property
+    def n_walkers(self) -> int:
+        """Number of walkers in this slot (always 1 for a bare replica)."""
+        return 1
+
+    def walker_energy(self, walker: int) -> float:
+        """Current energy of the single walker (``walker`` is always 0)."""
+        return self.current_energy()
+
+    def walker_occupations(self, walker: int) -> np.ndarray:
+        """Current occupations of the single walker (``walker`` is always 0)."""
+        return self.current_occupations()
+
+    def set_walker_occupations(self, walker: int, occupations: np.ndarray) -> None:
+        """Set the single walker's configuration (``walker`` is always 0)."""
+        self.set_occupations(occupations)
+
+    def walker_log_g(self, walker: int, energy: float) -> float:
+        """``ln g(energy)`` for the single walker (``walker`` is always 0)."""
+        return self.log_g(energy)
 
     def set_occupations(self, occupations: np.ndarray) -> None:
         """Overwrite the replica's configuration and refresh WL-specific caches.
@@ -443,6 +512,7 @@ class WangLandauReplica:
             ),
             histogram=dict(e._histogram),
             reached_energy_window=bool(e._reached_energy_window),
+            current_energy=self.current_energy(),
         )
 
     def apply_plan(self, plan: CoordinatorPlan) -> None:
@@ -463,13 +533,6 @@ class WangLandauReplica:
                 if entry is not None:
                     t = self._ensemble.step - entry + 1
                     self._ensemble._fill_factor = 1.0 / t
-
-    def reroll_exchange_idx(self) -> None:
-        """No-op: a single-walker slot has no exchange index to re-roll.
-
-        Present to satisfy ``WangLandauSlot``: the pool calls this on
-        every slot after applying a coordinator plan.
-        """
 
     def force_halve(self) -> None:
         """Halve ``_fill_factor`` and record the event in history.

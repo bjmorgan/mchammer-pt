@@ -111,6 +111,23 @@ def wl_replica_factory():
     return _make_wl_replica
 
 
+def test_replica_n_walkers_is_one(wl_replica_factory):
+    assert wl_replica_factory().n_walkers == 1
+
+
+def test_replica_walker_accessors_delegate_to_single_walker(wl_replica_factory):
+    replica = wl_replica_factory()
+    assert replica.walker_energy(0) == replica.current_energy()
+    assert (replica.walker_occupations(0) == replica.current_occupations()).all()
+    # log g at the current energy matches the no-arg form
+    e = replica.current_energy()
+    assert replica.walker_log_g(0, e) == replica.log_g(e)
+    # set_walker_occupations routes to the single walker's set_occupations
+    occ = replica.current_occupations()
+    replica.set_walker_occupations(0, occ)
+    assert (replica.walker_occupations(0) == occ).all()
+
+
 def test_wl_replica_constructs_with_in_window_initial_energy():
     """A WL replica builds when its initial energy falls in window."""
     from mchammer_pt.wl_replica import WangLandauReplica
@@ -200,6 +217,34 @@ def test_wl_replica_log_g_returns_zero_for_unvisited_in_window_bin():
     )
     # No MC advance yet, so entropy dict is empty.
     assert replica.log_g(e0) == 0.0
+
+
+def test_log_g_at_matches_replica_and_bin_bounds(wl_replica_factory):
+    from mchammer_pt.wl_replica import log_g_at
+
+    replica = wl_replica_factory()
+    replica.advance(200)
+    e = replica.ensemble
+    spacing = replica.energy_spacing
+    left, right = replica.energy_window
+    # The parent derives bin bounds from the window energies; assert that
+    # derivation matches icet's own integer bin bounds exactly.
+    bin_left = None if left is None else int(round(left / spacing))
+    bin_right = None if right is None else int(round(right / spacing))
+    assert bin_left == e._bin_left
+    assert bin_right == e._bin_right
+    # log_g_at reproduces replica.log_g across in- and out-of-window energies.
+    for energy in (
+        replica.current_energy(),
+        left + spacing,
+        right - spacing,
+        left - 5.0,
+        right + 5.0,
+    ):
+        assert log_g_at(
+            e._entropy, energy, spacing,
+            bin_left=bin_left, bin_right=bin_right,
+        ) == replica.log_g(energy)
 
 
 def test_wl_replica_set_occupations_refreshes_potential():
@@ -592,6 +637,7 @@ def test_advance_refreshes_walker_states(wl_replica_factory):
     state = replica.walker_states[0]
     assert state.step == int(replica.ensemble.step)
     assert state.fill_factor == float(replica.ensemble._fill_factor)
+    assert state.current_energy == replica.current_energy()
 
 
 def test_apply_plan_halve_only_halves_fill_factor(wl_replica_factory):
@@ -642,15 +688,6 @@ def test_apply_plan_switch_to_phase_flips_and_recomputes_fill_factor(
     ))
     assert replica.ensemble._phase == "1_over_t"
     assert replica.ensemble._fill_factor == 1.0 / expected_t
-
-
-def test_reroll_exchange_idx_is_noop(wl_replica_factory):
-    """Single-walker reroll has no observable effect."""
-    replica = wl_replica_factory()
-    replica.advance(50)
-    f_before = float(replica.ensemble._fill_factor)
-    replica.reroll_exchange_idx()
-    assert replica.ensemble._fill_factor == f_before
 
 
 def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):

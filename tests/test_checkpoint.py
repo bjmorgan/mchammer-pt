@@ -258,7 +258,7 @@ def test_save_checkpoint_writes_a_valid_resumable_file(toy_ce, toy_atoms, tmp_pa
     pt.save_checkpoint(path)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "4"
+    assert meta["schema_version"] == "5"
     assert meta["block_size"] == 10
     assert "ce_identity" in meta and len(meta["ce_identity"]) == 64
     assert meta["ensemble_cls_fqn"].endswith(".CanonicalEnsemble")
@@ -289,7 +289,7 @@ def test_data_container_file_path_writes_valid_checkpoint(toy_ce, toy_atoms, tmp
     pt.run(n_cycles=3)
 
     _, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "4"
+    assert meta["schema_version"] == "5"
     # And the orchestrator state is there too.
     _read_orchestrator_state(path)  # raises if absent
 
@@ -361,7 +361,7 @@ def test_checkpoint_writer_emits_at_interval_and_final_cycle(
 
     # And the final file is a valid resumable checkpoint.
     history, _, meta = read_hdf5(path)
-    assert meta["schema_version"] == "4"
+    assert meta["schema_version"] == "5"
     assert history.energies_per_cycle.shape == (11, 3)
     _read_orchestrator_state(path)
 
@@ -467,7 +467,7 @@ def test_data_container_file_works_with_process_pool(toy_ce, toy_atoms, tmp_path
         pt.run(n_cycles=3)
 
     history, containers, meta = read_hdf5(path)
-    assert meta["schema_version"] == "4"
+    assert meta["schema_version"] == "5"
     assert len(containers) == 3
     _read_orchestrator_state(path)
 
@@ -613,14 +613,12 @@ def test_read_window_groups_returns_one_entry_per_window(tmp_path):
         wg = f.create_group("orchestrator/window_groups")
         sub = wg.create_group("1")
         sub.create_dataset("rng_state", data='{"bit_generator": "PCG64"}')
-        sub.create_dataset("exchange_idx", data=np.int32(1))
         sub.create_dataset("phase", data="1_over_t")
 
     out = _read_window_groups(path)
     assert out[0] is None
     assert out[1] == {
         "rng_state": '{"bit_generator": "PCG64"}',
-        "exchange_idx": 1,
         "phase": "1_over_t",
     }
     assert out[2] is None
@@ -656,9 +654,10 @@ def test_write_checkpoint_passes_window_groups_through_to_hdf5(tmp_path):
     path = tmp_path / "ckpt.h5"
     pt.save_checkpoint(path)
     with h5py.File(path, "r") as f:
+        assert f["meta"].attrs["schema_version"] == "5"
         assert "orchestrator/window_groups/0" in f
         assert "orchestrator/window_groups/1" in f
-        assert "exchange_idx" in f["orchestrator/window_groups/0"]
+        assert "exchange_idx" not in f["orchestrator/window_groups/0"]
 
 
 def test_read_window_groups_raises_on_phase_mismatch(tmp_path):

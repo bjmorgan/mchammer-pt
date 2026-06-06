@@ -34,7 +34,7 @@ def test_log_prob_ratio_matches_hand_formula(toy_ce, toy_atoms):
     kB = 8.617333262145e-5
     expected = (1.0 / (kB * 100.0) - 1.0 / (kB * 1000.0)) * (E_i - E_j)
     # Both should be zero (same starting config), but the formula form is checked.
-    assert abs(pt._log_prob_ratio(0, 1) - expected) < 1e-12
+    assert abs(pt._log_prob_ratio(0, 0, 1, 0) - expected) < 1e-12
 
 
 def test_run_produces_history_with_correct_shape(toy_ce, toy_atoms):

@@ -62,9 +62,6 @@ class _StubWLSlot:
     def apply_plan(self, plan: CoordinatorPlan) -> None:
         self.applied_plans.append(plan)
 
-    def reroll_exchange_idx(self) -> None:
-        pass
-
 
 def _flat_walker(
     *,
@@ -81,6 +78,7 @@ def _flat_walker(
         window_entry_step=0,
         histogram={k: 100 for k in entropy},
         reached_energy_window=True,
+        current_energy=0.0,
     )
 
 

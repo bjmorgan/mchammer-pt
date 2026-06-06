@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from mchammer_pt.canonical import CanonicalParallelTempering
 from mchammer_pt.diagnostics import (
     energy_autocorrelation_time,
     round_trip_counts,
@@ -91,6 +92,40 @@ def test_energy_autocorrelation_time_uncorrelated_near_one():
     assert 0.5 < tau < 2.5
 
 
+def test_round_trip_defaults_match_explicit_single_walker_args():
+    # Omitting the new args must reproduce the explicit
+    # one-position-per-window mapping exactly.
+    labels = np.array([
+        [0, 1, 2],   # carrier 0 at bottom, carrier 2 at top
+        [2, 1, 0],   # carrier 0 swaps to top, carrier 2 to bottom
+        [0, 1, 2],   # carrier 0 back to bottom, carrier 2 back to top
+    ])
+    implicit = round_trip_counts(labels)
+    explicit = round_trip_counts(labels, np.array([0, 1, 2]), 3)
+    np.testing.assert_array_equal(implicit, explicit)
+    # Carriers 0 and 2 each complete one bottom<->top round trip.
+    np.testing.assert_array_equal(implicit, [1, 0, 1])
+
+
+def test_round_trip_multiwalker_middle_window_never_contributes():
+    # 3-window ladder, 4 positions. Positions 1 and 3 sit in the middle
+    # window, which is never an endpoint, so their carriers never
+    # complete a trip. Carriers 0 and 2 traverse in opposite directions,
+    # each completing one round trip.
+    window_of_position = np.array([0, 1, 2, 1])
+    n_windows = 3
+    labels = np.array([
+        [0, 1, 2, 3],   # carrier 0 at bottom (pos 0), carrier 2 at top (pos 2)
+        [2, 1, 0, 3],   # carrier 0 at top (pos 2),    carrier 2 at bottom (pos 0)
+        [0, 1, 2, 3],   # carrier 0 at bottom,         carrier 2 at top
+    ])
+    counts = round_trip_counts(labels, window_of_position, n_windows)
+    assert counts[0] == 1   # bottom -> top -> bottom
+    assert counts[2] == 1   # top -> bottom -> top
+    assert counts[1] == 0   # middle window throughout
+    assert counts[3] == 0
+
+
 def test_energy_autocorrelation_time_detects_strong_correlation():
     # AR(1) with rho = 0.95 has integrated autocorrelation time
     # tau = (1 + rho) / (1 - rho) ~= 39.
@@ -104,3 +139,25 @@ def test_energy_autocorrelation_time_detects_strong_correlation():
     tau = energy_autocorrelation_time(x)
     # Very generous tolerance: the emcee-style window estimator is noisy.
     assert tau > 20
+
+
+def test_canonical_round_trip_counts_pinned_for_seeded_run(toy_ce, toy_atoms):
+    """A seeded canonical PT run produces a fixed round-trip-count vector.
+
+    Canonical PT has one walker per temperature, so the matching reduces
+    to a single deterministic pair and the swap trajectory -- and hence
+    the per-carrier round-trip counts -- is fully determined by the seed.
+    Pinning the counts catches any drift in the W=1 exchange path
+    (carrier-label bookkeeping, swap acceptance, or boundary
+    alternation).
+    """
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[200.0, 400.0, 800.0, 1600.0],
+        block_size=20,
+        random_seed=7,
+    )
+    history = pt.run(n_cycles=200)
+    counts = round_trip_counts(history.replica_labels_per_cycle)
+    np.testing.assert_array_equal(counts, [2, 1, 1, 1])

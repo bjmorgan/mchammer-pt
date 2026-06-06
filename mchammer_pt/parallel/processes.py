@@ -30,6 +30,7 @@ from mchammer.observers.base_observer import (
 )
 
 from ..checkpoint import _compute_ensemble_kwargs_hash, _serialise_rng_state
+from ..exchange import matching_for_boundary
 from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
@@ -53,7 +54,7 @@ from ..wl_ensemble import (
 )
 from ..wl_initial_structures import expand_initial_structures
 from ..wl_merge_diagnostics import MergeEvent
-from ..wl_replica import WangLandauReplica
+from ..wl_replica import WangLandauReplica, log_g_at
 from ._builder import AtomsSpec, CanonicalBuilder, WLBuilder
 from ._comms import broadcast_gather, fanout_gather, recv_reply, request
 from ._imports import _check_importable, _resolve_replicas
@@ -286,6 +287,42 @@ class ProcessPool:
         except BaseException:
             request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
             raise
+
+    def n_walkers(self, i: int) -> int:
+        """Single-walker rungs: always 1."""
+        return 1
+
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Energy of rung ``i`` (single-walker; ``walker`` is always 0)."""
+        return self.current_energy(i)
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Single-walker rungs exchange the one pair ``(0, 0)``.
+
+        Returns the fixed pair without drawing from ``rng``, so the
+        exchange RNG stream is left untouched.
+        """
+        return [(0, 0)]
+
+    def window_of_position(self) -> np.ndarray:
+        """One position per rung: the identity mapping."""
+        return np.arange(len(self._workers), dtype=np.int64)
+
+    def n_carriers(self) -> int:
+        """One walker per rung."""
+        return len(self._workers)
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Delegate to ``swap_configurations`` (rungs are single-walker)."""
+        self.swap_configurations(i, j)
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply accepted walker-config swaps, one at a time."""
+        self._check_open()
+        for i, a, j, b in swaps:
+            self.swap_walker_configurations(i, a, j, b)
 
     def data_containers(self) -> list[BaseDataContainer]:
         self._check_open()
@@ -557,9 +594,8 @@ class ProcessWangLandauWindow:
 
     Attributes:
         workers: list of (Process, Connection) pairs, one per walker.
-        exchange_idx: index of the worker currently chosen for
-            replica exchange (re-rolled by the coordinator each block).
-        rng: per-window RNG for exchange-walker selection.
+        rng: per-window RNG whose state is checkpointed for
+            reproducible resume.
         phase: collective WL phase, either ``"halving"`` or
             ``"1_over_t"``. Flipped by the coordinator after a
             collective BP switch.
@@ -578,7 +614,6 @@ class ProcessWangLandauWindow:
         _validate_merge_cadence(merge_cadence)
         self.workers = workers
         self.rng = rng
-        self.exchange_idx: int = 0
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._schedule: Schedule = schedule
@@ -593,13 +628,10 @@ class ProcessWangLandauWindow:
                 window_entry_step=None,
                 histogram={},
                 reached_energy_window=False,
+                current_energy=0.0,
             )
             for _ in workers
         ]
-
-    def exchange_conn(self) -> Connection:
-        """Connection to the current exchange-representative walker."""
-        return self.workers[self.exchange_idx][1]
 
     def collect_entropy_snapshots(self) -> list[dict[int, float]]:
         return [dict(s.entropy) for s in self.walker_states]
@@ -872,6 +904,7 @@ class ProcessWangLandauPool:
             for i, slot in enumerate(self._slots):
                 for w, (_, conn) in enumerate(slot.workers):
                     recv_reply(conn, "STARTUP", f"window {i} walker {w}")
+            self._prime_energy_cache()
         except BaseException:
             self.shutdown()
             raise
@@ -1038,12 +1071,6 @@ class ProcessWangLandauPool:
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.switch_to_phase is not None:
                         slot.phase = plan.switch_to_phase
-
-            # Exchange-walker selection (local-only, no IPC).
-            for slot in self._slots:
-                slot.exchange_idx = int(
-                    slot.rng.integers(0, len(slot.workers))
-                )
         except Exception:
             self.shutdown()
             raise
@@ -1092,34 +1119,26 @@ class ProcessWangLandauPool:
 
     def current_energies(self) -> np.ndarray:
         self._check_open()
-        targets = [
-            (slot.exchange_conn(), i)
-            for i, slot in enumerate(self._slots)
-        ]
-        payloads = broadcast_gather(targets, ("ENERGY",))
-        return np.array(payloads, dtype=np.float64)
+        return np.array(
+            [float(slot.walker_states[0].current_energy) for slot in self._slots],
+            dtype=np.float64,
+        )
 
     def current_energy(self, i: int) -> float:
+        # Live ENERGY query of window i's walker 0 (one IPC round trip),
+        # so callers get an up-to-date value between block boundaries.
         self._check_open()
-        return float(request(self._slots[i].exchange_conn(), ("ENERGY",), i))
+        return float(request(self._slots[i].workers[0][1], ("ENERGY",), i))
 
     def current_occupations(self, i: int) -> np.ndarray:
         self._check_open()
-        return np.asarray(request(self._slots[i].exchange_conn(), ("GET_OCC",), i))
+        return np.asarray(
+            request(self._slots[i].workers[0][1], ("GET_OCC",), i)
+        )
 
     def swap_configurations(self, i: int, j: int) -> None:
-        self._check_open()
-        conn_i = self._slots[i].exchange_conn()
-        conn_j = self._slots[j].exchange_conn()
-        occ_i, occ_j = broadcast_gather(
-            [(conn_i, i), (conn_j, j)], ("GET_OCC",)
-        )
-        request(conn_i, ("SET_OCC", np.asarray(occ_j, dtype=np.int64)), i)
-        try:
-            request(conn_j, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), j)
-        except BaseException:
-            request(conn_i, ("SET_OCC", np.asarray(occ_i, dtype=np.int64)), i)
-            raise
+        """Swap walker 0 of window ``i`` with walker 0 of window ``j``."""
+        self.apply_swaps([(i, 0, j, 0)])
 
     def log_g(self, i: int, energy: float) -> float:
         self._check_open()
@@ -1127,19 +1146,124 @@ class ProcessWangLandauPool:
         g_at_E, _ = request(conn, ("LOG_G_AT", float(energy), float(energy)), i)
         return float(g_at_E)
 
-    def log_g_pair(
-        self, i: int, j: int, E_i: float, E_j: float,
-    ) -> tuple[float, float, float, float]:
+    def n_walkers(self, i: int) -> int:
+        """Number of walkers in window ``i``."""
+        return len(self._slots[i].workers)
+
+    def walker_energy(self, i: int, walker: int) -> float:
+        """Cached current energy of ``walker`` in window ``i`` (no IPC)."""
+        return float(self._slots[i].walker_states[walker].current_energy)
+
+    def walker_log_g(self, i: int, walker: int, energy: float) -> float:
+        """``ln g(E)`` for ``walker`` in window ``i`` from cached entropy (no IPC)."""
+        left, right = self._windows[i]
+        spacing = self._energy_spacing
+        bin_left = None if left is None else int(round(left / spacing))
+        bin_right = None if right is None else int(round(right / spacing))
+        entropy = self._slots[i].walker_states[walker].entropy
+        return log_g_at(
+            entropy, energy, spacing, bin_left=bin_left, bin_right=bin_right
+        )
+
+    def candidate_pairs(
+        self, i: int, j: int, rng: np.random.Generator
+    ) -> list[tuple[int, int]]:
+        """Random matching of windows ``i`` and ``j`` walkers for exchange.
+
+        Each returned ``(a, b)`` pairs walker ``a`` of window ``i`` with
+        walker ``b`` of window ``j``; pairs are disjoint in each
+        coordinate. See :func:`mchammer_pt.exchange.matching_for_boundary`.
+        """
+        return matching_for_boundary(self.n_walkers(i), self.n_walkers(j), rng)
+
+    def window_of_position(self) -> np.ndarray:
+        """Window index of each ``(window, walker)`` position, in order."""
+        counts = [self.n_walkers(i) for i in range(len(self._slots))]
+        return np.repeat(np.arange(len(counts), dtype=np.int64), counts)
+
+    def n_carriers(self) -> int:
+        """Total number of walker positions across all windows."""
+        return sum(self.n_walkers(i) for i in range(len(self._slots)))
+
+    def apply_swaps(self, swaps: list[tuple[int, int, int, int]]) -> None:
+        """Apply a batch of accepted walker-config swaps in two IPC rounds.
+
+        ``swaps`` is a list of ``(i, a, j, b)`` meaning swap walker ``a``
+        of window ``i`` with walker ``b`` of window ``j``. The controller
+        guarantees the swaps are disjoint (no walker appears in two
+        swaps in one cycle), so the gather/scatter target sets contain
+        no aliased walkers. One ``GET_OCC`` fan-out reads every involved
+        walker's occupations; one ``SET_OCC`` fan-out writes the swapped
+        configurations.
+
+        The move is not atomic across workers (the ``SET_OCC`` fan-out has
+        no rollback). To avoid leaving a half-swapped pool live for a
+        downstream caller, a worker IPC failure shuts the pool down and
+        re-raises, matching :meth:`advance_all`.
+        """
+        if not swaps:
+            return
         self._check_open()
-        _, conn_i = self._slots[i].workers[0]
-        _, conn_j = self._slots[j].workers[0]
-        (g_i_Ei, g_i_Ej), (g_j_Ei, g_j_Ej) = broadcast_gather(
-            [(conn_i, i), (conn_j, j)],
-            ("LOG_G_AT", float(E_i), float(E_j)),
-        )
-        return (
-            float(g_i_Ei), float(g_i_Ej), float(g_j_Ei), float(g_j_Ej),
-        )
+        involved: list[tuple[int, int]] = []
+        for i, a, j, b in swaps:
+            involved.append((i, a))
+            involved.append((j, b))
+        if len(set(involved)) != len(involved):
+            # The matching exchange guarantees disjoint swaps; an overlap
+            # would silently overwrite an entry in the occupations dict
+            # below and move the wrong configurations. Fail loudly instead.
+            raise ValueError(
+                f"apply_swaps received overlapping swaps {swaps}: a walker "
+                f"appears in more than one swap. This signals a bug in the "
+                f"exchange driver, not user input."
+            )
+        try:
+            get_targets = [
+                (self._slots[s].workers[w][1], f"window {s} walker {w}")
+                for s, w in involved
+            ]
+            occ_list = broadcast_gather(get_targets, ("GET_OCC",))
+            occ = {
+                sw: np.asarray(o, dtype=np.int64)
+                for sw, o in zip(involved, occ_list, strict=True)
+            }
+            set_targets = []
+            for i, a, j, b in swaps:
+                set_targets.append(
+                    (
+                        self._slots[i].workers[a][1],
+                        f"window {i} walker {a}",
+                        ("SET_OCC", occ[(j, b)]),
+                    )
+                )
+                set_targets.append(
+                    (
+                        self._slots[j].workers[b][1],
+                        f"window {j} walker {b}",
+                        ("SET_OCC", occ[(i, a)]),
+                    )
+                )
+            fanout_gather(set_targets)
+        except Exception:
+            self.shutdown()
+            raise
+        # Keep the parent-side energy cache consistent without an IPC
+        # round trip: a swap moves each walker's configuration to the
+        # other, so their cached current energies swap too. The entropy
+        # estimate stays with the walker (only the configuration moves).
+        for i, a, j, b in swaps:
+            state_ia = self._slots[i].walker_states[a]
+            state_jb = self._slots[j].walker_states[b]
+            self._slots[i].walker_states[a] = replace(
+                state_ia, current_energy=state_jb.current_energy
+            )
+            self._slots[j].walker_states[b] = replace(
+                state_jb, current_energy=state_ia.current_energy
+            )
+
+    def swap_walker_configurations(self, i: int, a: int, j: int, b: int) -> None:
+        """Swap a single walker pair (delegates to the batched path)."""
+        self.apply_swaps([(i, a, j, b)])
 
     def converged_flags(self) -> np.ndarray:
         self._check_open()
@@ -1220,9 +1344,8 @@ class ProcessWangLandauPool:
                     walker-minor order, each from a worker's
                     ``SNAPSHOT_FOR_CHECKPOINT`` handler.
                 ``"group_state"``: list of length N (one per window slot).
-                    Dict containing ``rng_state``, ``exchange_idx``, and
-                    ``phase`` for W>1 slots (pulled from the
-                    orchestrator-side
+                    Dict containing ``rng_state`` and ``phase`` for W>1
+                    slots (pulled from the orchestrator-side
                     :class:`ProcessWangLandauWindow`); ``None`` for W=1
                     slots.
         """
@@ -1238,7 +1361,6 @@ class ProcessWangLandauPool:
             if len(slot.workers) > 1:
                 group_state.append({
                     "rng_state": _serialise_rng_state(slot.rng),
-                    "exchange_idx": int(slot.exchange_idx),
                     "phase": slot.phase,
                 })
             else:
@@ -1254,7 +1376,7 @@ class ProcessWangLandauPool:
         """Push saved per-walker and group-level state into the live pool.
 
         Per-walker state is fanned out to each worker over IPC; group-level
-        state (rng, exchange_idx, phase) is assigned directly to each
+        state (rng, phase) is assigned directly to each
         :class:`ProcessWangLandauWindow` on the orchestrator side — no
         worker involvement.
 
@@ -1265,9 +1387,8 @@ class ProcessWangLandauPool:
             per_walker_extras: flat list of M extras dicts, same order.
                 Each must carry a ``"sites_by_species"`` key.
             group_state: list of length N (one entry per window slot).
-                Must be a dict for W>1 slots — carrying ``rng_state``,
-                ``exchange_idx``, and ``phase`` — and ``None`` for W=1
-                slots.
+                Must be a dict for W>1 slots — carrying ``rng_state``
+                and ``phase`` — and ``None`` for W=1 slots.
 
         Raises:
             RuntimeError: pool is shut down, or any worker reports an
@@ -1310,7 +1431,7 @@ class ProcessWangLandauPool:
                 recv_reply(conn, "RESTORE_STATE", f"window {g} walker {w}")
 
         # Group-level state: assign directly to ProcessWangLandauWindow.
-        required_keys = {"rng_state", "exchange_idx", "phase"}
+        required_keys = {"rng_state", "phase"}
         for g, (slot, gs) in enumerate(
             zip(self._slots, group_state, strict=True)
         ):
@@ -1331,16 +1452,36 @@ class ProcessWangLandauPool:
                     f"window {g}: group_state missing required keys "
                     f"{sorted(missing)}; corrupted checkpoint."
                 )
-            exchange_idx = int(gs["exchange_idx"])
-            if not 0 <= exchange_idx < len(slot.workers):
-                raise ValueError(
-                    f"window {g}: group_state['exchange_idx']={exchange_idx} "
-                    f"is outside the valid range [0, {len(slot.workers)}); "
-                    f"corrupted checkpoint."
-                )
             slot.rng.bit_generator.state = json.loads(gs["rng_state"])
-            slot.exchange_idx = exchange_idx
             slot.phase = gs["phase"]
+
+        # Restored configurations change each walker's energy; refresh the
+        # parent-side cache so the post-resume history snapshot is correct.
+        self._prime_energy_cache()
+
+    def _prime_energy_cache(self) -> None:
+        """Fill each walker's cached ``current_energy`` from a live query.
+
+        The per-walker energy cache (``walker_states``) is otherwise
+        populated only by :meth:`advance_all`. Priming it at construction
+        and after resume means :meth:`current_energies` returns the true
+        initial energies for the pre-run history snapshot rather than the
+        0.0 placeholder. This one-off query runs outside the per-cycle
+        exchange loop, so it does not reintroduce per-exchange IPC.
+        """
+        targets = [
+            (conn, f"window {i} walker {w}")
+            for i, slot in enumerate(self._slots)
+            for w, (_, conn) in enumerate(slot.workers)
+        ]
+        energies = broadcast_gather(targets, ("ENERGY",))
+        idx = 0
+        for slot in self._slots:
+            for w in range(len(slot.workers)):
+                slot.walker_states[w] = replace(
+                    slot.walker_states[w], current_energy=float(energies[idx])
+                )
+                idx += 1
 
     def attach_observer(
         self,

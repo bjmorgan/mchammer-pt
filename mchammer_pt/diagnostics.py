@@ -14,50 +14,85 @@ import numpy as np
 from .history import ExchangeHistory
 
 
-def round_trip_counts(replica_labels_per_cycle: np.ndarray) -> np.ndarray:
-    """Per-label count of completed ladder round trips.
+def round_trip_counts(
+    replica_labels_per_cycle: np.ndarray,
+    window_of_position: np.ndarray | None = None,
+    n_windows: int | None = None,
+) -> np.ndarray:
+    """Per-carrier count of completed ladder round trips.
 
-    A round trip is one complete bottom → top → bottom traversal (or
-    top → bottom → top). Each such traversal consists of two endpoint
-    visits on opposite rungs with no intervening same-rung visit.
-    Partial traversals (bottom → top but not yet back) do not count;
-    the count increments only when the second opposite-rung visit
-    lands.
+    A round trip is one complete bottom -> top -> bottom traversal (or
+    top -> bottom -> top): two endpoint visits on opposite rungs with
+    no intervening same-rung visit. Partial traversals do not count.
+
+    The label array is position-indexed: ``labels[cycle][position]`` is
+    the carrier id occupying that ``(window, slot)`` position. Each
+    position maps to a window rung via ``window_of_position``; a carrier
+    completes a round trip when its window reaches the bottom (``0``)
+    and the top (``n_windows - 1``) alternately.
 
     Args:
-        replica_labels_per_cycle: shape ``(n_cycles+1, n_replicas)``,
-            the integer label at each temperature index per cycle.
+        replica_labels_per_cycle: shape ``(n_cycles+1, N_w)``, the
+            carrier id at each position per cycle.
+        window_of_position: shape ``(N_w,)``, the window index for each
+            position. Defaults to ``arange(N_w)`` (one position per
+            window: the single-walker case).
+        n_windows: number of window rungs. When ``window_of_position``
+            is given it defaults to ``window_of_position.max() + 1``;
+            otherwise to the number of positions (single-walker case).
 
     Returns:
-        1-D array of shape ``(n_replicas,)`` giving the round-trip
-        count for each label.
+        1-D array of shape ``(N_w,)`` giving the round-trip count for
+        each carrier id.
+
+    Note:
+        The defaults are the single-walker case (one walker per rung:
+        canonical PT and single-walker REWL). For multi-walker REWL,
+        pass ``window_of_position`` so each ``(window, walker)`` position
+        maps to its window rung. ``ExchangeHistory`` carries the mapping,
+        so this works on a history read back from disk::
+
+            round_trip_counts(
+                history.replica_labels_per_cycle,
+                history.window_of_position,
+            )
+
+        Calling the single-argument form on a multi-walker run treats
+        each walker position as its own rung and yields meaningless
+        counts.
     """
     labels = np.asarray(replica_labels_per_cycle)
-    n_cycles_plus_one, n_replicas = labels.shape
-    counts = np.zeros(n_replicas, dtype=np.int64)
-    top = n_replicas - 1
-    # For each label, track its current "direction" state:
-    #   0 = neither endpoint yet visited,
-    #   1 = most recent endpoint visit was the bottom,
-    #   2 = most recent endpoint visit was the top.
-    # A round trip is counted each time the state transitions 1 -> 2 -> 1
-    # or 2 -> 1 -> 2.
-    state = np.zeros(n_replicas, dtype=np.int8)
+    n_cycles_plus_one, n_positions = labels.shape
+    if window_of_position is None:
+        window_of_position = np.arange(n_positions, dtype=np.int64)
+        if n_windows is None:
+            n_windows = n_positions
+    else:
+        window_of_position = np.asarray(window_of_position)
+        if n_windows is None:
+            # Derive the rung count from the mapping so callers can pass
+            # just ``history.window_of_position``.
+            n_windows = int(window_of_position.max()) + 1
+    top = n_windows - 1
+    counts = np.zeros(n_positions, dtype=np.int64)
+    # Per carrier: 0 = no endpoint yet, 1 = last endpoint was bottom,
+    # 2 = last endpoint was top. A round trip is each 1->2 or 2->1.
+    state = np.zeros(n_positions, dtype=np.int8)
     for cycle in range(n_cycles_plus_one):
         row = labels[cycle]
-        for t_index in range(n_replicas):
-            label = int(row[t_index])
-            if t_index == 0:
+        for position in range(n_positions):
+            window = int(window_of_position[position])
+            if window == 0:
                 new_state = 1
-            elif t_index == top:
+            elif window == top:
                 new_state = 2
             else:
                 continue
-            if state[label] != 0 and state[label] != new_state:
-                counts[label] += 1
-            state[label] = new_state
-    # A full round trip is two endpoint transitions (e.g. bottom -> top ->
-    # bottom) which we counted as two transitions. Halve to get trips.
+            carrier = int(row[position])
+            if state[carrier] != 0 and state[carrier] != new_state:
+                counts[carrier] += 1
+            state[carrier] = new_state
+    # Two endpoint transitions per full round trip; halve.
     return counts // 2
 
 

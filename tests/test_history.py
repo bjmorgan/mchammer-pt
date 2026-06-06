@@ -54,6 +54,63 @@ def test_hdf5_round_trip(tmp_path: Path):
     assert containers_back == []
 
 
+def test_window_of_position_round_trips_and_drives_round_trips(tmp_path: Path):
+    """A multi-walker history persists window_of_position, so round_trip_counts
+    works on the history read back from disk (no live pool needed)."""
+    from mchammer_pt.diagnostics import round_trip_counts
+
+    # Two windows, two walkers each: N_w = 4 positions over 2 rungs.
+    wop = np.array([0, 0, 1, 1], dtype=np.int64)
+    h = ExchangeHistory.empty(
+        n_cycles=2, n_replicas=2, n_carriers=4, window_of_position=wop
+    )
+    # Carrier 0 traverses bottom -> top -> bottom (one round trip).
+    h.replica_labels_per_cycle[:] = np.array([
+        [0, 1, 2, 3],
+        [2, 1, 0, 3],
+        [0, 1, 2, 3],
+    ])
+    write_hdf5(tmp_path / "pt.h5", history=h, replica_containers=[], meta={})
+    h_back, _, _ = read_hdf5(tmp_path / "pt.h5")
+
+    np.testing.assert_array_equal(h_back.window_of_position, wop)
+    # Restored history is self-describing: n_windows derived from the map.
+    counts = round_trip_counts(
+        h_back.replica_labels_per_cycle, h_back.window_of_position
+    )
+    assert counts[0] == 1
+    assert counts.sum() == 2  # carriers 0 and 2 mirror each other
+
+
+def test_concatenate_rejects_mismatched_window_of_position():
+    """concatenate refuses segments with different walker layouts.
+
+    Same width but a different window_of_position mapping would make the
+    concatenated labels uninterpretable; this is caught alongside the
+    existing replica-count guard.
+    """
+    a = ExchangeHistory.empty(
+        n_cycles=1, n_replicas=2, n_carriers=4,
+        window_of_position=np.array([0, 0, 1, 1]),
+    )
+    b = ExchangeHistory.empty(
+        n_cycles=1, n_replicas=2, n_carriers=4,
+        window_of_position=np.array([0, 1, 1, 1]),
+    )
+    with pytest.raises(ValueError, match="window_of_position"):
+        ExchangeHistory.concatenate(a, b)
+
+
+def test_window_of_position_absent_reads_as_none(tmp_path: Path):
+    """A history written without window_of_position reads back as None
+    (back-compatible single-walker / pre-existing files)."""
+    h = _make_history()  # constructed without window_of_position
+    assert h.window_of_position is None
+    write_hdf5(tmp_path / "pt.h5", history=h, replica_containers=[], meta={})
+    h_back, _, _ = read_hdf5(tmp_path / "pt.h5")
+    assert h_back.window_of_position is None
+
+
 def test_hdf5_round_trip_with_containers(tmp_path: Path, toy_ce, toy_atoms):
     from mchammer.calculators import ClusterExpansionCalculator
     from mchammer.ensembles import CanonicalEnsemble
@@ -358,9 +415,23 @@ def test_concatenate_no_arguments_raises():
         ExchangeHistory.concatenate()
 
 
+def test_empty_defaults_carriers_to_replicas():
+    h = ExchangeHistory.empty(n_cycles=4, n_replicas=3)
+    assert h.replica_labels_per_cycle.shape == (5, 3)
+
+
+def test_empty_widens_labels_to_n_carriers():
+    h = ExchangeHistory.empty(n_cycles=4, n_replicas=3, n_carriers=6)
+    assert h.replica_labels_per_cycle.shape == (5, 6)
+    # energies and swap counts stay keyed on replicas/pairs.
+    assert h.energies_per_cycle.shape == (5, 3)
+    assert h.swap_attempted.shape == (2,)
+    assert h.swap_accepted.shape == (2,)
+
+
 def test_write_hdf5_writes_window_groups_subgroup(tmp_path: Path):
     """When window_groups is non-empty, /orchestrator/window_groups/<g>/
-    carries rng_state, exchange_idx, phase. None entries are skipped."""
+    carries rng_state, phase. None entries are skipped."""
     import h5py
 
     h = _make_history(n_cycles=2, n_replicas=2)
@@ -368,20 +439,20 @@ def test_write_hdf5_writes_window_groups_subgroup(tmp_path: Path):
         tmp_path / "t.h5",
         history=h,
         replica_containers=[],
-        meta={"schema_version": "4"},
+        meta={"schema_version": "5"},
         orchestrator_state={
             "replica_labels": np.arange(2, dtype=np.int64),
             "rng_state": '{"bit_generator": "PCG64", "state": {}}',
         },
         window_groups=[
             None,
-            {"rng_state": '{"x": 1}', "exchange_idx": 3, "phase": "halving"},
+            {"rng_state": '{"x": 1}', "phase": "halving"},
         ],
     )
     with h5py.File(tmp_path / "t.h5", "r") as f:
         assert "orchestrator/window_groups/0" not in f
         grp = f["orchestrator/window_groups/1"]
-        assert int(grp["exchange_idx"][()]) == 3
+        assert "exchange_idx" not in grp
         assert grp["rng_state"][()].decode() == '{"x": 1}'
         assert grp["phase"][()].decode() == "halving"
 
@@ -396,9 +467,9 @@ def test_write_hdf5_window_groups_without_orchestrator_state_raises(
             tmp_path / "t.h5",
             history=h,
             replica_containers=[],
-            meta={"schema_version": "4"},
+            meta={"schema_version": "5"},
             orchestrator_state=None,
             window_groups=[
-                {"rng_state": "{}", "exchange_idx": 0, "phase": "halving"},
+                {"rng_state": "{}", "phase": "halving"},
             ],
         )

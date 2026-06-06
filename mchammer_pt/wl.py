@@ -25,7 +25,6 @@ from .checkpoint import (
     _compute_ensemble_kwargs_hash,
     _write_checkpoint,
 )
-from .exchange import pair_set_for_cycle
 from .history import ExchangeHistory, MetaValue
 from .parallel.backend import WangLandauPool
 from .parallel.processes import ProcessWangLandauPool
@@ -169,6 +168,29 @@ def _spawn_wl_seeds(
     return walker_seeds, group_seeds, master_seed
 
 
+def _restored_replica_labels(
+    raw: object,
+    pt: WangLandauParallelTempering,
+    path: Path | str,
+) -> np.ndarray:
+    """Validate and coerce the restored orchestrator replica-label array.
+
+    The labels are position-indexed over ``N_w = sum(walkers_per_window)``.
+    A length mismatch against the freshly reconstructed pool signals a
+    corrupted or mismatched checkpoint; this mirrors the adjacent
+    ``walkers_per_window`` and container-length corruption guards.
+    """
+    labels = np.asarray(raw, dtype=np.int64)
+    expected = pt._pool.n_carriers()
+    if labels.shape != (expected,):
+        raise ValueError(
+            f"{path}: orchestrator replica_labels has shape {tuple(labels.shape)} "
+            f"but the reconstructed pool has {expected} carriers; "
+            f"corrupted or mismatched checkpoint."
+        )
+    return labels
+
+
 class WangLandauParallelTempering(BaseParallelTempering):
     """REWL orchestrator across a sequence of energy windows.
 
@@ -191,7 +213,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             exchange-proposal RNG are deterministically spawned.
         pool: optional `WangLandauPool` to use as backend.
         data_container_file: optional path; if given, `run` writes a
-            schema-4 checkpoint to it on completion.
+            schema-5 checkpoint to it on completion.
         ensemble_cls: WL ensemble class. Defaults to
             ``CoordinatedWangLandauEnsemble``; must be a subclass of
             it. To use the 1/t schedule, pass
@@ -204,11 +226,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
             `WangLandauWindowGroup`; the coordinator runs a collective
             flatness gate and halves all walkers in lockstep. With
             count > 1 the group also merges entropies across walkers
-            (cadence controlled by ``merge_cadence``). Same-pool resume
-            for windows with count > 1 is structurally correct but not
-            bit-identical: ``run()``'s end-of-run merge destroys the
-            pre-merge per-walker entropy state that bit-identity would
-            require.
+            (cadence controlled by ``merge_cadence``). At each active
+            window boundary a random matching pairs the two windows'
+            walkers and attempts one swap per pair, so per-walker
+            exchange rate does not dilute as walkers are added.
+            Same-pool resume for windows with count > 1 is structurally
+            correct but not bit-identical: ``run()``'s end-of-run merge
+            destroys the pre-merge per-walker entropy state that
+            bit-identity would require.
         flatness_mode: ``"per_walker"`` (every walker independently
             flat; published Vogel et al. 2013) or ``"pooled"`` (default;
             summed histogram flat -- a single combined bin sees ``W x``
@@ -403,30 +428,34 @@ class WangLandauParallelTempering(BaseParallelTempering):
         """
         return self._pool.merge_events
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
         """Log of the REWL exchange acceptance ratio.
 
-        Standard REWL detailed balance (Vogel/Li/Wuest 2013):
+        Standard REWL detailed balance (Vogel/Li/Wuest 2013) for walker
+        ``a`` of window ``i`` against walker ``b`` of window ``j``:
 
             log A = ln g_i(E_i) - ln g_i(E_j) + ln g_j(E_j) - ln g_j(E_i)
 
-        When the swap would move a replica to an energy outside its own
+        When the swap would move a walker to an energy outside its own
         window, the configuration is forbidden in that window's restricted
         state space, so the swap is rejected with probability 1
-        (log_r = -inf). `WangLandauPool.log_g_pair` returns -inf for
+        (log_r = -inf). `WangLandauPool.walker_log_g` returns -inf for
         out-of-window energies; we detect that and short-circuit rather
-        than letting the formula yield +inf (which `_try_exchange` would
-        treat as a diagnostic failure).
+        than letting the formula yield +inf (which `_propose_boundary`
+        would treat as a diagnostic failure).
         """
-        E_i = self._pool.current_energy(i)
-        E_j = self._pool.current_energy(j)
-        g_i_Ei, g_i_Ej, g_j_Ei, g_j_Ej = self._pool.log_g_pair(i, j, E_i, E_j)
+        E_i = self._pool.walker_energy(i, a)
+        E_j = self._pool.walker_energy(j, b)
+        g_i_Ei = self._pool.walker_log_g(i, a, E_i)
+        g_i_Ej = self._pool.walker_log_g(i, a, E_j)
+        g_j_Ei = self._pool.walker_log_g(j, b, E_i)
+        g_j_Ej = self._pool.walker_log_g(j, b, E_j)
         # Per the WangLandauReplica always-in-window invariant, the
         # "same-bin" terms log g_i(E_i) and log g_j(E_j) are never
         # -inf. Only the "cross-bin" terms can be -inf, which we
         # short-circuit below.
         if g_i_Ej == -np.inf or g_j_Ei == -np.inf:
-            # Swap would land at least one replica outside its window.
+            # Swap would land at least one walker outside its window.
             return -float(np.inf)
         return float((g_i_Ei - g_i_Ej) + (g_j_Ej - g_j_Ei))
 
@@ -458,7 +487,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
         far the run got.
         """
         n_replicas = len(self._pool)
-        history = ExchangeHistory.empty(n_cycles=n_cycles, n_replicas=n_replicas)
+        history = ExchangeHistory.empty(
+            n_cycles=n_cycles,
+            n_replicas=n_replicas,
+            n_carriers=self._pool.n_carriers(),
+            window_of_position=self._pool.window_of_position(),
+        )
         self._history = history
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
@@ -466,8 +500,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         try:
             for c in range(n_cycles):
                 self._pool.advance_all(self._block_size)
-                for pair in pair_set_for_cycle(n_replicas, c):
-                    self._try_exchange(int(pair), int(pair) + 1, c, history)
+                self._exchange_phase(c, history)
                 history.energies_per_cycle[c + 1] = self._pool.current_energies()
                 history.replica_labels_per_cycle[c + 1] = self._replica_labels
                 self.cycles_in_segment = c + 1
@@ -544,8 +577,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
 
-        Schema-4 only. CE identity, ensemble_cls FQN, and
-        ensemble_kwargs hash validate against the checkpoint;
+        Resumes schema-5 checkpoints, and schema-4 checkpoints from
+        single-walker runs; a schema-4 multi-walker checkpoint is
+        rejected (its window-indexed labels are incompatible with the
+        current walker-indexed layout). CE identity, ensemble_cls FQN,
+        and ensemble_kwargs hash validate against the checkpoint;
         mismatches raise. Bit-identical resume requires the original
         `_sites_by_species` cache, which is persisted in the
         checkpoint. Supports any mix of W=1 and W>1 windows.
@@ -566,18 +602,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             _read_replica_extra,
             _read_window_groups,
             _validate_kwargs_hash,
+            _validate_wl_schema_version,
         )
         from .history import read_hdf5
         from .wl_window_group import WangLandauWindowGroup
 
         _, containers, meta = read_hdf5(path)
-        schema_version = meta.get("schema_version")
-        if schema_version != "4":
-            raise ValueError(
-                f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
-            )
+        _validate_wl_schema_version(path, meta.get("schema_version"))
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
             raise ValueError(f"{path}: CE identity mismatch.")
@@ -678,17 +709,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 )
                 # Per-walker MC state was restored inside restart_from
                 # above; restore_state would redo that work. Apply only
-                # the group-level fields here, validating exchange_idx
-                # the same way restore_state would.
-                exchange_idx = int(gs["exchange_idx"])
-                if not 0 <= exchange_idx < nw:
-                    raise ValueError(
-                        f"{path}: /orchestrator/window_groups/{g}/exchange_idx "
-                        f"= {exchange_idx} is outside the valid range "
-                        f"[0, {nw}); corrupted checkpoint."
-                    )
+                # the group-level RNG state here.
                 group._rng.bit_generator.state = json.loads(gs["rng_state"])
-                group._exchange_idx = exchange_idx
                 slots.append(group)
             offset += nw
 
@@ -721,8 +743,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
         pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
-        pt._replica_labels = np.asarray(
-            orchestrator_state["replica_labels"], dtype=np.int64
+        pt._replica_labels = _restored_replica_labels(
+            orchestrator_state["replica_labels"], pt, path
         )
         rng_state_raw = orchestrator_state["rng_state"]
         assert isinstance(rng_state_raw, str)
@@ -762,17 +784,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
             _read_replica_extra,
             _read_window_groups,
             _validate_kwargs_hash,
+            _validate_wl_schema_version,
         )
         from .history import read_hdf5
 
         _, containers, meta = read_hdf5(path)
-        schema_version = meta.get("schema_version")
-        if schema_version != "4":
-            raise ValueError(
-                f"{path}: unsupported schema_version {schema_version!r}; this "
-                f"mchammer-pt understands '4' only. For v3 checkpoints, resume "
-                f"with mchammer-pt 0.9.0 or earlier."
-            )
+        _validate_wl_schema_version(path, meta.get("schema_version"))
         expected_ce_identity = _compute_ce_identity(cluster_expansion)
         if meta["ce_identity"] != expected_ce_identity:
             raise ValueError(f"{path}: CE identity mismatch.")
@@ -847,8 +864,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             )
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
-            pt._replica_labels = np.asarray(
-                orchestrator_state["replica_labels"], dtype=np.int64
+            pt._replica_labels = _restored_replica_labels(
+                orchestrator_state["replica_labels"], pt, path
             )
             rng_state_raw = orchestrator_state["rng_state"]
             assert isinstance(rng_state_raw, str)

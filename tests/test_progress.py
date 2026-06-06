@@ -25,7 +25,7 @@ from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 class _AlwaysAcceptPT(BaseParallelTempering):
     """Concrete subclass whose exchange always accepts."""
 
-    def _log_prob_ratio(self, i: int, j: int) -> float:
+    def _log_prob_ratio(self, i: int, a: int, j: int, b: int) -> float:
         return 0.0
 
 
