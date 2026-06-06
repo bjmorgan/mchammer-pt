@@ -1204,11 +1204,20 @@ class ProcessWangLandauPool:
         if not swaps:
             return
         self._check_open()
+        involved: list[tuple[int, int]] = []
+        for i, a, j, b in swaps:
+            involved.append((i, a))
+            involved.append((j, b))
+        if len(set(involved)) != len(involved):
+            # The matching exchange guarantees disjoint swaps; an overlap
+            # would silently overwrite an entry in the occupations dict
+            # below and move the wrong configurations. Fail loudly instead.
+            raise ValueError(
+                f"apply_swaps received overlapping swaps {swaps}: a walker "
+                f"appears in more than one swap. This signals a bug in the "
+                f"exchange driver, not user input."
+            )
         try:
-            involved: list[tuple[int, int]] = []
-            for i, a, j, b in swaps:
-                involved.append((i, a))
-                involved.append((j, b))
             get_targets = [
                 (self._slots[s].workers[w][1], f"window {s} walker {w}")
                 for s, w in involved

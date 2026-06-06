@@ -82,6 +82,25 @@ def test_window_of_position_round_trips_and_drives_round_trips(tmp_path: Path):
     assert counts.sum() == 2  # carriers 0 and 2 mirror each other
 
 
+def test_concatenate_rejects_mismatched_window_of_position():
+    """concatenate refuses segments with different walker layouts.
+
+    Same width but a different window_of_position mapping would make the
+    concatenated labels uninterpretable; this is caught alongside the
+    existing replica-count guard.
+    """
+    a = ExchangeHistory.empty(
+        n_cycles=1, n_replicas=2, n_carriers=4,
+        window_of_position=np.array([0, 0, 1, 1]),
+    )
+    b = ExchangeHistory.empty(
+        n_cycles=1, n_replicas=2, n_carriers=4,
+        window_of_position=np.array([0, 1, 1, 1]),
+    )
+    with pytest.raises(ValueError, match="window_of_position"):
+        ExchangeHistory.concatenate(a, b)
+
+
 def test_window_of_position_absent_reads_as_none(tmp_path: Path):
     """A history written without window_of_position reads back as None
     (back-compatible single-walker / pre-existing files)."""

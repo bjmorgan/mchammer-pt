@@ -176,11 +176,24 @@ class ExchangeHistory:
         if not histories:
             raise ValueError("concatenate requires at least one history")
         n_replicas = histories[0].energies_per_cycle.shape[1]
+        wop0 = histories[0].window_of_position
         for i, h in enumerate(histories):
             if h.energies_per_cycle.shape[1] != n_replicas:
                 raise ValueError(
                     f"history {i} has {h.energies_per_cycle.shape[1]} "
                     f"replicas but history 0 has {n_replicas}"
+                )
+            wop = h.window_of_position
+            consistent = (wop0 is None and wop is None) or (
+                wop0 is not None
+                and wop is not None
+                and np.array_equal(wop0, wop)
+            )
+            if not consistent:
+                raise ValueError(
+                    f"history {i} has a different window_of_position than "
+                    f"history 0; concatenate requires the same walker layout "
+                    f"across segments."
                 )
         energy_parts = [histories[0].energies_per_cycle] + [
             h.energies_per_cycle[1:] for h in histories[1:]

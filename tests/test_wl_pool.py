@@ -490,6 +490,27 @@ def test_process_wl_pool_apply_swaps_cross_index_multi_swap_cache(tmp_path):
                 assert pool.walker_energy(i, w) == pytest.approx(live)
 
 
+def test_process_wl_pool_apply_swaps_rejects_overlapping(tmp_path):
+    """apply_swaps fails loudly if a walker appears in two swaps.
+
+    The matching exchange guarantees disjoint swaps; an overlap would
+    silently overwrite the occupations dict and move the wrong configs.
+    """
+    from tests._in_process_pool import make_in_process_wl_pool
+
+    _, _, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with make_in_process_wl_pool(
+        tmp_path,
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        n_walkers_per_window=2,
+        seeds=[0, 1],
+    ) as pool:
+        pool.advance_all(10)
+        with pytest.raises(ValueError, match="overlapping swaps"):
+            # walker (0, 0) appears in both swaps.
+            pool.apply_swaps([(0, 0, 1, 0), (0, 0, 1, 1)])
+
+
 def test_process_wl_pool_swap_configurations_refreshes_worker_state(tmp_path):
     """After a swap, each worker's _potential reflects the new configuration."""
     from tests._in_process_pool import make_in_process_wl_pool
