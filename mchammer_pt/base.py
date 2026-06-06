@@ -251,6 +251,14 @@ class BaseParallelTempering(ABC):
             self._propose_boundary(int(pair), int(pair) + 1, cycle, history, accepted)
         if accepted:
             self._pool.apply_swaps(accepted)
+            # Permute the carrier labels only after the configurations
+            # physically move, so _replica_labels never diverges from pool
+            # state if apply_swaps raises. The accepted swaps are disjoint,
+            # so the position swaps commute and order is immaterial.
+            for i, a, j, b in accepted:
+                p1 = int(self._position_offset[i] + a)
+                p2 = int(self._position_offset[j] + b)
+                self._replica_labels[[p1, p2]] = self._replica_labels[[p2, p1]]
 
     def _propose_boundary(
         self,
@@ -265,11 +273,11 @@ class BaseParallelTempering(ABC):
         Draws the random walker matching for boundary ``(i, j)`` and, for
         each ``(a, b)`` pair, evaluates the acceptance ratio, records the
         attempt and fires exchange callbacks under ``pair_index =
-        min(i, j)``, and on acceptance swaps the two walkers' label
-        positions and appends ``(i, a, j, b)`` to ``accepted`` for the
-        caller to apply as a batch. The physical configuration swap is
-        deferred to the caller so all of a cycle's accepted swaps move in
-        one batched pool call.
+        min(i, j)``, and on acceptance appends ``(i, a, j, b)`` to
+        ``accepted``. Both the physical configuration move and the carrier
+        label permutation are deferred to the caller, which applies them
+        as a batch only after ``apply_swaps`` succeeds, so the orchestrator
+        labels never diverge from the pool state on a failure path.
         """
         pair_index = min(i, j)
         for a, b in self._pool.candidate_pairs(i, j, self._rng):
@@ -297,7 +305,4 @@ class BaseParallelTempering(ABC):
                 )
             if is_accepted:
                 accepted.append((i, a, j, b))
-                p1 = int(self._position_offset[i] + a)
-                p2 = int(self._position_offset[j] + b)
-                self._replica_labels[[p1, p2]] = self._replica_labels[[p2, p1]]
                 history.swap_accepted[pair_index] += 1

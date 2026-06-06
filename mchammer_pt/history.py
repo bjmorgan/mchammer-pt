@@ -109,9 +109,10 @@ class ExchangeHistory:
             ``(n_replicas-1,)``.
         swap_accepted: per-pair accepted counts, same shape.
         window_of_position: shape ``(N_w,)``, the window rung index of
-            each label position, or ``None`` for the single-walker case
-            (where position == window). Carried so that
-            `round_trip_counts` can interpret a multi-walker label array
+            each label position. Runs always record it (the identity
+            mapping for single-walker pools); it is ``None`` only when
+            reading an older file written before this dataset existed.
+            Lets `round_trip_counts` interpret a multi-walker label array
             read back from disk, when the live pool is gone.
     """
 

@@ -577,8 +577,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
 
-        Schema-4 only. CE identity, ensemble_cls FQN, and
-        ensemble_kwargs hash validate against the checkpoint;
+        Resumes schema-5 checkpoints, and schema-4 checkpoints from
+        single-walker runs; a schema-4 multi-walker checkpoint is
+        rejected (its window-indexed labels are incompatible with the
+        current walker-indexed layout). CE identity, ensemble_cls FQN,
+        and ensemble_kwargs hash validate against the checkpoint;
         mismatches raise. Bit-identical resume requires the original
         `_sites_by_species` cache, which is persisted in the
         checkpoint. Supports any mix of W=1 and W>1 windows.

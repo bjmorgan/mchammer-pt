@@ -1684,9 +1684,9 @@ def test_process_wl_pool_walker_log_g_matches_direct_query(tmp_path):
 def test_process_wl_pool_apply_swaps_moves_configs(tmp_path):
     """apply_swaps physically exchanges configurations between processes.
 
-    Energies are re-read directly from the workers (not the stale
-    parent cache, which apply_swaps does not refresh) to prove the
-    occupations moved across the process boundary.
+    Energies are re-read directly from the workers (independent of the
+    parent-side cache) to prove the occupations moved across the process
+    boundary, not merely that the cache was rearranged.
     """
     from mchammer_pt.parallel.processes import ProcessWangLandauPool
 

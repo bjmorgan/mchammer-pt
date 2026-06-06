@@ -454,3 +454,44 @@ def test_propose_boundary_still_rejects_plus_inf(toy_ce, toy_atoms):
         pt.run(n_cycles=1)
 
 
+def test_exchange_phase_defers_labels_until_apply_swaps_succeeds(
+    toy_ce, toy_atoms
+):
+    """A failure in apply_swaps leaves the carrier labels untouched.
+
+    The label permutation is applied only after the configurations
+    physically move, so an apply_swaps failure cannot leave the
+    orchestrator labels diverged from the (unswapped) pool state.
+    """
+    from mchammer_pt.history import ExchangeHistory
+
+    class _AlwaysAcceptPT(BaseParallelTempering):
+        def _log_prob_ratio(self, i, a, j, b):
+            return 0.0  # accept unconditionally
+
+    replicas = [
+        Replica(toy_ce, toy_atoms, temperature=T, random_seed=i)
+        for i, T in enumerate([300.0, 400.0])
+    ]
+    pt = _AlwaysAcceptPT(
+        pool=SerialPool(replicas),
+        block_size=1,
+        random_seed=0,
+        template_atoms=toy_atoms,
+    )
+
+    def _boom(swaps):
+        raise RuntimeError("apply_swaps failed")
+
+    pt._pool.apply_swaps = _boom  # type: ignore[method-assign]
+    before = pt.replica_labels.copy()
+    history = ExchangeHistory.empty(
+        n_cycles=1,
+        n_replicas=len(pt.pool),
+        n_carriers=pt.pool.n_carriers(),
+    )
+    with pytest.raises(RuntimeError, match="apply_swaps failed"):
+        pt._exchange_phase(0, history)
+    np.testing.assert_array_equal(pt.replica_labels, before)
+
+
