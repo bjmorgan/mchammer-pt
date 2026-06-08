@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``dos_snapshot_ratio`` keyword on ``WangLandauParallelTempering`` (also
+  on ``from_bin_count`` and ``process_pool``; default ``2.0``, ``None``
+  disables): records per-walker ``ln g(E)`` snapshots during the
+  Belardinelli-Pereyra 1/t regime on a fill-factor rung ladder
+  (``rung(f) = floor(log(1/f) / log(ratio))``; at ``2.0`` a snapshot each
+  time ``f`` halves). The snapshots live in a per-walker store kept
+  separate from the halving history, so the collective halving count is
+  unchanged, and they survive checkpoint and resume with the ladder
+  reconstructed from the restored fill factors. The parameter is recorded
+  in checkpoint metadata and threaded through the serial and
+  process-pool backends.
+- ``WindowResult.get_entropy(fill_factor_limit=...)`` now reconstructs the
+  density of states at fill factors below the last halving by reading the
+  1/t snapshot store (it previously returned ``None`` there, leaving the
+  1/t regime invisible), enabling a convergence-versus-run-length study
+  across the whole run.
+
 ## [0.18.0] - 2026-06-04
 
 ### Added
