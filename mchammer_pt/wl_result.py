@@ -165,8 +165,14 @@ class WindowResult:
             ff_snapshots = last_state.get("fill_factor_snapshots", {})
             ff_map = {**ff_history, **ff_snapshots}
             entropy_map = {**history, **snapshots}
+            # `fill_factor_history` carries the initial fill factor at
+            # step 0, for which there is no paired `entropy_history`
+            # entry (upstream seeds the two unevenly). Skip any step
+            # without a paired entropy so the scan never indexes a
+            # missing key -- e.g. a fill_factor_limit >= 1.0 would
+            # otherwise match the unpaired step 0.
             for step in sorted(ff_map):
-                if ff_map[step] <= fill_factor_limit:
+                if step in entropy_map and ff_map[step] <= fill_factor_limit:
                     entropy = entropy_map[step]
                     break
             else:

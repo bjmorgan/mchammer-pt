@@ -429,3 +429,34 @@ def test_reconstruct_dos_ladder_and_stitch_each_rung():
     coarse = stitched_by_rung[1.0 / 64]
     fine = stitched_by_rung[1.0 / 256]
     assert fine["entropy"].max() > coarse["entropy"].max()
+
+
+def test_get_entropy_skips_unpaired_init_seed_step():
+    """A fill_factor_limit >= 1.0 must not KeyError on the unpaired step-0
+    init seed.
+
+    The ensemble seeds ``fill_factor_history`` with the initial fill
+    factor at step 0 but leaves ``entropy_history`` empty there, so step 0
+    is in the fill-factor map without a paired entropy. The scan skips it
+    and resolves to the first paired snapshot at or below the limit.
+    """
+    c = _make_mock_container(
+        entropy={0: 5.0, 1: 7.0},
+        histogram={0: 3, 1: 2},
+        energy_spacing=1.0,
+        fill_factor=0.5,
+        fill_factor_history={0: 1.0, 100: 0.5},
+        entropy_history={100: {0: 5.0, 1: 7.0}},
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    # limit 1.0 matches the unpaired step 0 first; the scan must skip it
+    # (no KeyError) and return the first paired step (100).
+    df = wr.get_entropy(fill_factor_limit=1.0)
+    assert df is not None
+    assert df.loc[0, "entropy"] == pytest.approx(0.0)
+    assert df.loc[1, "entropy"] == pytest.approx(2.0)
