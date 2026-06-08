@@ -66,14 +66,18 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     writes in the 1/t branch are all suppressed; ``WangLandauWindowGroup``
     owns those decisions and applies them via ``WangLandauReplica``.
 
-    Upstream icet records ``_entropy_history`` snapshots in its 1/t
-    branch; those are suppressed here because mchammer-pt re-purposes
-    ``len(_fill_factor_history) - 1`` as the collective halving count,
-    which those writes would inflate. Instead, 1/t-regime DOS snapshots
-    are recorded into a *separate* store (``_entropy_snapshots`` /
-    ``_fill_factor_snapshots``) on a fill-factor rung ladder, leaving the
-    halving history untouched. ``dos_snapshot_ratio`` sets the ladder
-    ratio (``None`` disables); ``2.0`` snapshots each time ``f`` halves.
+    Upstream icet's 1/t branch records ``_entropy_history`` snapshots
+    autonomously; that is suppressed here. In the coordinator design the
+    halving history is written only by ``force_halve`` -- one
+    ``_entropy_history`` entry per collective halve, alongside the
+    matching ``_fill_factor_history`` entry -- so the ensemble must not
+    write either history dict itself; an autonomous 1/t write would add
+    ``_entropy_history`` entries the coordinator never made. 1/t-regime
+    DOS is instead recorded into a *separate* store
+    (``_entropy_snapshots`` / ``_fill_factor_snapshots``) on a
+    fill-factor rung ladder, leaving the halving history to the
+    coordinator. ``dos_snapshot_ratio`` sets the ladder ratio (``None``
+    disables); ``2.0`` snapshots each time ``f`` halves.
     """
 
     def __init__(
