@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from typing import Any, cast
 
 import numpy as np
@@ -158,7 +159,12 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             if self._max_snapshot_rung is None or rung > self._max_snapshot_rung:
                 step = int(self.step)
                 self._fill_factor_snapshots[step] = float(self._fill_factor)
-                self._entropy_snapshots[step] = dict(self._entropy)
+                # Sort once here (as `force_halve` does for the halving
+                # history) so `refresh_last_state` -- called on every
+                # `results()` / GET_DC -- can copy without re-sorting.
+                self._entropy_snapshots[step] = OrderedDict(
+                    sorted(self._entropy.items())
+                )
                 self._max_snapshot_rung = rung
 
     def _snapshot_rung(self, fill_factor: float) -> int:

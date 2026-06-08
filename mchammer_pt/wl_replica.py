@@ -698,10 +698,14 @@ class WangLandauReplica:
         e._data_container._last_state["fill_factor_snapshots"] = dict(
             e._fill_factor_snapshots
         )
-        e._data_container._last_state["entropy_snapshots"] = {
-            step: OrderedDict(sorted(entropy.items()))
-            for step, entropy in e._entropy_snapshots.items()
-        }
+        # Each entropy snapshot is already sorted at creation (see the
+        # 1/t trigger in CoordinatedWangLandauEnsemble._update_entropy),
+        # so a shallow outer copy suffices -- no per-bin re-sort on this
+        # frequently-called path. Mirrors how `entropy_history` (sorted
+        # in `force_halve`) is passed through unchanged.
+        e._data_container._last_state["entropy_snapshots"] = dict(
+            e._entropy_snapshots
+        )
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on
