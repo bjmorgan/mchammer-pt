@@ -1007,6 +1007,42 @@ def test_coerce_wl_last_state_keys_to_int_skips_missing_fields():
     assert last_state == {"occupations": [0, 1]}
 
 
+def test_refresh_last_state_persists_snapshot_store():
+    """refresh_last_state writes both snapshot dicts into _last_state."""
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    e._fill_factor_snapshots = {100: 0.5, 300: 0.25}
+    e._entropy_snapshots = {100: {0: 1.0, 1: 2.0}, 300: {0: 3.0, 1: 4.0}}
+
+    replica.refresh_last_state()
+
+    ls = e._data_container._last_state
+    assert ls["fill_factor_snapshots"] == {100: 0.5, 300: 0.25}
+    assert ls["entropy_snapshots"] == {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+
+
+def test_coerce_wl_last_state_keys_to_int_handles_snapshot_fields():
+    """The snapshot fields get the same int-key coercion as the histories."""
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state = {
+        "fill_factor_snapshots": {"100": 0.5, "300": 0.25},
+        "entropy_snapshots": {
+            "100": {"0": 1.0, "-3": 2.0},
+            "300": {"0": 3.0},
+        },
+    }
+    _coerce_wl_last_state_keys_to_int(last_state)
+    assert last_state["fill_factor_snapshots"] == {100: 0.5, 300: 0.25}
+    assert last_state["entropy_snapshots"] == {
+        100: {0: 1.0, -3: 2.0},
+        300: {0: 3.0},
+    }
+
+
 def test_replica_forwards_dos_snapshot_ratio_to_ensemble():
     """The replica forwards dos_snapshot_ratio to its ensemble."""
     replica = _make_wl_replica(dos_snapshot_ratio=4.0)

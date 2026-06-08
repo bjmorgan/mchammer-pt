@@ -60,7 +60,14 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
 # reversed before mchammer's `_restart_ensemble` reads them. Matches
 # the set `WangLandauDataContainer.read` converts upstream.
 _WL_INT_KEY_FIELDS: frozenset[str] = frozenset(
-    {"histogram", "entropy", "fill_factor_history", "entropy_history"}
+    {
+        "histogram",
+        "entropy",
+        "fill_factor_history",
+        "entropy_history",
+        "fill_factor_snapshots",
+        "entropy_snapshots",
+    }
 )
 
 
@@ -659,9 +666,10 @@ class WangLandauReplica:
         """Populate ``_last_state`` on the live container from ensemble state.
 
         Writes the fields that ``WindowResult`` reads (entropy,
-        histogram, fill_factor, fill_factor_history, entropy_history)
-        and the 1/t-schedule fields (schedule, phase,
-        window_entry_step). Idempotent.
+        histogram, fill_factor, fill_factor_history, entropy_history,
+        fill_factor_snapshots, entropy_snapshots), the 1/t-schedule
+        fields (schedule, phase, window_entry_step), and visited_bins.
+        Idempotent.
         """
         from collections import OrderedDict
 
@@ -683,6 +691,13 @@ class WangLandauReplica:
         e._data_container._last_state["visited_bins"] = sorted(
             e._visited_bins
         )
+        e._data_container._last_state["fill_factor_snapshots"] = dict(
+            e._fill_factor_snapshots
+        )
+        e._data_container._last_state["entropy_snapshots"] = {
+            step: OrderedDict(sorted(entropy.items()))
+            for step, entropy in e._entropy_snapshots.items()
+        }
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on
