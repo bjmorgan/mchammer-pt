@@ -50,6 +50,7 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
         "energy_limit_right",
         "random_seed",
         "recency_visits_per_bin",
+        "dos_snapshot_ratio",
         "dc_filename",
     }
 )
@@ -243,6 +244,8 @@ class WangLandauReplica:
             appear here — they are set by the wrapper.
         recency_visits_per_bin: EWMA recency window forwarded to the
             ensemble's recency-flatness diagnostic.
+        dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot ladder
+            forwarded to the ensemble; ``None`` disables snapshotting.
         cluster_expansion_path: same semantics as
             `mchammer_pt.replica.Replica`.
 
@@ -266,6 +269,7 @@ class WangLandauReplica:
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._energy_spacing = float(energy_spacing)
@@ -316,6 +320,7 @@ class WangLandauReplica:
                 random_seed=int(random_seed),
                 dc_filename=None,
                 recency_visits_per_bin=recency_visits_per_bin,
+                dos_snapshot_ratio=dos_snapshot_ratio,
                 **extra,
             )
             self._rng_state = random.getstate()
@@ -799,6 +804,7 @@ class WangLandauReplica:
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> WangLandauReplica:
@@ -813,6 +819,7 @@ class WangLandauReplica:
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
             recency_visits_per_bin=recency_visits_per_bin,
+            dos_snapshot_ratio=dos_snapshot_ratio,
             cluster_expansion_path=cluster_expansion_path,
         )
         replica.restore_state(container, sites_by_species=sites_by_species)

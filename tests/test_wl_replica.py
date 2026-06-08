@@ -26,6 +26,7 @@ def _e0() -> float:
 def _make_wl_replica(
     schedule: str | None = None,
     recency_visits_per_bin: int = 1000,
+    dos_snapshot_ratio: float | None = 2.0,
 ) -> WangLandauReplica:
     """Construct a WangLandauReplica over a wide window.
 
@@ -35,6 +36,9 @@ def _make_wl_replica(
             the ``schedule`` parameter.
         recency_visits_per_bin: EWMA recency window forwarded to the
             ensemble.
+        dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot
+            ladder forwarded to the ensemble; ``None`` disables
+            snapshotting.
     """
     ce = make_wl_ce()
     atoms = make_wl_atoms()
@@ -53,6 +57,7 @@ def _make_wl_replica(
         random_seed=0,
         ensemble_kwargs=ensemble_kwargs,
         recency_visits_per_bin=recency_visits_per_bin,
+        dos_snapshot_ratio=dos_snapshot_ratio,
     )
 
 
@@ -1000,3 +1005,32 @@ def test_coerce_wl_last_state_keys_to_int_skips_missing_fields():
     last_state: dict[str, object] = {"occupations": [0, 1]}
     _coerce_wl_last_state_keys_to_int(last_state)
     assert last_state == {"occupations": [0, 1]}
+
+
+def test_replica_forwards_dos_snapshot_ratio_to_ensemble():
+    """The replica forwards dos_snapshot_ratio to its ensemble."""
+    replica = _make_wl_replica(dos_snapshot_ratio=4.0)
+    assert replica.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_replica_dos_snapshot_ratio_defaults_to_two():
+    """Omitting dos_snapshot_ratio gives the factor-2 default."""
+    replica = _make_wl_replica()
+    assert replica.ensemble._dos_snapshot_ratio == 2.0
+
+
+def test_dos_snapshot_ratio_reserved_against_ensemble_kwargs():
+    """dos_snapshot_ratio cannot be smuggled via ensemble_kwargs."""
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = _e0()
+    with pytest.raises(ValueError, match="dos_snapshot_ratio"):
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=0,
+            ensemble_kwargs={"dos_snapshot_ratio": 2.0},
+        )
