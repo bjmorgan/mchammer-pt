@@ -84,6 +84,7 @@ def _spawn_wl_worker(tmp_path, ensemble_kwargs: dict | None = None):
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs=dict(ensemble_kwargs or {}),
         recency_visits_per_bin=1000,
+        dos_snapshot_ratio=2.0,
     )
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=True)
@@ -244,6 +245,7 @@ def test_wl_builder_threads_recency_visits_per_bin(tmp_path):
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={},
         recency_visits_per_bin=250,
+        dos_snapshot_ratio=2.0,
     )
     replica = builder.build()
     assert replica.ensemble._recency_visits_per_bin == 250
@@ -263,6 +265,22 @@ def test_process_wl_pool_stores_recency_visits_per_bin(tmp_path):
         recency_visits_per_bin=250,
     ) as pool:
         assert pool._recency_visits_per_bin == 250
+
+
+def test_process_wl_pool_stores_dos_snapshot_ratio(tmp_path):
+    """ProcessWangLandauPool retains the dos_snapshot_ratio it threads."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        dos_snapshot_ratio=4.0,
+    ) as pool:
+        assert pool._dos_snapshot_ratio == 4.0
 
 
 def test_process_pool_rejects_nonpositive_recency_visits_per_bin(tmp_path):
