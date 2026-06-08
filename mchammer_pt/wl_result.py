@@ -134,16 +134,17 @@ class WindowResult:
         When ``fill_factor_limit`` is ``None``, returns the current
         entropy. When set, first checks that the container's current
         fill factor has reached the limit (returns ``None`` if not),
-        then scans fill-factor history for the first step at or below
-        the limit and returns the corresponding entropy snapshot.
-        Returns ``None`` if the history is empty or contains no
+        then scans the union of ``fill_factor_history`` and
+        ``fill_factor_snapshots`` by ascending MC step, returning the
+        entropy at the first step whose fill factor is at or below the
+        limit. Returns ``None`` if both stores are empty or contain no
         matching step.
 
         Args:
             container: per-walker data container.
             fill_factor_limit: if given, returns the entropy snapshot
-                from the first historical step whose fill factor is at
-                or below this limit.
+                from the chronologically first step whose fill factor
+                is at or below this limit.
 
         Returns:
             Entropy dict, or ``None`` if data is absent or the limit
@@ -155,14 +156,18 @@ class WindowResult:
         entropy = last_state["entropy"]
         if fill_factor_limit is not None:
             history = last_state.get("entropy_history", {})
-            if not history:
+            snapshots = last_state.get("entropy_snapshots", {})
+            if not history and not snapshots:
                 return None
             if last_state.get("fill_factor", 1.0) > fill_factor_limit:
                 return None
             ff_history = last_state.get("fill_factor_history", {})
-            for step, ff in ff_history.items():
-                if ff <= fill_factor_limit:
-                    entropy = history[step]
+            ff_snapshots = last_state.get("fill_factor_snapshots", {})
+            ff_map = {**ff_history, **ff_snapshots}
+            entropy_map = {**history, **snapshots}
+            for step in sorted(ff_map):
+                if ff_map[step] <= fill_factor_limit:
+                    entropy = entropy_map[step]
                     break
             else:
                 return None

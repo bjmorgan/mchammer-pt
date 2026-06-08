@@ -15,6 +15,8 @@ def _make_mock_container(
     fill_factor: float = 0.5,
     fill_factor_history: dict | None = None,
     entropy_history: dict | None = None,
+    fill_factor_snapshots: dict | None = None,
+    entropy_snapshots: dict | None = None,
 ) -> object:
     """Build a minimal mock that quacks like WangLandauDataContainer."""
     from unittest.mock import MagicMock
@@ -26,6 +28,8 @@ def _make_mock_container(
         "fill_factor": fill_factor,
         "fill_factor_history": fill_factor_history or {},
         "entropy_history": entropy_history or {},
+        "fill_factor_snapshots": fill_factor_snapshots or {},
+        "entropy_snapshots": entropy_snapshots or {},
     }
     container.ensemble_parameters = {"energy_spacing": energy_spacing}
     container.fill_factor = fill_factor
@@ -250,3 +254,108 @@ def test_get_entropy_fill_factor_limit_no_matching_history_step():
         containers=(c,),
     )
     assert wr.get_entropy(fill_factor_limit=0.25) is None
+
+
+def test_get_entropy_reads_one_over_t_snapshot_below_last_halving():
+    """A limit between the last halving and the final f resolves to a 1/t
+    snapshot -- the case that returns None without the snapshot store."""
+    c = _make_mock_container(
+        entropy={0: 10.0, 1: 20.0},
+        histogram={0: 5, 1: 3},
+        energy_spacing=1.0,
+        fill_factor=1.0 / 128,
+        fill_factor_history={0: 1.0, 100: 0.25, 300: 1.0 / 32},
+        entropy_history={
+            100: {0: 1.0, 1: 2.0},
+            300: {0: 5.0, 1: 9.0},
+        },
+        fill_factor_snapshots={400: 1.0 / 64, 500: 1.0 / 128},
+        entropy_snapshots={
+            400: {0: 8.0, 1: 16.0},
+            500: {0: 10.0, 1: 20.0},
+        },
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    # Limit 1/64 is below the last halving (1/32): first step with
+    # ff <= 1/64 is step 400 -> entropy {0: 8, 1: 16}, shifted {0: 0, 1: 8}.
+    df = wr.get_entropy(fill_factor_limit=1.0 / 64)
+    assert df is not None
+    assert df.loc[0, "entropy"] == pytest.approx(0.0)
+    assert df.loc[1, "entropy"] == pytest.approx(8.0)
+
+
+def test_get_entropy_union_scan_picks_chronologically_first_crossing():
+    """The union scan returns the earliest step whose f <= limit, whether
+    that step sits in the halving history or the 1/t snapshot store."""
+    c = _make_mock_container(
+        entropy={0: 0.0, 1: 0.0},
+        histogram={0: 1, 1: 1},
+        energy_spacing=1.0,
+        fill_factor=1.0 / 128,
+        fill_factor_history={0: 1.0, 100: 0.25, 300: 1.0 / 32},
+        entropy_history={
+            100: {0: 1.0, 1: 1.0},
+            300: {0: 2.0, 1: 2.0},
+        },
+        fill_factor_snapshots={400: 1.0 / 64, 500: 1.0 / 128},
+        entropy_snapshots={
+            400: {0: 4.0, 1: 4.0},
+            500: {0: 8.0, 1: 8.0},
+        },
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    # Limit 0.25: first step with ff <= 0.25 is step 100 (halving history).
+    df_coarse = wr.get_entropy(fill_factor_limit=0.25)
+    assert df_coarse is not None
+    # Limit 1/100 (between 1/64 and 1/128): first step with ff <= 1/100 is
+    # step 500 (the finest snapshot). entropy {0: 8, 1: 8} -> shifted 0.
+    df_fine = wr.get_entropy(fill_factor_limit=1.0 / 100)
+    assert df_fine is not None
+    assert df_fine.loc[0, "entropy"] == pytest.approx(0.0)
+
+
+def test_get_entropy_one_over_t_snapshot_merges_two_walkers():
+    """Per-walker 1/t snapshots merge across walkers at a requested rung."""
+    c0 = _make_mock_container(
+        entropy={0: 0.0, 1: 0.0},
+        histogram={0: 1, 1: 1},
+        energy_spacing=1.0,
+        fill_factor=1.0 / 64,
+        fill_factor_history={0: 1.0, 100: 1.0 / 32},
+        entropy_history={100: {0: 1.0, 1: 1.0}},
+        fill_factor_snapshots={400: 1.0 / 64},
+        entropy_snapshots={400: {0: 2.0, 1: 4.0}},
+    )
+    c1 = _make_mock_container(
+        entropy={0: 0.0, 1: 0.0},
+        histogram={0: 1, 1: 1},
+        energy_spacing=1.0,
+        fill_factor=1.0 / 64,
+        fill_factor_history={0: 1.0, 100: 1.0 / 32},
+        entropy_history={100: {0: 1.0, 1: 1.0}},
+        fill_factor_snapshots={420: 1.0 / 64},
+        entropy_snapshots={420: {0: 6.0, 1: 8.0}},
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c0, c1),
+    )
+    # Each walker's snapshot at f = 1/64: c0 {0:2,1:4}, c1 {0:6,1:8}.
+    # merge_entropies rebases per walker then averages, then min-shifts.
+    # Both walkers have slope +2 from bin 0 to bin 1, so merged is {0:0,1:2}.
+    df = wr.get_entropy(fill_factor_limit=1.0 / 64)
+    assert df is not None
+    assert df.loc[0, "entropy"] == pytest.approx(0.0)
+    assert df.loc[1, "entropy"] == pytest.approx(2.0)
