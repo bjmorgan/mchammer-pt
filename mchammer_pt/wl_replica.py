@@ -798,6 +798,24 @@ class WangLandauReplica:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
+        # Snapshot store: present on checkpoints written after this
+        # feature landed; older checkpoints restore to an empty store.
+        # `last_state` has already passed through
+        # `_coerce_wl_last_state_keys_to_int`, so keys are ints.
+        saved_ff_snaps = last_state.get("fill_factor_snapshots")
+        saved_entropy_snaps = last_state.get("entropy_snapshots")
+        if saved_ff_snaps is not None and saved_entropy_snaps is not None:
+            e._fill_factor_snapshots = {
+                int(k): float(v) for k, v in saved_ff_snaps.items()
+            }
+            e._entropy_snapshots = {
+                int(step): {int(b): float(val) for b, val in entropy.items()}
+                for step, entropy in saved_entropy_snaps.items()
+            }
+        else:
+            e._fill_factor_snapshots = {}
+            e._entropy_snapshots = {}
+        e._rebuild_max_snapshot_rung()
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
         if sites_by_species is not None:

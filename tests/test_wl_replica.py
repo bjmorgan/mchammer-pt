@@ -1070,3 +1070,47 @@ def test_dos_snapshot_ratio_reserved_against_ensemble_kwargs():
             random_seed=0,
             ensemble_kwargs={"dos_snapshot_ratio": 2.0},
         )
+
+
+def test_restore_state_round_trips_snapshot_store():
+    """A refresh + restore round-trip preserves the snapshot store and
+    rebuilds the in-memory rung tracker."""
+    src = _make_wl_replica(dos_snapshot_ratio=2.0)
+    src.ensemble._fill_factor_snapshots = {100: 0.5, 300: 0.25}
+    src.ensemble._entropy_snapshots = {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+    src.refresh_last_state()
+    container = src.data_container()
+
+    dst = _make_wl_replica(dos_snapshot_ratio=2.0)
+    dst.restore_state(container)
+
+    assert dst.ensemble._fill_factor_snapshots == {100: 0.5, 300: 0.25}
+    assert dst.ensemble._entropy_snapshots == {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+    # rung(0.25) = floor(log2(4)) = 2 is the highest recorded rung.
+    assert dst.ensemble._max_snapshot_rung == 2
+
+
+def test_restore_state_legacy_checkpoint_starts_with_empty_snapshot_store():
+    """A checkpoint without the snapshot fields restores to an empty store."""
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("fill_factor_snapshots", None)
+    container._last_state.pop("entropy_snapshots", None)
+
+    dst = _make_wl_replica()
+    dst.ensemble._fill_factor_snapshots = {1: 0.5}  # to be replaced
+    dst.ensemble._entropy_snapshots = {1: {0: 9.0}}  # to be replaced
+    dst.ensemble._max_snapshot_rung = 99
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._fill_factor_snapshots == {}
+    assert dst.ensemble._entropy_snapshots == {}
+    assert dst.ensemble._max_snapshot_rung is None
