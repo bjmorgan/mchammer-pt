@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-06-08
+
 ### Added
 
 - ``dos_snapshot_ratio`` keyword on ``WangLandauParallelTempering`` (also
@@ -25,6 +27,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1/t snapshot store (it previously returned ``None`` there, leaving the
   1/t regime invisible), enabling a convergence-versus-run-length study
   across the whole run.
+
+## [0.19.0] - 2026-06-06
+
+### Added
+
+- ``WangLandauParallelTempering`` multi-walker windows now exchange via a
+  random matching of walkers at each window boundary, replacing the single
+  representative-walker swap, so the per-walker exchange rate no longer
+  dilutes as ``n_walkers_per_window`` increases. Exchange acceptance is
+  evaluated parent-side from a per-walker (energy, density-of-states)
+  cache and accepted swaps are applied in one batched IPC round, so the
+  process backend issues no per-exchange round trips. Replica labels are
+  position-indexed over the total walker count and carried on
+  ``ExchangeHistory``, so multi-walker round-trip counts survive a read
+  back from disk. Canonical parallel tempering is single-walker per rung
+  and is unchanged: the matching degenerates to the single pair with no
+  extra RNG draws, so its exchange stream, labels, and round-trip counts
+  are identical.
+
+### Changed
+
+- The checkpoint schema is bumped to 5, dropping the per-window exchange
+  index. Single-walker schema-4 checkpoints still load; older
+  multi-walker schema-4 checkpoints are rejected with a clear error.
+
+### Removed
+
+- The per-window representative-walker exchange machinery, superseded by
+  the walker-matching exchange.
 
 ## [0.18.0] - 2026-06-04
 
