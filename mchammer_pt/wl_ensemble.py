@@ -32,6 +32,31 @@ def _validate_recency_visits_per_bin(value: object) -> int:
     return int(value)
 
 
+def _validate_dos_snapshot_ratio(value: object) -> float | None:
+    """Return ``value`` as a float ``> 1.0``, ``None`` to disable, else raise.
+
+    Accepts ``None`` (1/t-regime snapshotting disabled) or any finite
+    real strictly greater than ``1.0``. Rejects ``bool``, non-finite
+    values, and ratios ``<= 1.0`` (a ratio of 1 would snapshot every
+    step). Accepts ``object`` because callers pass values read from
+    checkpoint metadata (an untrusted union) as well as the
+    constructor's ``float | None``.
+    """
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float, np.integer, np.floating))
+        or not math.isfinite(value)
+        or float(value) <= 1.0
+    ):
+        raise ValueError(
+            f"dos_snapshot_ratio must be None or a finite float > 1.0; "
+            f"got {value!r}"
+        )
+    return float(value)
+
+
 class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     """`WangLandauEnsemble` with internal halving suppressed.
 

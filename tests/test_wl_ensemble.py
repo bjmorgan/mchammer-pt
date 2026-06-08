@@ -175,6 +175,26 @@ def test_recency_uniform_visits_give_flat_weights():
     assert vals.min() / vals.mean() > 0.8
 
 
+def test_validate_dos_snapshot_ratio_accepts_none_and_above_one():
+    """None disables; any finite ratio > 1.0 is accepted and returned as float."""
+    from mchammer_pt.wl_ensemble import _validate_dos_snapshot_ratio
+
+    assert _validate_dos_snapshot_ratio(None) is None
+    assert _validate_dos_snapshot_ratio(2.0) == 2.0
+    got = _validate_dos_snapshot_ratio(10**0.5)  # sqrt(10), a coarser ladder
+    assert isinstance(got, float)
+    assert got == pytest.approx(10**0.5)
+
+
+def test_validate_dos_snapshot_ratio_rejects_le_one_and_non_finite():
+    """A ratio of 1 (snapshot every step), <1, non-finite, or bool is rejected."""
+    from mchammer_pt.wl_ensemble import _validate_dos_snapshot_ratio
+
+    for bad in (1.0, 0.5, 0.0, -2.0, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="None or a finite float"):
+            _validate_dos_snapshot_ratio(bad)
+
+
 def test_recency_lazy_decay_matches_eager_reference():
     """Decay-on-read reproduces an eager per-step decay reference exactly.
 
