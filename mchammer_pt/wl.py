@@ -8,6 +8,7 @@ log-density-of-states ratio for acceptance.
 
 from __future__ import annotations
 
+import math
 import tempfile
 import warnings
 import weakref
@@ -190,6 +191,20 @@ def _restored_replica_labels(
             f"corrupted or mismatched checkpoint."
         )
     return labels
+
+
+def _decode_dos_snapshot_ratio(meta: dict[str, MetaValue]) -> float | None:
+    """Read ``dos_snapshot_ratio`` from checkpoint meta, decoding NaN as None.
+
+    ``MetaValue`` has no ``None``, so the disabled state is stored as NaN
+    (see ``WangLandauParallelTempering._checkpoint_meta``). Older
+    checkpoints lacking the key default to 2.0 (the factor-2 ladder),
+    matching the constructor default.
+    """
+    raw = meta.get("dos_snapshot_ratio", 2.0)
+    if isinstance(raw, float) and math.isnan(raw):
+        raw = None
+    return _validate_dos_snapshot_ratio(raw)
 
 
 class WangLandauParallelTempering(BaseParallelTempering):
@@ -668,6 +683,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         recency_visits_per_bin = _validate_recency_visits_per_bin(
             meta.get("recency_visits_per_bin", 1000)
         )
+        dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -697,6 +713,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         ensemble_kwargs=ensemble_kwargs,
                         sites_by_species=replica_extras[flat_idx]["sites_by_species"],
                         recency_visits_per_bin=recency_visits_per_bin,
+                        dos_snapshot_ratio=dos_snapshot_ratio,
                     )
                 )
                 flat_idx += 1
@@ -756,6 +773,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
+            dos_snapshot_ratio=dos_snapshot_ratio,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -851,6 +869,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         recency_visits_per_bin = _validate_recency_visits_per_bin(
             meta.get("recency_visits_per_bin", 1000)
         )
+        dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -872,6 +891,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
+            dos_snapshot_ratio=dos_snapshot_ratio,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]

@@ -2084,3 +2084,57 @@ def test_wl_pt_checkpoint_meta_encodes_disabled_as_nan():
     meta = pt._checkpoint_meta()
     assert isinstance(meta["dos_snapshot_ratio"], float)
     assert math.isnan(meta["dos_snapshot_ratio"])
+
+
+def test_resume_threads_dos_snapshot_ratio_from_metadata(tmp_path):
+    """A serial resume reads dos_snapshot_ratio back from checkpoint meta."""
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=1)
+    ckpt = tmp_path / "rewl_state.h5"
+    pt.save_checkpoint(ckpt)
+
+    resumed = WangLandauParallelTempering.resume(
+        ckpt,
+        cluster_expansion=ce,
+    )
+    assert resumed._dos_snapshot_ratio == 4.0
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_resume_threads_disabled_dos_snapshot_ratio_from_metadata(tmp_path):
+    """A run with snapshotting disabled stays disabled across resume (NaN->None)."""
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=None,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=1)
+    ckpt = tmp_path / "rewl_state.h5"
+    pt.save_checkpoint(ckpt)
+
+    resumed = WangLandauParallelTempering.resume(
+        ckpt,
+        cluster_expansion=ce,
+    )
+    assert resumed._dos_snapshot_ratio is None
