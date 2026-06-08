@@ -195,6 +195,32 @@ def test_validate_dos_snapshot_ratio_rejects_le_one_and_non_finite():
             _validate_dos_snapshot_ratio(bad)
 
 
+def test_ensemble_initialises_empty_snapshot_store():
+    """A fresh ensemble has empty snapshot dicts and no recorded rung."""
+    e = _make_ensemble(dos_snapshot_ratio=2.0)
+    assert e._entropy_snapshots == {}
+    assert e._fill_factor_snapshots == {}
+    assert e._max_snapshot_rung is None
+
+
+def test_ensemble_dos_snapshot_ratio_defaults_to_two():
+    """The default ladder is factor-2 (a snapshot each time f halves)."""
+    e = _make_ensemble()
+    assert e._dos_snapshot_ratio == 2.0
+
+
+def test_ensemble_dos_snapshot_ratio_none_disables():
+    """None is stored verbatim to mean 'disabled'."""
+    e = _make_ensemble(dos_snapshot_ratio=None)
+    assert e._dos_snapshot_ratio is None
+
+
+def test_ensemble_rejects_bad_dos_snapshot_ratio():
+    """A ratio <= 1.0 is rejected at construction."""
+    with pytest.raises(ValueError, match="None or a finite float"):
+        _make_ensemble(dos_snapshot_ratio=1.0)
+
+
 def test_recency_lazy_decay_matches_eager_reference():
     """Decay-on-read reproduces an eager per-step decay reference exactly.
 

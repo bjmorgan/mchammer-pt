@@ -62,21 +62,44 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
 
     Bin counters and periodic entropy reshift behave identically to
     upstream. The flatness check, halving, ``_fill_factor_history``
-    recording, histogram reset, BP-phase transition,
-    ``_entropy_history`` snapshots, and ``_converged`` writes in the
-    1/t branch are all suppressed; ``WangLandauWindowGroup`` owns
-    those decisions and applies them via ``WangLandauReplica``.
+    recording, histogram reset, BP-phase transition, and ``_converged``
+    writes in the 1/t branch are all suppressed; ``WangLandauWindowGroup``
+    owns those decisions and applies them via ``WangLandauReplica``.
+
+    Upstream icet records ``_entropy_history`` snapshots in its 1/t
+    branch; those are suppressed here because mchammer-pt re-purposes
+    ``len(_fill_factor_history) - 1`` as the collective halving count,
+    which those writes would inflate. Instead, 1/t-regime DOS snapshots
+    are recorded into a *separate* store (``_entropy_snapshots`` /
+    ``_fill_factor_snapshots``) on a fill-factor rung ladder, leaving the
+    halving history untouched. ``dos_snapshot_ratio`` sets the ladder
+    ratio (``None`` disables); ``2.0`` snapshots each time ``f`` halves.
     """
 
     def __init__(
-        self, *args: Any, recency_visits_per_bin: int = 1000, **kwargs: Any
+        self,
+        *args: Any,
+        recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
+        **kwargs: Any,
     ) -> None:
         recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
+        ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         super().__init__(*args, **kwargs)
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on
         # `_reached_energy_window`).
         self._visited_bins: set[int] = set()
+        # 1/t-regime DOS snapshot store, kept separate from the halving
+        # history so the `len(_fill_factor_history) - 1` halving count
+        # is untouched. Written by `_update_entropy` on a fill-factor
+        # rung ladder; read back via `WindowResult.get_entropy`.
+        self._dos_snapshot_ratio: float | None = ratio
+        self._entropy_snapshots: dict[int, dict[int, float]] = {}
+        self._fill_factor_snapshots: dict[int, float] = {}
+        # In-memory rung tracker; not persisted, rebuilt on resume from
+        # `_fill_factor_snapshots` (see `_rebuild_max_snapshot_rung`).
+        self._max_snapshot_rung: int | None = None
         # EWMA recency state: per-bin weight and the step it was last
         # updated. Decayed lazily (only the visited bin is touched per
         # step; all known bins are decayed at read time).
