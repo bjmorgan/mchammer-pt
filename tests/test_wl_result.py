@@ -359,3 +359,73 @@ def test_get_entropy_one_over_t_snapshot_merges_two_walkers():
     assert df is not None
     assert df.loc[0, "entropy"] == pytest.approx(0.0)
     assert df.loc[1, "entropy"] == pytest.approx(2.0)
+
+
+def test_reconstruct_dos_ladder_and_stitch_each_rung():
+    """Reconstruct per-window DOS at a ladder of fill factors below the last
+    halving, stitch each rung, and confirm the whole-range DOS is recoverable
+    at every rung and refines between rungs."""
+    from mchammer_pt.analysis.dos import stitch_entropy
+
+    energy_spacing = 1.0
+    # Two overlapping windows on a common grid: window A covers bins 0..3,
+    # window B covers bins 2..5 (overlap at bins 2, 3). Each window's walker
+    # carries a 1/t snapshot store at three rungs f = 1/64, 1/128, 1/256,
+    # with the entropy curve sharpening (steeper slope) as f decreases.
+    def window_container(bins, slopes_by_ff):
+        ff_snaps = {}
+        ent_snaps = {}
+        step = 400
+        for ff, slope in slopes_by_ff.items():
+            ff_snaps[step] = ff
+            ent_snaps[step] = {b: slope * b for b in bins}
+            step += 100
+        finest_ff = min(slopes_by_ff)
+        return _make_mock_container(
+            entropy=ent_snaps[max(ent_snaps)],
+            histogram={b: 5 for b in bins},
+            energy_spacing=energy_spacing,
+            fill_factor=finest_ff,
+            fill_factor_history={0: 1.0, 100: 1.0 / 32},
+            entropy_history={100: {b: 0.0 for b in bins}},
+            fill_factor_snapshots=ff_snaps,
+            entropy_snapshots=ent_snaps,
+        )
+
+    ladder = [1.0 / 64, 1.0 / 128, 1.0 / 256]
+    cA = window_container(
+        [0, 1, 2, 3], {1.0 / 64: 1.0, 1.0 / 128: 1.5, 1.0 / 256: 2.0}
+    )
+    cB = window_container(
+        [2, 3, 4, 5], {1.0 / 64: 1.0, 1.0 / 128: 1.5, 1.0 / 256: 2.0}
+    )
+    wrA = WindowResult(
+        energy_limit_left=0.0, energy_limit_right=3.0,
+        energy_spacing=energy_spacing, containers=(cA,),
+    )
+    wrB = WindowResult(
+        energy_limit_left=2.0, energy_limit_right=5.0,
+        energy_spacing=energy_spacing, containers=(cB,),
+    )
+
+    stitched_by_rung = {}
+    for limit in ladder:
+        dfA = wrA.get_entropy(fill_factor_limit=limit)
+        dfB = wrB.get_entropy(fill_factor_limit=limit)
+        # Every rung lies below the last halving (1/32): without the
+        # snapshot store these would be None.
+        assert dfA is not None and dfB is not None
+        stitched, _errors = stitch_entropy([dfA, dfB], energy_spacing)
+        stitched_by_rung[limit] = stitched
+
+    # A whole-range DOS is recoverable at every rung...
+    assert len(stitched_by_rung) == len(ladder)
+    for stitched in stitched_by_rung.values():
+        assert not stitched.empty
+        assert set(stitched.columns) >= {"energy", "entropy"}
+    # ...and the reconstruction refines between rungs (the finest rung's
+    # top-bin entropy exceeds the coarsest rung's, reflecting the sharper
+    # slope). Compare the highest populated bin.
+    coarse = stitched_by_rung[1.0 / 64]
+    fine = stitched_by_rung[1.0 / 256]
+    assert fine["entropy"].max() > coarse["entropy"].max()
