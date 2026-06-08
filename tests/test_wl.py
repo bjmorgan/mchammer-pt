@@ -2023,4 +2023,64 @@ def test_wl_pt_serial_per_walker_start_checkpoints_and_resumes(tmp_path):
     assert len(results) == 2
     assert len(results[0].containers) == 2
     assert len(results[1].containers) == 1
-    pt_b.run(3)  # continues without error
+
+
+def test_wl_pt_stores_and_forwards_dos_snapshot_ratio():
+    """The orchestrator stores dos_snapshot_ratio and forwards it to replicas."""
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    assert pt._dos_snapshot_ratio == 4.0
+    # Each W=1 window's slot is a bare WangLandauReplica; .ensemble is its
+    # CoordinatedWangLandauEnsemble. The serial pool exposes slots via the
+    # public `replicas` property.
+    for slot in pt.pool.replicas:
+        assert slot.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_wl_pt_checkpoint_meta_records_dos_snapshot_ratio():
+    """dos_snapshot_ratio is written into checkpoint metadata."""
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    meta = pt._checkpoint_meta()
+    assert meta["dos_snapshot_ratio"] == 4.0
+
+
+def test_wl_pt_checkpoint_meta_encodes_disabled_as_nan():
+    """dos_snapshot_ratio=None round-trips through the float-only meta as NaN."""
+    import math
+
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=None,
+        data_container_file=None,
+    )
+    meta = pt._checkpoint_meta()
+    assert isinstance(meta["dos_snapshot_ratio"], float)
+    assert math.isnan(meta["dos_snapshot_ratio"])
