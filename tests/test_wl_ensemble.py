@@ -355,3 +355,55 @@ def test_recency_lazy_decay_matches_eager_reference():
     assert np.allclose(
         [got[b] for b in (0, 1, 2)], [expected[b] for b in (0, 1, 2)]
     )
+
+
+def test_rung_tracker_rebuild_on_resume_continues_without_duplicate_or_skip():
+    """After resume, the rebuilt rung tracker neither re-records an
+    already-captured rung nor skips the next one.
+
+    Pins the production scenario: a long 1/t run is checkpointed and
+    resumed mid-regime. ``_max_snapshot_rung`` is not persisted; it is
+    rebuilt from the restored ``_fill_factor_snapshots`` and must leave
+    the ladder seamless across the resume boundary.
+    """
+    # Pre-resume: record rungs 0, 1, 2, 3 (steps 0, 1, 3, 7 on the
+    # f = 1/(step + 1) ladder).
+    pre = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    _drive_one_over_t(pre, range(8))
+    assert set(pre._fill_factor_snapshots) == {0, 1, 3, 7}
+    assert pre._max_snapshot_rung == 3
+
+    # Simulate resume: a fresh ensemble inherits the persisted store and
+    # rebuilds the in-memory tracker from it (no rung tracker is persisted).
+    resumed = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    resumed._fill_factor_snapshots = dict(pre._fill_factor_snapshots)
+    resumed._entropy_snapshots = {
+        step: dict(entropy) for step, entropy in pre._entropy_snapshots.items()
+    }
+    resumed._rebuild_max_snapshot_rung()
+    assert resumed._max_snapshot_rung == 3
+
+    # Continue in the 1/t regime from step 8 (entry still at step 0, so
+    # f = 1/(step + 1)). Steps 8..14 sit in rung 3 (already recorded); step
+    # 15 crosses into rung 4 (f = 1/16) and must record exactly once.
+    resumed._reached_energy_window = True
+    resumed._phase = "1_over_t"
+    resumed._window_entry_step = 0
+    resumed._entropy = {0: 1.0}
+    for step in range(8, 16):
+        resumed._step = step
+        resumed._update_entropy(0)
+
+    # The already-captured rungs are intact and exactly one new snapshot
+    # was added, at the next rung -- no duplicate, no skip.
+    assert set(resumed._fill_factor_snapshots) == {0, 1, 3, 7, 15}
+    assert resumed._fill_factor_snapshots[15] == pytest.approx(1.0 / 16)
+    assert resumed._max_snapshot_rung == 4
