@@ -1096,6 +1096,40 @@ def test_restore_state_round_trips_snapshot_store():
     assert dst.ensemble._max_snapshot_rung == 2
 
 
+def test_halving_count_unchanged_by_one_over_t_snapshots():
+    """window_stats['halvings'] counts only force_halve calls, never the
+    1/t snapshot store -- the decoupling guarantee."""
+    def run(ratio):
+        replica = _make_wl_replica(schedule="1_over_t", dos_snapshot_ratio=ratio)
+        e = replica.ensemble
+        e._reached_energy_window = True
+        # Two collective halves at distinct steps so each appends a new
+        # _fill_factor_history entry (force_halve keys on int(e.step); the
+        # parent seeds the history with the initial fill factor at step 0).
+        e._step = 10
+        replica.force_halve()
+        e._step = 20
+        replica.force_halve()
+        # Switch to 1/t and lay down several snapshots, which go into the
+        # SEPARATE store and must never touch _fill_factor_history.
+        e._phase = "1_over_t"
+        e._window_entry_step = 0
+        e._entropy = {0: 1.0}
+        for step in range(32):
+            e._step = step
+            e._update_entropy(0)
+        return replica
+
+    on = run(2.0)
+    off = run(None)
+    # Initial _fill_factor_history has 1 entry (step 0); two distinct-step
+    # halves (steps 10, 20) add two more -> len 3 -> halvings = 3 - 1 = 2.
+    assert on.window_stats()["halvings"] == 2
+    assert off.window_stats()["halvings"] == 2
+    assert on.ensemble._fill_factor_snapshots != {}
+    assert off.ensemble._fill_factor_snapshots == {}
+
+
 def test_restore_state_legacy_checkpoint_starts_with_empty_snapshot_store():
     """A checkpoint without the snapshot fields restores to an empty store."""
     src = _make_wl_replica()

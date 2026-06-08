@@ -297,6 +297,30 @@ def test_dos_snapshot_ratio_none_records_nothing():
     assert e._entropy_snapshots == {}
 
 
+def test_snapshotting_does_not_alter_entropy_or_halving_history():
+    """Snapshotting is a pure side observation: with the ladder on vs off,
+    the entropy, histogram, fill factor, and halving history are identical."""
+    def run(ratio):
+        e = _make_ensemble(
+            schedule="1_over_t",
+            flatness_check_interval=1_000_000,
+            dos_snapshot_ratio=ratio,
+        )
+        _drive_one_over_t(e, range(64))
+        return e
+
+    on = run(2.0)
+    off = run(None)
+    assert on._entropy == off._entropy
+    assert on._histogram == off._histogram
+    assert on._fill_factor == pytest.approx(off._fill_factor)
+    assert on._fill_factor_history == off._fill_factor_history
+    assert on._entropy_history == off._entropy_history
+    # Only the snapshot store differs.
+    assert on._fill_factor_snapshots != {}
+    assert off._fill_factor_snapshots == {}
+
+
 def test_recency_lazy_decay_matches_eager_reference():
     """Decay-on-read reproduces an eager per-step decay reference exactly.
 
