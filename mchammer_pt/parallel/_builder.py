@@ -119,6 +119,7 @@ class WLBuilder:
     ensemble_cls: type[CoordinatedWangLandauEnsemble]
     ensemble_kwargs: dict[str, Any]
     recency_visits_per_bin: int
+    dos_snapshot_ratio: float | None
 
     def build(self) -> WangLandauReplica:
         """Construct the replica from the configured inputs.
@@ -138,5 +139,6 @@ class WLBuilder:
             ensemble_cls=self.ensemble_cls,
             ensemble_kwargs=self.ensemble_kwargs,
             recency_visits_per_bin=self.recency_visits_per_bin,
+            dos_snapshot_ratio=self.dos_snapshot_ratio,
             cluster_expansion_path=self.ce_path,
         )

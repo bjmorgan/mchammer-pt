@@ -50,6 +50,7 @@ from ..wl_coordinator import (
 )
 from ..wl_ensemble import (
     CoordinatedWangLandauEnsemble,
+    _validate_dos_snapshot_ratio,
     _validate_recency_visits_per_bin,
 )
 from ..wl_initial_structures import expand_initial_structures
@@ -782,6 +783,7 @@ class ProcessWangLandauPool:
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
@@ -790,6 +792,9 @@ class ProcessWangLandauPool:
         self._merge_cadence: MergeCadence = merge_cadence
         self._recency_visits_per_bin: int = _validate_recency_visits_per_bin(
             recency_visits_per_bin
+        )
+        self._dos_snapshot_ratio: float | None = _validate_dos_snapshot_ratio(
+            dos_snapshot_ratio
         )
         self._merge_events: list[MergeEvent] = []
         self._flatness_limit: float = float(
@@ -874,6 +879,7 @@ class ProcessWangLandauPool:
                             ensemble_cls=ensemble_cls,
                             ensemble_kwargs=dict(extra_kwargs),
                             recency_visits_per_bin=self._recency_visits_per_bin,
+                            dos_snapshot_ratio=self._dos_snapshot_ratio,
                         )
                         process = ctx.Process(
                             target=_wl_worker,

@@ -26,6 +26,7 @@ def _e0() -> float:
 def _make_wl_replica(
     schedule: str | None = None,
     recency_visits_per_bin: int = 1000,
+    dos_snapshot_ratio: float | None = 2.0,
 ) -> WangLandauReplica:
     """Construct a WangLandauReplica over a wide window.
 
@@ -35,6 +36,9 @@ def _make_wl_replica(
             the ``schedule`` parameter.
         recency_visits_per_bin: EWMA recency window forwarded to the
             ensemble.
+        dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot
+            ladder forwarded to the ensemble; ``None`` disables
+            snapshotting.
     """
     ce = make_wl_ce()
     atoms = make_wl_atoms()
@@ -53,6 +57,7 @@ def _make_wl_replica(
         random_seed=0,
         ensemble_kwargs=ensemble_kwargs,
         recency_visits_per_bin=recency_visits_per_bin,
+        dos_snapshot_ratio=dos_snapshot_ratio,
     )
 
 
@@ -1000,3 +1005,165 @@ def test_coerce_wl_last_state_keys_to_int_skips_missing_fields():
     last_state: dict[str, object] = {"occupations": [0, 1]}
     _coerce_wl_last_state_keys_to_int(last_state)
     assert last_state == {"occupations": [0, 1]}
+
+
+def test_refresh_last_state_persists_snapshot_store():
+    """refresh_last_state writes both snapshot dicts into _last_state."""
+    replica = _make_wl_replica()
+    e = replica.ensemble
+    e._fill_factor_snapshots = {100: 0.5, 300: 0.25}
+    e._entropy_snapshots = {100: {0: 1.0, 1: 2.0}, 300: {0: 3.0, 1: 4.0}}
+
+    replica.refresh_last_state()
+
+    ls = e._data_container._last_state
+    assert ls["fill_factor_snapshots"] == {100: 0.5, 300: 0.25}
+    assert ls["entropy_snapshots"] == {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+
+
+def test_coerce_wl_last_state_keys_to_int_handles_snapshot_fields():
+    """The snapshot fields get the same int-key coercion as the histories."""
+    from mchammer_pt.wl_replica import _coerce_wl_last_state_keys_to_int
+
+    last_state = {
+        "fill_factor_snapshots": {"100": 0.5, "300": 0.25},
+        "entropy_snapshots": {
+            "100": {"0": 1.0, "-3": 2.0},
+            "300": {"0": 3.0},
+        },
+    }
+    _coerce_wl_last_state_keys_to_int(last_state)
+    assert last_state["fill_factor_snapshots"] == {100: 0.5, 300: 0.25}
+    assert last_state["entropy_snapshots"] == {
+        100: {0: 1.0, -3: 2.0},
+        300: {0: 3.0},
+    }
+
+
+def test_replica_forwards_dos_snapshot_ratio_to_ensemble():
+    """The replica forwards dos_snapshot_ratio to its ensemble."""
+    replica = _make_wl_replica(dos_snapshot_ratio=4.0)
+    assert replica.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_replica_dos_snapshot_ratio_defaults_to_two():
+    """Omitting dos_snapshot_ratio gives the factor-2 default."""
+    replica = _make_wl_replica()
+    assert replica.ensemble._dos_snapshot_ratio == 2.0
+
+
+def test_dos_snapshot_ratio_reserved_against_ensemble_kwargs():
+    """dos_snapshot_ratio cannot be smuggled via ensemble_kwargs."""
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    e0 = _e0()
+    with pytest.raises(ValueError, match="dos_snapshot_ratio"):
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=0,
+            ensemble_kwargs={"dos_snapshot_ratio": 2.0},
+        )
+
+
+def test_restore_state_round_trips_snapshot_store():
+    """A refresh + restore round-trip preserves the snapshot store and
+    rebuilds the in-memory rung tracker."""
+    src = _make_wl_replica(dos_snapshot_ratio=2.0)
+    src.ensemble._fill_factor_snapshots = {100: 0.5, 300: 0.25}
+    src.ensemble._entropy_snapshots = {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+    src.refresh_last_state()
+    container = src.data_container()
+
+    dst = _make_wl_replica(dos_snapshot_ratio=2.0)
+    dst.restore_state(container)
+
+    assert dst.ensemble._fill_factor_snapshots == {100: 0.5, 300: 0.25}
+    assert dst.ensemble._entropy_snapshots == {
+        100: {0: 1.0, 1: 2.0},
+        300: {0: 3.0, 1: 4.0},
+    }
+    # rung(0.25) = floor(log2(4)) = 2 is the highest recorded rung.
+    assert dst.ensemble._max_snapshot_rung == 2
+
+
+def test_halving_count_unchanged_by_one_over_t_snapshots():
+    """window_stats['halvings'] counts only force_halve calls, never the
+    1/t snapshot store -- the decoupling guarantee."""
+    def run(ratio):
+        replica = _make_wl_replica(schedule="1_over_t", dos_snapshot_ratio=ratio)
+        e = replica.ensemble
+        e._reached_energy_window = True
+        # Two collective halves at distinct steps so each appends a new
+        # _fill_factor_history entry (force_halve keys on int(e.step); the
+        # parent seeds the history with the initial fill factor at step 0).
+        e._step = 10
+        replica.force_halve()
+        e._step = 20
+        replica.force_halve()
+        # Switch to 1/t and lay down several snapshots, which go into the
+        # SEPARATE store and must never touch _fill_factor_history.
+        e._phase = "1_over_t"
+        e._window_entry_step = 0
+        e._entropy = {0: 1.0}
+        for step in range(32):
+            e._step = step
+            e._update_entropy(0)
+        return replica
+
+    on = run(2.0)
+    off = run(None)
+    # Initial _fill_factor_history has 1 entry (step 0); two distinct-step
+    # halves (steps 10, 20) add two more -> len 3 -> halvings = 3 - 1 = 2.
+    assert on.window_stats()["halvings"] == 2
+    assert off.window_stats()["halvings"] == 2
+    assert on.ensemble._fill_factor_snapshots != {}
+    assert off.ensemble._fill_factor_snapshots == {}
+
+
+def test_restore_state_legacy_checkpoint_starts_with_empty_snapshot_store():
+    """A checkpoint without the snapshot fields restores to an empty store."""
+    src = _make_wl_replica()
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("fill_factor_snapshots", None)
+    container._last_state.pop("entropy_snapshots", None)
+
+    dst = _make_wl_replica()
+    dst.ensemble._fill_factor_snapshots = {1: 0.5}  # to be replaced
+    dst.ensemble._entropy_snapshots = {1: {0: 9.0}}  # to be replaced
+    dst.ensemble._max_snapshot_rung = 99
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._fill_factor_snapshots == {}
+    assert dst.ensemble._entropy_snapshots == {}
+    assert dst.ensemble._max_snapshot_rung is None
+
+
+def test_restore_state_raises_on_half_present_snapshot_store():
+    """A checkpoint with only one of the two snapshot fields is corruption.
+
+    ``refresh_last_state`` always writes both together, so exactly one
+    present is not a legacy checkpoint -- it is corrupted, and restore
+    must fail loudly rather than silently discard the other half.
+    """
+    src = _make_wl_replica()
+    src.ensemble._fill_factor_snapshots = {100: 0.5}
+    src.ensemble._entropy_snapshots = {100: {0: 1.0}}
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("entropy_snapshots", None)  # drop one half
+
+    dst = _make_wl_replica()
+    with pytest.raises(ValueError, match="only one of"):
+        dst.restore_state(container)

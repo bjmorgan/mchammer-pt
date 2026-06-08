@@ -130,6 +130,7 @@ def test_wl_builder_build_returns_wl_replica(tmp_path):
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={},
         recency_visits_per_bin=1000,
+        dos_snapshot_ratio=2.0,
     )
     replica = builder.build()
     assert isinstance(replica, WangLandauReplica)
@@ -168,6 +169,38 @@ def test_canonical_builder_picklable(tmp_path):
     assert np.array_equal(restored.atoms.pbc, builder.atoms.pbc)
 
 
+def test_wl_builder_forwards_dos_snapshot_ratio(tmp_path):
+    """WLBuilder.build() forwards dos_snapshot_ratio to the ensemble."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    ce_path = tmp_path / "ce.dat"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    builder = WLBuilder(
+        ce_path=str(ce_path),
+        atoms=AtomsSpec.from_atoms(atoms),
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={},
+        recency_visits_per_bin=1000,
+        dos_snapshot_ratio=4.0,
+    )
+    replica = builder.build()
+    assert replica.ensemble._dos_snapshot_ratio == 4.0
+
+
 def test_wl_builder_picklable(tmp_path):
     """WLBuilder round-trips through pickle (required for spawn)."""
     from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
@@ -188,6 +221,7 @@ def test_wl_builder_picklable(tmp_path):
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs={},
         recency_visits_per_bin=1000,
+        dos_snapshot_ratio=2.0,
     )
     restored = pickle.loads(pickle.dumps(builder))
     assert restored.ce_path == builder.ce_path

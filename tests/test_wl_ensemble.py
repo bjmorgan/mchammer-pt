@@ -175,6 +175,152 @@ def test_recency_uniform_visits_give_flat_weights():
     assert vals.min() / vals.mean() > 0.8
 
 
+def test_validate_dos_snapshot_ratio_accepts_none_and_above_one():
+    """None disables; any finite ratio > 1.0 is accepted and returned as float."""
+    from mchammer_pt.wl_ensemble import _validate_dos_snapshot_ratio
+
+    assert _validate_dos_snapshot_ratio(None) is None
+    assert _validate_dos_snapshot_ratio(2.0) == 2.0
+    got = _validate_dos_snapshot_ratio(10**0.5)  # sqrt(10), a coarser ladder
+    assert isinstance(got, float)
+    assert got == pytest.approx(10**0.5)
+
+
+def test_validate_dos_snapshot_ratio_rejects_le_one_and_non_finite():
+    """A ratio of 1 (snapshot every step), <1, non-finite, or bool is rejected."""
+    from mchammer_pt.wl_ensemble import _validate_dos_snapshot_ratio
+
+    for bad in (1.0, 0.5, 0.0, -2.0, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="None or a finite float"):
+            _validate_dos_snapshot_ratio(bad)
+
+
+def test_ensemble_initialises_empty_snapshot_store():
+    """A fresh ensemble has empty snapshot dicts and no recorded rung."""
+    e = _make_ensemble(dos_snapshot_ratio=2.0)
+    assert e._entropy_snapshots == {}
+    assert e._fill_factor_snapshots == {}
+    assert e._max_snapshot_rung is None
+
+
+def test_ensemble_dos_snapshot_ratio_defaults_to_two():
+    """The default ladder is factor-2 (a snapshot each time f halves)."""
+    e = _make_ensemble()
+    assert e._dos_snapshot_ratio == 2.0
+
+
+def test_ensemble_dos_snapshot_ratio_none_disables():
+    """None is stored verbatim to mean 'disabled'."""
+    e = _make_ensemble(dos_snapshot_ratio=None)
+    assert e._dos_snapshot_ratio is None
+
+
+def test_ensemble_rejects_bad_dos_snapshot_ratio():
+    """A ratio <= 1.0 is rejected at construction."""
+    with pytest.raises(ValueError, match="None or a finite float"):
+        _make_ensemble(dos_snapshot_ratio=1.0)
+
+
+def _drive_one_over_t(e, steps):
+    """Call `_update_entropy(0)` once per entry in `steps`, setting `_step`.
+
+    Sets up a forced 1/t phase with window entry at step 0, so
+    ``f = 1/(step + 1)`` on each call (matching the live 1/t update).
+    """
+    e._reached_energy_window = True
+    e._phase = "1_over_t"
+    e._window_entry_step = 0
+    e._entropy = {0: 1.0}
+    for step in steps:
+        e._step = step
+        e._update_entropy(0)
+
+
+def test_one_over_t_records_snapshots_on_factor_two_ladder():
+    """Snapshots land on the f = 2^-k ladder; one per rung, baseline first."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    # f = 1/(step+1): rungs at f = 1, 1/2, 1/4, 1/8 -> steps 0, 1, 3, 7.
+    _drive_one_over_t(e, range(8))
+    assert set(e._fill_factor_snapshots) == {0, 1, 3, 7}
+    assert e._fill_factor_snapshots[0] == pytest.approx(1.0)
+    assert e._fill_factor_snapshots[1] == pytest.approx(1.0 / 2)
+    assert e._fill_factor_snapshots[3] == pytest.approx(1.0 / 4)
+    assert e._fill_factor_snapshots[7] == pytest.approx(1.0 / 8)
+    # Each snapshot captured the live entropy at that step.
+    assert set(e._entropy_snapshots) == {0, 1, 3, 7}
+    assert e._entropy_snapshots[7] == e._entropy
+    # The step-1 snapshot holds its own intermediate entropy (2.5), not a
+    # live reference that would later read the final value.
+    assert e._entropy_snapshots[1] == pytest.approx({0: 2.5})
+
+
+def test_coarser_ratio_records_fewer_snapshots():
+    """A larger ratio lays down fewer rungs over the same f-range."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=4.0,
+    )
+    # ratio 4: rungs at f = 1, 1/4, 1/16 -> steps 0, 3, 15.
+    _drive_one_over_t(e, range(16))
+    assert set(e._fill_factor_snapshots) == {0, 3, 15}
+
+
+def test_no_snapshots_in_halving_phase():
+    """The trigger only fires in the 1/t phase."""
+    e = _make_ensemble(
+        flatness_check_interval=1_000_000, dos_snapshot_ratio=2.0
+    )
+    e._reached_energy_window = True
+    e._phase = "halving"
+    e._entropy = {0: 1.0}
+    for step in range(8):
+        e._step = step
+        e._update_entropy(0)
+    assert e._fill_factor_snapshots == {}
+    assert e._entropy_snapshots == {}
+
+
+def test_dos_snapshot_ratio_none_records_nothing():
+    """Disabling the ladder leaves the store empty even in the 1/t phase."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=None,
+    )
+    _drive_one_over_t(e, range(8))
+    assert e._fill_factor_snapshots == {}
+    assert e._entropy_snapshots == {}
+
+
+def test_snapshotting_does_not_alter_entropy_or_halving_history():
+    """Snapshotting is a pure side observation: with the ladder on vs off,
+    the entropy, histogram, fill factor, and halving history are identical."""
+    def run(ratio):
+        e = _make_ensemble(
+            schedule="1_over_t",
+            flatness_check_interval=1_000_000,
+            dos_snapshot_ratio=ratio,
+        )
+        _drive_one_over_t(e, range(64))
+        return e
+
+    on = run(2.0)
+    off = run(None)
+    assert on._entropy == off._entropy
+    assert on._histogram == off._histogram
+    assert on._fill_factor == pytest.approx(off._fill_factor)
+    assert on._fill_factor_history == off._fill_factor_history
+    assert on._entropy_history == off._entropy_history
+    # Only the snapshot store differs.
+    assert on._fill_factor_snapshots != {}
+    assert off._fill_factor_snapshots == {}
+
+
 def test_recency_lazy_decay_matches_eager_reference():
     """Decay-on-read reproduces an eager per-step decay reference exactly.
 
@@ -209,3 +355,55 @@ def test_recency_lazy_decay_matches_eager_reference():
     assert np.allclose(
         [got[b] for b in (0, 1, 2)], [expected[b] for b in (0, 1, 2)]
     )
+
+
+def test_rung_tracker_rebuild_on_resume_continues_without_duplicate_or_skip():
+    """After resume, the rebuilt rung tracker neither re-records an
+    already-captured rung nor skips the next one.
+
+    Pins the production scenario: a long 1/t run is checkpointed and
+    resumed mid-regime. ``_max_snapshot_rung`` is not persisted; it is
+    rebuilt from the restored ``_fill_factor_snapshots`` and must leave
+    the ladder seamless across the resume boundary.
+    """
+    # Pre-resume: record rungs 0, 1, 2, 3 (steps 0, 1, 3, 7 on the
+    # f = 1/(step + 1) ladder).
+    pre = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    _drive_one_over_t(pre, range(8))
+    assert set(pre._fill_factor_snapshots) == {0, 1, 3, 7}
+    assert pre._max_snapshot_rung == 3
+
+    # Simulate resume: a fresh ensemble inherits the persisted store and
+    # rebuilds the in-memory tracker from it (no rung tracker is persisted).
+    resumed = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    resumed._fill_factor_snapshots = dict(pre._fill_factor_snapshots)
+    resumed._entropy_snapshots = {
+        step: dict(entropy) for step, entropy in pre._entropy_snapshots.items()
+    }
+    resumed._rebuild_max_snapshot_rung()
+    assert resumed._max_snapshot_rung == 3
+
+    # Continue in the 1/t regime from step 8 (entry still at step 0, so
+    # f = 1/(step + 1)). Steps 8..14 sit in rung 3 (already recorded); step
+    # 15 crosses into rung 4 (f = 1/16) and must record exactly once.
+    resumed._reached_energy_window = True
+    resumed._phase = "1_over_t"
+    resumed._window_entry_step = 0
+    resumed._entropy = {0: 1.0}
+    for step in range(8, 16):
+        resumed._step = step
+        resumed._update_entropy(0)
+
+    # The already-captured rungs are intact and exactly one new snapshot
+    # was added, at the next rung -- no duplicate, no skip.
+    assert set(resumed._fill_factor_snapshots) == {0, 1, 3, 7, 15}
+    assert resumed._fill_factor_snapshots[15] == pytest.approx(1.0 / 16)
+    assert resumed._max_snapshot_rung == 4

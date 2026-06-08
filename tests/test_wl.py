@@ -2023,4 +2023,175 @@ def test_wl_pt_serial_per_walker_start_checkpoints_and_resumes(tmp_path):
     assert len(results) == 2
     assert len(results[0].containers) == 2
     assert len(results[1].containers) == 1
-    pt_b.run(3)  # continues without error
+
+
+def test_wl_pt_stores_and_forwards_dos_snapshot_ratio():
+    """The orchestrator stores dos_snapshot_ratio and forwards it to replicas."""
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    assert pt._dos_snapshot_ratio == 4.0
+    # Each W=1 window's slot is a bare WangLandauReplica; .ensemble is its
+    # CoordinatedWangLandauEnsemble. The serial pool exposes slots via the
+    # public `replicas` property.
+    for slot in pt.pool.replicas:
+        assert slot.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_wl_pt_checkpoint_meta_records_dos_snapshot_ratio():
+    """dos_snapshot_ratio is written into checkpoint metadata."""
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    meta = pt._checkpoint_meta()
+    assert meta["dos_snapshot_ratio"] == 4.0
+
+
+def test_wl_pt_checkpoint_meta_encodes_disabled_as_nan():
+    """dos_snapshot_ratio=None round-trips through the float-only meta as NaN."""
+    import math
+
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=make_wl_ce(),
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=None,
+        data_container_file=None,
+    )
+    meta = pt._checkpoint_meta()
+    assert isinstance(meta["dos_snapshot_ratio"], float)
+    assert math.isnan(meta["dos_snapshot_ratio"])
+
+
+def test_resume_threads_dos_snapshot_ratio_from_metadata(tmp_path):
+    """A serial resume reads dos_snapshot_ratio back from checkpoint meta."""
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=4.0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=1)
+    ckpt = tmp_path / "rewl_state.h5"
+    pt.save_checkpoint(ckpt)
+
+    resumed = WangLandauParallelTempering.resume(
+        ckpt,
+        cluster_expansion=ce,
+    )
+    assert resumed._dos_snapshot_ratio == 4.0
+    for slot in resumed.pool.replicas:
+        assert slot.ensemble._dos_snapshot_ratio == 4.0
+
+
+def test_resume_threads_disabled_dos_snapshot_ratio_from_metadata(tmp_path):
+    """A run with snapshotting disabled stays disabled across resume (NaN->None)."""
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=None,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=1)
+    ckpt = tmp_path / "rewl_state.h5"
+    pt.save_checkpoint(ckpt)
+
+    resumed = WangLandauParallelTempering.resume(
+        ckpt,
+        cluster_expansion=ce,
+    )
+    assert resumed._dos_snapshot_ratio is None
+
+
+def test_resume_round_trips_non_empty_1_over_t_snapshot_store(tmp_path):
+    """A non-empty 1/t snapshot store survives a real HDF5 checkpoint and
+    resume, and get_entropy reads it back below the last halving.
+
+    Exercises the full persistence chain on non-empty snapshot content --
+    refresh_last_state -> HDF5 serialise -> HDF5 read -> integer-key
+    coercion -> restore_state -> get_entropy union scan. The in-memory
+    round-trip unit tests never hit the real string-key-to-int-key
+    coercion against the serialiser, so a regression there would silently
+    drop every 1/t snapshot on resume with no failing test.
+    """
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _initial_energy()
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        dos_snapshot_ratio=2.0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=1)
+
+    # Seed a non-empty 1/t snapshot store on each window's walker, with the
+    # live fill factor below the snapshot rungs so get_entropy's guard
+    # passes for a below-rung limit.
+    seeded_ff = {400: 1.0 / 64, 500: 1.0 / 128}
+    seeded_entropy = {400: {0: 8.0, 1: 16.0}, 500: {0: 10.0, 1: 20.0}}
+    for replica in pt.pool.replicas:
+        replica.ensemble._fill_factor_snapshots = dict(seeded_ff)
+        replica.ensemble._entropy_snapshots = {
+            step: dict(entropy) for step, entropy in seeded_entropy.items()
+        }
+        replica.ensemble._fill_factor = 1.0 / 128
+
+    ckpt = tmp_path / "rewl_state.h5"
+    pt.save_checkpoint(ckpt)
+
+    resumed = WangLandauParallelTempering.resume(ckpt, cluster_expansion=ce)
+
+    # The store survives the real HDF5 round-trip with integer keys
+    # restored (string keys would fail these equality checks).
+    for replica in resumed.pool.replicas:
+        assert replica.ensemble._fill_factor_snapshots == seeded_ff
+        assert replica.ensemble._entropy_snapshots == seeded_entropy
+
+    # And get_entropy reads a snapshot back at a below-last-halving limit
+    # (1/64), where without the persisted store it would return None.
+    for window in resumed.results():
+        df = window.get_entropy(fill_factor_limit=1.0 / 64)
+        assert df is not None
+        assert not df.empty

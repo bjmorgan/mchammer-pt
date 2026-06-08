@@ -50,16 +50,27 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
         "energy_limit_right",
         "random_seed",
         "recency_visits_per_bin",
+        "dos_snapshot_ratio",
         "dc_filename",
     }
 )
 
-# `_last_state` fields whose dict keys are integer bin indices.
-# JSON round-trips coerce these to strings; the conversion has to be
-# reversed before mchammer's `_restart_ensemble` reads them. Matches
-# the set `WangLandauDataContainer.read` converts upstream.
+# `_last_state` fields whose dict keys are integers. JSON round-trips
+# coerce these to strings; the conversion has to be reversed before
+# mchammer's `_restart_ensemble` reads them. Outer keys are bin indices
+# for `histogram`/`entropy` and MC-step indices for the `*_history` /
+# `*_snapshots` maps (whose nested entropy values are bin-indexed too).
+# The history fields mirror what `WangLandauDataContainer.read` coerces
+# upstream; the snapshot fields follow the same convention.
 _WL_INT_KEY_FIELDS: frozenset[str] = frozenset(
-    {"histogram", "entropy", "fill_factor_history", "entropy_history"}
+    {
+        "histogram",
+        "entropy",
+        "fill_factor_history",
+        "entropy_history",
+        "fill_factor_snapshots",
+        "entropy_snapshots",
+    }
 )
 
 
@@ -243,6 +254,8 @@ class WangLandauReplica:
             appear here — they are set by the wrapper.
         recency_visits_per_bin: EWMA recency window forwarded to the
             ensemble's recency-flatness diagnostic.
+        dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot ladder
+            forwarded to the ensemble; ``None`` disables snapshotting.
         cluster_expansion_path: same semantics as
             `mchammer_pt.replica.Replica`.
 
@@ -266,6 +279,7 @@ class WangLandauReplica:
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._energy_spacing = float(energy_spacing)
@@ -298,7 +312,8 @@ class WangLandauReplica:
                 f"arguments (structure/calculator from "
                 f"cluster_expansion+atoms; energy_spacing, "
                 f"energy_limit_left, energy_limit_right, "
-                f"random_seed, recency_visits_per_bin from their "
+                f"random_seed, recency_visits_per_bin, "
+                f"dos_snapshot_ratio from their "
                 f"dedicated parameters; "
                 f"dc_filename is always pinned to None to disable "
                 f"periodic on-disk writes)."
@@ -316,6 +331,7 @@ class WangLandauReplica:
                 random_seed=int(random_seed),
                 dc_filename=None,
                 recency_visits_per_bin=recency_visits_per_bin,
+                dos_snapshot_ratio=dos_snapshot_ratio,
                 **extra,
             )
             self._rng_state = random.getstate()
@@ -654,9 +670,10 @@ class WangLandauReplica:
         """Populate ``_last_state`` on the live container from ensemble state.
 
         Writes the fields that ``WindowResult`` reads (entropy,
-        histogram, fill_factor, fill_factor_history, entropy_history)
-        and the 1/t-schedule fields (schedule, phase,
-        window_entry_step). Idempotent.
+        histogram, fill_factor, fill_factor_history, entropy_history,
+        fill_factor_snapshots, entropy_snapshots), the 1/t-schedule
+        fields (schedule, phase, window_entry_step), and visited_bins.
+        Idempotent.
         """
         from collections import OrderedDict
 
@@ -677,6 +694,17 @@ class WangLandauReplica:
         e._data_container._last_state["window_entry_step"] = e._window_entry_step
         e._data_container._last_state["visited_bins"] = sorted(
             e._visited_bins
+        )
+        e._data_container._last_state["fill_factor_snapshots"] = dict(
+            e._fill_factor_snapshots
+        )
+        # Each entropy snapshot is already sorted at creation (see the
+        # 1/t trigger in CoordinatedWangLandauEnsemble._update_entropy),
+        # so a shallow outer copy suffices -- no per-bin re-sort on this
+        # frequently-called path. Mirrors how `entropy_history` (sorted
+        # in `force_halve`) is passed through unchanged.
+        e._data_container._last_state["entropy_snapshots"] = dict(
+            e._entropy_snapshots
         )
 
     def finalise_for_reporting(self) -> None:
@@ -778,6 +806,33 @@ class WangLandauReplica:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
+        # Snapshot store: present on checkpoints written after this
+        # feature landed; older checkpoints restore to an empty store.
+        # `last_state` has already passed through
+        # `_coerce_wl_last_state_keys_to_int`, so keys are ints.
+        saved_ff_snaps = last_state.get("fill_factor_snapshots")
+        saved_entropy_snaps = last_state.get("entropy_snapshots")
+        if saved_ff_snaps is None and saved_entropy_snaps is None:
+            # Legacy checkpoint predating the snapshot store.
+            e._fill_factor_snapshots = {}
+            e._entropy_snapshots = {}
+        elif saved_ff_snaps is not None and saved_entropy_snaps is not None:
+            e._fill_factor_snapshots = {
+                int(k): float(v) for k, v in saved_ff_snaps.items()
+            }
+            e._entropy_snapshots = {
+                int(step): {int(b): float(val) for b, val in entropy.items()}
+                for step, entropy in saved_entropy_snaps.items()
+            }
+        else:
+            # The two are always written together by refresh_last_state;
+            # exactly one present signals a corrupted checkpoint.
+            raise ValueError(
+                "checkpoint has only one of fill_factor_snapshots / "
+                "entropy_snapshots; the two are always persisted together, "
+                "so this signals a corrupted checkpoint."
+            )
+        e._rebuild_max_snapshot_rung()
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
         if sites_by_species is not None:
@@ -799,6 +854,7 @@ class WangLandauReplica:
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> WangLandauReplica:
@@ -813,6 +869,7 @@ class WangLandauReplica:
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
             recency_visits_per_bin=recency_visits_per_bin,
+            dos_snapshot_ratio=dos_snapshot_ratio,
             cluster_expansion_path=cluster_expansion_path,
         )
         replica.restore_state(container, sites_by_species=sites_by_species)

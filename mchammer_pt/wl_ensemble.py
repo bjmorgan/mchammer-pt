@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from typing import Any, cast
 
 import numpy as np
@@ -32,26 +33,78 @@ def _validate_recency_visits_per_bin(value: object) -> int:
     return int(value)
 
 
+def _validate_dos_snapshot_ratio(value: object) -> float | None:
+    """Return ``value`` as a float ``> 1.0``, ``None`` to disable, else raise.
+
+    Accepts ``None`` (1/t-regime snapshotting disabled) or any finite
+    real strictly greater than ``1.0``. Rejects ``bool``, non-finite
+    values, and ratios ``<= 1.0`` (a ratio of 1 would snapshot every
+    step). Accepts ``object`` because callers pass values read from
+    checkpoint metadata (an untrusted union) as well as the
+    constructor's ``float | None``.
+    """
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float, np.integer, np.floating))
+        or not math.isfinite(value)
+        or float(value) <= 1.0
+    ):
+        raise ValueError(
+            f"dos_snapshot_ratio must be None or a finite float > 1.0; "
+            f"got {value!r}"
+        )
+    return float(value)
+
+
 class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     """`WangLandauEnsemble` with internal halving suppressed.
 
     Bin counters and periodic entropy reshift behave identically to
     upstream. The flatness check, halving, ``_fill_factor_history``
-    recording, histogram reset, BP-phase transition,
-    ``_entropy_history`` snapshots, and ``_converged`` writes in the
-    1/t branch are all suppressed; ``WangLandauWindowGroup`` owns
-    those decisions and applies them via ``WangLandauReplica``.
+    recording, histogram reset, BP-phase transition, and ``_converged``
+    writes in the 1/t branch are all suppressed; ``WangLandauWindowGroup``
+    owns those decisions and applies them via ``WangLandauReplica``.
+
+    Upstream icet's 1/t branch records ``_entropy_history`` snapshots
+    autonomously; that is suppressed here. In the coordinator design the
+    halving history is written only by ``force_halve`` -- one
+    ``_entropy_history`` entry per collective halve, alongside the
+    matching ``_fill_factor_history`` entry -- so the ensemble must not
+    write either history dict itself; an autonomous 1/t write would add
+    ``_entropy_history`` entries the coordinator never made. 1/t-regime
+    DOS is instead recorded into a *separate* store
+    (``_entropy_snapshots`` / ``_fill_factor_snapshots``) on a
+    fill-factor rung ladder, leaving the halving history to the
+    coordinator. ``dos_snapshot_ratio`` sets the ladder ratio (``None``
+    disables); ``2.0`` snapshots each time ``f`` halves.
     """
 
     def __init__(
-        self, *args: Any, recency_visits_per_bin: int = 1000, **kwargs: Any
+        self,
+        *args: Any,
+        recency_visits_per_bin: int = 1000,
+        dos_snapshot_ratio: float | None = 2.0,
+        **kwargs: Any,
     ) -> None:
         recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
+        ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         super().__init__(*args, **kwargs)
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on
         # `_reached_energy_window`).
         self._visited_bins: set[int] = set()
+        # 1/t-regime DOS snapshot store, kept separate from the halving
+        # history so the `len(_fill_factor_history) - 1` halving count
+        # is untouched. Written by `_update_entropy` on a fill-factor
+        # rung ladder; read back via `WindowResult.get_entropy`.
+        self._dos_snapshot_ratio: float | None = ratio
+        self._entropy_snapshots: dict[int, dict[int, float]] = {}
+        self._fill_factor_snapshots: dict[int, float] = {}
+        # In-memory rung tracker; not persisted, rebuilt on resume from
+        # `_fill_factor_snapshots` (see `_rebuild_max_snapshot_rung`).
+        self._max_snapshot_rung: int | None = None
         # EWMA recency state: per-bin weight and the step it was last
         # updated. Decayed lazily (only the visited bin is touched per
         # step; all known bins are decayed at read time).
@@ -97,6 +150,51 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             ref = np.min(list(self._entropy.values()))
             for k in self._entropy:
                 self._entropy[k] -= ref
+
+        if (
+            self._phase == "1_over_t"
+            and self._dos_snapshot_ratio is not None
+        ):
+            rung = self._snapshot_rung(self._fill_factor)
+            if self._max_snapshot_rung is None or rung > self._max_snapshot_rung:
+                step = int(self.step)
+                self._fill_factor_snapshots[step] = float(self._fill_factor)
+                # Sort once here (as `force_halve` does for the halving
+                # history) so `refresh_last_state` -- called on every
+                # `results()` / GET_DC -- can copy without re-sorting.
+                self._entropy_snapshots[step] = OrderedDict(
+                    sorted(self._entropy.items())
+                )
+                self._max_snapshot_rung = rung
+
+    def _snapshot_rung(self, fill_factor: float) -> int:
+        """Fill-factor rung index on the configured log ladder.
+
+        ``floor(log(1/f) / log(ratio))``. A pure function of ``f``, so
+        the ladder is drift-free; at ``ratio = 2`` the rungs fall at
+        ``f = 2^-k``, coinciding with the halving ladder. Only called
+        when ``_dos_snapshot_ratio`` is not ``None``.
+        """
+        assert self._dos_snapshot_ratio is not None
+        return math.floor(
+            math.log(1.0 / fill_factor) / math.log(self._dos_snapshot_ratio)
+        )
+
+    def _rebuild_max_snapshot_rung(self) -> None:
+        """Recompute ``_max_snapshot_rung`` from the snapshot store.
+
+        The rung tracker is in-memory only; on resume it is derived from
+        the fill factors already in ``_fill_factor_snapshots`` using the
+        configured ratio. An empty store, or disabled snapshotting,
+        resets it to ``None`` (so the next 1/t step re-baselines).
+        """
+        if self._dos_snapshot_ratio is None or not self._fill_factor_snapshots:
+            self._max_snapshot_rung = None
+            return
+        self._max_snapshot_rung = max(
+            self._snapshot_rung(f)
+            for f in self._fill_factor_snapshots.values()
+        )
 
     def _recency_alpha(self) -> float:
         """EWMA rate ``1 / tau`` with ``tau = recency_visits_per_bin * N``.
