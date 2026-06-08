@@ -146,6 +146,46 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             for k in self._entropy:
                 self._entropy[k] -= ref
 
+        if (
+            self._phase == "1_over_t"
+            and self._dos_snapshot_ratio is not None
+        ):
+            rung = self._snapshot_rung(self._fill_factor)
+            if self._max_snapshot_rung is None or rung > self._max_snapshot_rung:
+                step = int(self.step)
+                self._fill_factor_snapshots[step] = float(self._fill_factor)
+                self._entropy_snapshots[step] = dict(self._entropy)
+                self._max_snapshot_rung = rung
+
+    def _snapshot_rung(self, fill_factor: float) -> int:
+        """Fill-factor rung index on the configured log ladder.
+
+        ``floor(log(1/f) / log(ratio))``. A pure function of ``f``, so
+        the ladder is drift-free; at ``ratio = 2`` the rungs fall at
+        ``f = 2^-k``, coinciding with the halving ladder. Only called
+        when ``_dos_snapshot_ratio`` is not ``None``.
+        """
+        assert self._dos_snapshot_ratio is not None
+        return math.floor(
+            math.log(1.0 / fill_factor) / math.log(self._dos_snapshot_ratio)
+        )
+
+    def _rebuild_max_snapshot_rung(self) -> None:
+        """Recompute ``_max_snapshot_rung`` from the snapshot store.
+
+        The rung tracker is in-memory only; on resume it is derived from
+        the fill factors already in ``_fill_factor_snapshots`` using the
+        configured ratio. An empty store, or disabled snapshotting,
+        resets it to ``None`` (so the next 1/t step re-baselines).
+        """
+        if self._dos_snapshot_ratio is None or not self._fill_factor_snapshots:
+            self._max_snapshot_rung = None
+            return
+        self._max_snapshot_rung = max(
+            self._snapshot_rung(f)
+            for f in self._fill_factor_snapshots.values()
+        )
+
     def _recency_alpha(self) -> float:
         """EWMA rate ``1 / tau`` with ``tau = recency_visits_per_bin * N``.
 

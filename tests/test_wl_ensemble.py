@@ -221,6 +221,82 @@ def test_ensemble_rejects_bad_dos_snapshot_ratio():
         _make_ensemble(dos_snapshot_ratio=1.0)
 
 
+def _drive_one_over_t(e, steps):
+    """Call `_update_entropy(0)` once per entry in `steps`, setting `_step`.
+
+    Sets up a forced 1/t phase with window entry at step 0, so
+    ``f = 1/(step + 1)`` on each call (matching the live 1/t update).
+    """
+    e._reached_energy_window = True
+    e._phase = "1_over_t"
+    e._window_entry_step = 0
+    e._entropy = {0: 1.0}
+    for step in steps:
+        e._step = step
+        e._update_entropy(0)
+
+
+def test_one_over_t_records_snapshots_on_factor_two_ladder():
+    """Snapshots land on the f = 2^-k ladder; one per rung, baseline first."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=2.0,
+    )
+    # f = 1/(step+1): rungs at f = 1, 1/2, 1/4, 1/8 -> steps 0, 1, 3, 7.
+    _drive_one_over_t(e, range(8))
+    assert set(e._fill_factor_snapshots) == {0, 1, 3, 7}
+    assert e._fill_factor_snapshots[0] == pytest.approx(1.0)
+    assert e._fill_factor_snapshots[1] == pytest.approx(1.0 / 2)
+    assert e._fill_factor_snapshots[3] == pytest.approx(1.0 / 4)
+    assert e._fill_factor_snapshots[7] == pytest.approx(1.0 / 8)
+    # Each snapshot captured the live entropy at that step.
+    assert set(e._entropy_snapshots) == {0, 1, 3, 7}
+    assert e._entropy_snapshots[7] == e._entropy
+    # The step-1 snapshot holds its own intermediate entropy (2.5), not a
+    # live reference that would later read the final value.
+    assert e._entropy_snapshots[1] == pytest.approx({0: 2.5})
+
+
+def test_coarser_ratio_records_fewer_snapshots():
+    """A larger ratio lays down fewer rungs over the same f-range."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=4.0,
+    )
+    # ratio 4: rungs at f = 1, 1/4, 1/16 -> steps 0, 3, 15.
+    _drive_one_over_t(e, range(16))
+    assert set(e._fill_factor_snapshots) == {0, 3, 15}
+
+
+def test_no_snapshots_in_halving_phase():
+    """The trigger only fires in the 1/t phase."""
+    e = _make_ensemble(
+        flatness_check_interval=1_000_000, dos_snapshot_ratio=2.0
+    )
+    e._reached_energy_window = True
+    e._phase = "halving"
+    e._entropy = {0: 1.0}
+    for step in range(8):
+        e._step = step
+        e._update_entropy(0)
+    assert e._fill_factor_snapshots == {}
+    assert e._entropy_snapshots == {}
+
+
+def test_dos_snapshot_ratio_none_records_nothing():
+    """Disabling the ladder leaves the store empty even in the 1/t phase."""
+    e = _make_ensemble(
+        schedule="1_over_t",
+        flatness_check_interval=1_000_000,
+        dos_snapshot_ratio=None,
+    )
+    _drive_one_over_t(e, range(8))
+    assert e._fill_factor_snapshots == {}
+    assert e._entropy_snapshots == {}
+
+
 def test_recency_lazy_decay_matches_eager_reference():
     """Decay-on-read reproduces an eager per-step decay reference exactly.
 
