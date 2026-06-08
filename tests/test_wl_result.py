@@ -460,3 +460,36 @@ def test_get_entropy_skips_unpaired_init_seed_step():
     assert df is not None
     assert df.loc[0, "entropy"] == pytest.approx(0.0)
     assert df.loc[1, "entropy"] == pytest.approx(2.0)
+
+
+def test_get_entropy_coerces_string_keys_from_raw_container_read():
+    """A container read straight from disk has int-keyed halving history
+    (icet coerces fields it knows) but string-keyed snapshot maps (it does
+    not know them). The union scan must coerce both step keys before
+    sorting -- else the int/str mix raises TypeError -- and coerce the
+    selected snapshot's bin keys.
+    """
+    c = _make_mock_container(
+        entropy={0: 10.0, 1: 20.0},
+        histogram={0: 5},
+        energy_spacing=1.0,
+        fill_factor=1.0 / 128,
+        fill_factor_history={0: 1.0, 100: 1.0 / 32},  # int keys (icet-coerced)
+        entropy_history={100: {0: 5.0, 1: 9.0}},
+        fill_factor_snapshots={"400": 1.0 / 64, "500": 1.0 / 128},  # str keys
+        entropy_snapshots={
+            "400": {"0": 8.0, "1": 16.0},
+            "500": {"0": 10.0, "1": 20.0},
+        },
+    )
+    wr = WindowResult(
+        energy_limit_left=-1.0,
+        energy_limit_right=2.0,
+        energy_spacing=1.0,
+        containers=(c,),
+    )
+    # limit 1/64 -> step 400 snapshot {0: 8, 1: 16}; min-shift -> {0: 0, 1: 8}.
+    df = wr.get_entropy(fill_factor_limit=1.0 / 64)
+    assert df is not None
+    assert df.loc[0, "entropy"] == pytest.approx(0.0)
+    assert df.loc[1, "entropy"] == pytest.approx(8.0)

@@ -163,8 +163,20 @@ class WindowResult:
                 return None
             ff_history = last_state.get("fill_factor_history", {})
             ff_snapshots = last_state.get("fill_factor_snapshots", {})
-            ff_map = {**ff_history, **ff_snapshots}
-            entropy_map = {**history, **snapshots}
+            # Coerce step keys to int before merging/sorting. A container
+            # read back via ``WangLandauDataContainer.read`` has its
+            # halving history int-keyed (icet coerces the fields it knows)
+            # but leaves the newer snapshot maps string-keyed, so an
+            # un-coerced union would mix int and str keys and
+            # ``sorted(...)`` would raise ``TypeError``.
+            ff_map = {
+                int(s): ff
+                for s, ff in {**ff_history, **ff_snapshots}.items()
+            }
+            entropy_map = {
+                int(s): ent
+                for s, ent in {**history, **snapshots}.items()
+            }
             # `fill_factor_history` carries the initial fill factor at
             # step 0, for which there is no paired `entropy_history`
             # entry (upstream seeds the two unevenly). Skip any step
@@ -173,8 +185,12 @@ class WindowResult:
             # otherwise match the unpaired step 0.
             for step in sorted(ff_map):
                 if step in entropy_map and ff_map[step] <= fill_factor_limit:
-                    entropy = entropy_map[step]
-                    break
-            else:
-                return None
+                    # Bin keys of a snapshot from a raw container read are
+                    # also string-keyed; coerce so the merge downstream
+                    # sees integer bins.
+                    return {
+                        int(b): float(v)
+                        for b, v in entropy_map[step].items()
+                    }
+            return None
         return dict(entropy)
