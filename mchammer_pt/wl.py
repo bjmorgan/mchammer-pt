@@ -203,7 +203,7 @@ def _decode_dos_snapshot_ratio(meta: dict[str, MetaValue]) -> float | None:
     """
     raw = meta.get("dos_snapshot_ratio", 2.0)
     if isinstance(raw, float) and math.isnan(raw):
-        raw = None
+        return None
     return _validate_dos_snapshot_ratio(raw)
 
 
