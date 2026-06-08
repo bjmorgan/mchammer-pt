@@ -1148,3 +1148,22 @@ def test_restore_state_legacy_checkpoint_starts_with_empty_snapshot_store():
     assert dst.ensemble._fill_factor_snapshots == {}
     assert dst.ensemble._entropy_snapshots == {}
     assert dst.ensemble._max_snapshot_rung is None
+
+
+def test_restore_state_raises_on_half_present_snapshot_store():
+    """A checkpoint with only one of the two snapshot fields is corruption.
+
+    ``refresh_last_state`` always writes both together, so exactly one
+    present is not a legacy checkpoint -- it is corrupted, and restore
+    must fail loudly rather than silently discard the other half.
+    """
+    src = _make_wl_replica()
+    src.ensemble._fill_factor_snapshots = {100: 0.5}
+    src.ensemble._entropy_snapshots = {100: {0: 1.0}}
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("entropy_snapshots", None)  # drop one half
+
+    dst = _make_wl_replica()
+    with pytest.raises(ValueError, match="only one of"):
+        dst.restore_state(container)

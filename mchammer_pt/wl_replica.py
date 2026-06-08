@@ -55,10 +55,13 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
     }
 )
 
-# `_last_state` fields whose dict keys are integer bin indices.
-# JSON round-trips coerce these to strings; the conversion has to be
-# reversed before mchammer's `_restart_ensemble` reads them. Matches
-# the set `WangLandauDataContainer.read` converts upstream.
+# `_last_state` fields whose dict keys are integers. JSON round-trips
+# coerce these to strings; the conversion has to be reversed before
+# mchammer's `_restart_ensemble` reads them. Outer keys are bin indices
+# for `histogram`/`entropy` and MC-step indices for the `*_history` /
+# `*_snapshots` maps (whose nested entropy values are bin-indexed too).
+# The history fields mirror what `WangLandauDataContainer.read` coerces
+# upstream; the snapshot fields follow the same convention.
 _WL_INT_KEY_FIELDS: frozenset[str] = frozenset(
     {
         "histogram",
@@ -309,7 +312,8 @@ class WangLandauReplica:
                 f"arguments (structure/calculator from "
                 f"cluster_expansion+atoms; energy_spacing, "
                 f"energy_limit_left, energy_limit_right, "
-                f"random_seed, recency_visits_per_bin from their "
+                f"random_seed, recency_visits_per_bin, "
+                f"dos_snapshot_ratio from their "
                 f"dedicated parameters; "
                 f"dc_filename is always pinned to None to disable "
                 f"periodic on-disk writes)."
@@ -804,7 +808,11 @@ class WangLandauReplica:
         # `_coerce_wl_last_state_keys_to_int`, so keys are ints.
         saved_ff_snaps = last_state.get("fill_factor_snapshots")
         saved_entropy_snaps = last_state.get("entropy_snapshots")
-        if saved_ff_snaps is not None and saved_entropy_snaps is not None:
+        if saved_ff_snaps is None and saved_entropy_snaps is None:
+            # Legacy checkpoint predating the snapshot store.
+            e._fill_factor_snapshots = {}
+            e._entropy_snapshots = {}
+        elif saved_ff_snaps is not None and saved_entropy_snaps is not None:
             e._fill_factor_snapshots = {
                 int(k): float(v) for k, v in saved_ff_snaps.items()
             }
@@ -813,8 +821,13 @@ class WangLandauReplica:
                 for step, entropy in saved_entropy_snaps.items()
             }
         else:
-            e._fill_factor_snapshots = {}
-            e._entropy_snapshots = {}
+            # The two are always written together by refresh_last_state;
+            # exactly one present signals a corrupted checkpoint.
+            raise ValueError(
+                "checkpoint has only one of fill_factor_snapshots / "
+                "entropy_snapshots; the two are always persisted together, "
+                "so this signals a corrupted checkpoint."
+            )
         e._rebuild_max_snapshot_rung()
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
