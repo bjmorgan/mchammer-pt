@@ -2006,19 +2006,17 @@ class TestSerialPoolPolicyThreading:
 
     def test_stall_state_updates_on_halve(self) -> None:
         from mchammer_pt.parallel.serial import SerialWangLandauPool
-        from mchammer_pt.wl_coordinator import CoordinatorPlan
 
         pool = SerialWangLandauPool(
             _two_wl_replicas_1overt(), energy_spacing=0.1
         )
-        halve = CoordinatorPlan(
-            halve=True, merged_entropy=None, switch_to_phase=None
-        )
-        pool._update_stall_state(0, halve, step=900, window_entry_steps=[100])
+        # The caller guards on plan.halve; _update_stall_state records
+        # unconditionally (symmetric with the process backend).
+        pool._update_stall_state(0, step=900, window_entry_steps=[100])
         assert pool._last_halve_step[0] == 900
         assert pool._first_halve_duration[0] == 800
         # A second halve keeps T1 and advances last_halve_step.
-        pool._update_stall_state(0, halve, step=1500, window_entry_steps=[100])
+        pool._update_stall_state(0, step=1500, window_entry_steps=[100])
         assert pool._last_halve_step[0] == 1500
         assert pool._first_halve_duration[0] == 800
 

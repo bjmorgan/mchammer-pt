@@ -17,7 +17,6 @@ from mchammer.observers.base_observer import (
 from ..exchange import matching_for_boundary
 from ..replica import Replica
 from ..wl_coordinator import (
-    CoordinatorPlan,
     FlatnessMode,
     MergeCadence,
     OneOverTGate,
@@ -26,6 +25,7 @@ from ..wl_coordinator import (
     _resolve_recency_flatness,
     _validate_bp_stall_multiple,
     _validate_flatness_mode,
+    _validate_gate_schedule,
     _validate_merge_cadence,
     _validate_one_over_t_gate,
     decide_block_actions,
@@ -313,6 +313,7 @@ class SerialWangLandauPool:
                     f"replica energy_spacing {r.energy_spacing} does not "
                     f"match pool energy_spacing {self._energy_spacing}"
                 )
+            _validate_gate_schedule(one_over_t_gate, r.schedule)
 
     def __len__(self) -> int:
         return len(self._replicas)
@@ -358,13 +359,14 @@ class SerialWangLandauPool:
     def _update_stall_state(
         self,
         index: int,
-        plan: CoordinatorPlan,
         step: int,
         window_entry_steps: list[int | None],
     ) -> None:
-        """Record the halve step (and first-stage duration) after a halve."""
-        if not plan.halve:
-            return
+        """Record the halve step (and first-stage duration) after a halve.
+
+        The caller guards on ``plan.halve``; this records unconditionally,
+        matching the inline update in ``ProcessWangLandauPool.advance_all``.
+        """
         if self._last_halve_step[index] is None:
             entries = [e for e in window_entry_steps if e is not None]
             if entries:
@@ -422,7 +424,6 @@ class SerialWangLandauPool:
             if plan.halve:
                 self._update_stall_state(
                     i,
-                    plan,
                     step=slot.walker_states[0].step,
                     window_entry_steps=[
                         s.window_entry_step for s in slot.walker_states

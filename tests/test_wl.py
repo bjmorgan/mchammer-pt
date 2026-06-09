@@ -80,6 +80,13 @@ class TestOrchestratorOneOverTGate:
         assert meta["one_over_t_gate"] == "flatness"
         assert meta["bp_stall_multiple"] == 3.0
 
+    def test_flatness_gate_without_one_over_t_schedule_raises(self) -> None:
+        # The flatness gate is inert under the (default) halving schedule;
+        # selecting it without schedule="1_over_t" is a silent no-op, so
+        # construction must reject it.
+        with pytest.raises(ValueError, match="1/t schedule"):
+            _make_serial_wl_pt(one_over_t_gate="flatness")
+
 
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering
@@ -2426,7 +2433,12 @@ class TestOneOverTGateIntegration:
         assert decide_block_actions(v_serial).halve is False
         assert decide_block_actions(v_serial).switch_to_phase == "1_over_t"
 
-    def test_in_process_flatness_run_is_wellformed(self, tmp_path) -> None:
+    def test_in_process_flatness_run_halves_and_tracks(self, tmp_path) -> None:
+        # End-to-end exercise of ProcessWangLandauPool.advance_all under the
+        # flatness variant: a narrow window halves under the flatness gate,
+        # and the process backend tracks the halve (last_halve_step set, with
+        # a consistent first-stage duration). A real, non-vacuous assertion
+        # about the new path -- not just a type check.
         from mchammer.calculators import ClusterExpansionCalculator
 
         from tests._in_process_pool import make_in_process_wl_pool
@@ -2437,7 +2449,9 @@ class TestOneOverTGateIntegration:
                 occupations=atoms.numbers
             )
         )
-        lo, hi = e0 - 50.0, e0 + 50.0
+        # Narrow window (few bins at the fixture's 0.1 spacing) so the
+        # flatness gate is reachable within the step budget.
+        lo, hi = e0 - 1.0, e0 + 1.0
         pool = make_in_process_wl_pool(
             tmp_path,
             windows=[(lo, hi), (lo, hi)],
@@ -2447,13 +2461,17 @@ class TestOneOverTGateIntegration:
             bp_stall_multiple=3.0,
         )
         try:
-            for _ in range(5):
-                pool.advance_all(200)
+            for _ in range(20):
+                pool.advance_all(500)
+            assert any(s.last_halve_step is not None for s in pool._slots), (
+                "no window halved under the flatness gate; narrow the window "
+                "or raise the step budget"
+            )
             for slot in pool._slots:
                 assert slot._one_over_t_gate == "flatness"
                 assert slot._bp_stall_multiple == 3.0
-                assert slot.last_halve_step is None or isinstance(
-                    slot.last_halve_step, int
-                )
+                # A first-stage duration is only set once a halve is recorded.
+                if slot.first_halve_duration is not None:
+                    assert slot.last_halve_step is not None
         finally:
             pool.shutdown()

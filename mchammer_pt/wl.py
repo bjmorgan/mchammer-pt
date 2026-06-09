@@ -274,6 +274,22 @@ class WangLandauParallelTempering(BaseParallelTempering):
             convergence-vs-length diagnostics. Default 2.0 (a snapshot
             each time f halves); None disables snapshotting. Read back
             via WindowResult.get_entropy(fill_factor_limit=...).
+        one_over_t_gate: halving-phase gate under the 1/t schedule.
+            ``"visit_once"`` (default) halves once every bin has been
+            visited, with the coupled Belardinelli-Pereyra switch.
+            ``"flatness"`` halves on the WL flatness criterion
+            (``min(H) >= flatness_limit * mean(H)``, reusing the
+            ``flatness_limit`` ensemble kwarg) bundled with a decoupled,
+            stall-safe switch evaluated every block. Only meaningful under
+            ``ensemble_kwargs={"schedule": "1_over_t"}``; selecting
+            ``"flatness"`` without that schedule raises. Recorded in the
+            checkpoint and adopted from there on resume.
+        bp_stall_multiple: only consulted under ``one_over_t_gate="flatness"``.
+            A window that has halved at least once but then stalls (cannot
+            meet the flatness gate) adopts the 1/t schedule once it has run
+            ``bp_stall_multiple`` times its first-stage duration since its
+            last halve. Default 4.0; larger is more patient. Recorded in
+            the checkpoint and adopted from there on resume.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -1011,8 +1027,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand. ``flatness_mode``, ``merge_cadence``, and
-        ``recency_visits_per_bin`` have the same meaning as on
+        `windows` by hand. The ensemble and policy keywords (``flatness_mode``,
+        ``merge_cadence``, ``recency_visits_per_bin``,
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
         ``atoms`` accepts the same broadcast-or-per-walker shape as
@@ -1087,8 +1105,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
-        ``flatness_mode``, ``merge_cadence``, and
-        ``recency_visits_per_bin`` have the same meaning as on
+        The ensemble and policy keywords (``flatness_mode``,
+        ``merge_cadence``, ``recency_visits_per_bin``,
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
         ``atoms`` accepts the same broadcast-or-per-walker shape as

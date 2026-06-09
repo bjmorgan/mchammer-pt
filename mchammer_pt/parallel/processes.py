@@ -46,6 +46,7 @@ from ..wl_coordinator import (
     _compute_recency_flatness,
     _validate_bp_stall_multiple,
     _validate_flatness_mode,
+    _validate_gate_schedule,
     _validate_merge_cadence,
     _validate_one_over_t_gate,
     decide_block_actions,
@@ -807,6 +808,9 @@ class ProcessWangLandauPool:
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
+        _validate_gate_schedule(
+            one_over_t_gate, (ensemble_kwargs or {}).get("schedule", "halving")
+        )
         self._one_over_t_gate: OneOverTGate = one_over_t_gate
         self._bp_stall_multiple: float = _validate_bp_stall_multiple(
             bp_stall_multiple

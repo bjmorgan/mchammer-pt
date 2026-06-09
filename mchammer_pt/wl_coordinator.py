@@ -70,8 +70,8 @@ Phase = Literal["halving", "1_over_t"]
 OneOverTGate = Literal["visit_once", "flatness"]
 """1/t-schedule halving-phase gate.
 
-- ``"visit_once"``: halve once every bin has been visited (default;
-  today's behaviour), with the coupled BP switch.
+- ``"visit_once"`` (default): halve once every bin has been visited,
+  with the coupled BP switch.
 - ``"flatness"``: halve on the WL flatness criterion
   (``min(H) >= flatness_limit * mean(H)``), bundled with the decoupled
   stall-safe switch. Only consulted under the ``"1_over_t"`` schedule.
@@ -103,6 +103,22 @@ def _validate_bp_stall_multiple(bp_stall_multiple: Any) -> float:
             f"got {bp_stall_multiple!r}"
         )
     return float(bp_stall_multiple)
+
+
+def _validate_gate_schedule(one_over_t_gate: Any, schedule: Any) -> None:
+    """Reject the flatness gate selected without the 1/t schedule.
+
+    ``one_over_t_gate='flatness'`` only affects the ``'1_over_t'`` schedule;
+    under ``'halving'`` it would silently do nothing. Raising at construction
+    surfaces the misconfiguration rather than letting it become a silent
+    no-op run (the worst outcome for an A/B study).
+    """
+    if one_over_t_gate == "flatness" and schedule != "1_over_t":
+        raise ValueError(
+            "one_over_t_gate='flatness' requires the 1/t schedule; pass "
+            "ensemble_kwargs={'schedule': '1_over_t'} to use the flatness "
+            "gate, or leave one_over_t_gate='visit_once'."
+        )
 
 
 def _validate_flatness_mode(flatness_mode: Any) -> None:
@@ -458,8 +474,7 @@ def _decoupled_switch_to_phase(
     Blocked while any walker is unentered.
 
     Unlike the coupled switch, this is evaluated every block, so a window
-    can enter the 1/t phase without a halve firing (via the stall escape)
-    -- which is what makes a flatness gate safe from permanent stalls.
+    can enter the 1/t phase without a halve firing (via the stall escape).
     """
     states = view.walker_states
     if not states:
@@ -486,8 +501,8 @@ def _decoupled_switch_to_phase(
 def _decide_flatness_decoupled(view: SlotView) -> CoordinatorPlan:
     """1/t-schedule flatness gate plus the decoupled switch.
 
-    The switch is evaluated every block regardless of whether a halve
-    fires, so a stalled window can still enter the 1/t phase.
+    Runs the flatness halving gate and delegates the switch decision to
+    :func:`_decoupled_switch_to_phase` on every block.
     """
     if view.flatness_mode == "per_walker":
         should_halve = all(
@@ -583,11 +598,31 @@ def reconstruct_stall_state(
     latest walker ``window_entry_step`` in the slot. Returns ``(None, None)``
     when the slot has not halved (so the stall escape stays disarmed).
     Used on resume; the live run tracks these incrementally.
+
+    ``window_entry_step`` is only recorded under the ``1_over_t`` schedule,
+    so a slot that halved under the ``halving`` schedule legitimately has no
+    entries; that yields ``(last_halve_step, None)`` (disarmed), which is
+    correct because the halving schedule has no decoupled switch.
+
+    Raises:
+        ValueError: if the first halve does not occur strictly after the
+            latest window entry (a non-positive first-stage duration). Under
+            ``1_over_t`` a collective halve requires every walker to have
+            entered first, so this is physically impossible in a correctly
+            round-tripped checkpoint and signals a corrupted or truncated one.
     """
     keys = sorted(int(k) for k in fill_factor_history_keys)
     halve_steps = keys[1:]
     if not halve_steps:
         return (None, None)
     entries = [int(e) for e in window_entry_steps if e is not None]
-    t1 = (halve_steps[0] - max(entries)) if entries else None
+    if not entries:
+        return (halve_steps[-1], None)
+    t1 = halve_steps[0] - max(entries)
+    if t1 <= 0:
+        raise ValueError(
+            f"reconstruct_stall_state: first halve at step {halve_steps[0]} "
+            f"is not after the latest window entry {max(entries)} "
+            f"(first-stage duration {t1} <= 0); corrupted checkpoint."
+        )
     return (halve_steps[-1], t1)

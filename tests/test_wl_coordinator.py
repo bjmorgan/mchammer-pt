@@ -710,6 +710,58 @@ class TestDecoupledSwitch:
         assert plan.halve is False
         assert plan.switch_to_phase == "1_over_t"
 
+    def test_stall_escape_respects_bp_stall_multiple(self) -> None:
+        # since = 1500 - 1000 = 500, T1 = 100. M=4 -> threshold 400 (escape);
+        # M=8 -> threshold 800 (no escape). Only bp_stall_multiple differs, so
+        # this kills a mutant that drops the `* bp_stall_multiple` factor.
+        def _v(m: float) -> SlotView:
+            states = [
+                _state(histogram={0: 1, 1: 100}, fill_factor=0.25,
+                       step=1500, window_entry_step=0)
+            ]
+            return _view(
+                states, schedule="1_over_t", one_over_t_gate="flatness",
+                last_halve_step=1000, first_halve_duration=100,
+                bp_stall_multiple=m,
+            )
+        assert decide_block_actions(_v(4.0)).switch_to_phase == "1_over_t"
+        assert decide_block_actions(_v(8.0)).switch_to_phase is None
+
+    def test_stall_escape_boundary_is_strict(self) -> None:
+        # since == M*T1 exactly (400 == 4*100): strict `>` -> no escape at the
+        # boundary; one step past it escapes. Kills a `>` -> `>=` mutant.
+        def _at(step: int) -> SlotView:
+            states = [
+                _state(histogram={0: 1, 1: 100}, fill_factor=0.25,
+                       step=step, window_entry_step=0)
+            ]
+            return _view(
+                states, schedule="1_over_t", one_over_t_gate="flatness",
+                last_halve_step=1000, first_halve_duration=100,
+                bp_stall_multiple=4.0,
+            )
+        assert decide_block_actions(_at(1400)).switch_to_phase is None
+        assert decide_block_actions(_at(1401)).switch_to_phase == "1_over_t"
+
+    def test_w2_flatness_per_walker_halves_and_merges(self) -> None:
+        # Two flat walkers under the per_walker flatness gate -> halve and
+        # merge entropies. Exercises the W>1 flatness gate and the merge
+        # call inside the decoupled path.
+        states = [
+            _state(histogram={0: 90, 1: 100}, entropy={0: 1.0, 1: 2.0},
+                   fill_factor=1.0, step=200, window_entry_step=0),
+            _state(histogram={0: 95, 1: 100}, entropy={0: 1.5, 1: 2.5},
+                   fill_factor=1.0, step=200, window_entry_step=0),
+        ]
+        view = _view(
+            states, flatness_mode="per_walker", schedule="1_over_t",
+            one_over_t_gate="flatness", merge_cadence="at_halve",
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is True
+        assert plan.merged_entropy is not None
+        assert min(plan.merged_entropy.values()) == 0
+
 
 class TestReconstructStallState:
     def test_no_halves_returns_none(self) -> None:
@@ -729,3 +781,18 @@ class TestReconstructStallState:
 
     def test_str_keys_coerced(self) -> None:
         assert reconstruct_stall_state(["0", "700"], [200]) == (700, 500)
+
+    def test_halving_schedule_shape_no_entry_disarms(self) -> None:
+        # Under the halving schedule a window halves but never records a
+        # window entry (a 1_over_t-only concept), so all entries are None.
+        # That is legitimate, not corruption: disarm (last, None), no raise.
+        assert reconstruct_stall_state([0, 200], [None]) == (200, None)
+        assert reconstruct_stall_state([0, 200, 900], [None, None]) == (900, None)
+
+    def test_nonpositive_first_stage_duration_raises(self) -> None:
+        # First halve at/before the latest entry is impossible under 1_over_t
+        # (a halve requires every walker entered first) -> corrupted checkpoint.
+        with pytest.raises(ValueError, match="corrupted checkpoint"):
+            reconstruct_stall_state([0, 40], [60])
+        with pytest.raises(ValueError, match="corrupted checkpoint"):
+            reconstruct_stall_state([0, 100], [100])  # t1 == 0
