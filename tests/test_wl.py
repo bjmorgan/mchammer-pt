@@ -2311,3 +2311,105 @@ class TestResumeOneOverTGate:
             resumed._pool._first_halve_duration
             == pt_a._pool._first_halve_duration
         )
+
+
+class TestOneOverTGateIntegration:
+    def test_default_run_unchanged(self) -> None:
+        # random_seed is fixed inside _make_serial_wl_pt, so the only
+        # difference is the explicit visit_once kwarg vs the default.
+        pt_a = _make_serial_wl_pt(ensemble_kwargs={"schedule": "1_over_t"})
+        pt_b = _make_serial_wl_pt(
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_gate="visit_once",
+        )
+        pt_a.run(n_cycles=5)
+        pt_b.run(n_cycles=5)
+        ent_a = dict(pt_a._pool._replicas[0].ensemble._entropy)
+        ent_b = dict(pt_b._pool._replicas[0].ensemble._entropy)
+        assert ent_a == ent_b
+
+    def test_serial_process_view_parity(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauWindow,
+            _view_of,
+        )
+        from mchammer_pt.wl_coordinator import (
+            WalkerPostBlockState,
+            decide_block_actions,
+        )
+
+        # A stalled, un-flat, halved-once walker state (trips the escape).
+        state = WalkerPostBlockState(
+            halving_criterion_met=False,
+            fill_factor=0.25,
+            entropy={0: 1.0, 1: 2.0},
+            step=5000,
+            window_entry_step=0,
+            histogram={0: 1, 1: 100},
+            reached_energy_window=True,
+            current_energy=0.0,
+        )
+
+        # Serial slot: a real W=1 replica under the flatness variant.
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        serial_pool = pt._pool
+        serial_slot = serial_pool._replicas[0]
+        serial_slot.walker_states = (state,)
+        serial_pool._last_halve_step[0] = 1000
+        serial_pool._first_halve_duration[0] = 100
+        v_serial = serial_pool._view_of(0, serial_slot)
+
+        # Process window: identical state.
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+        )
+        win.walker_states = [state]
+        win.last_halve_step = 1000
+        win.first_halve_duration = 100
+        v_proc = _view_of(win)
+
+        assert v_serial == v_proc
+        assert decide_block_actions(v_serial) == decide_block_actions(v_proc)
+        # And the shared decision is the stuck-window escape.
+        assert decide_block_actions(v_serial).halve is False
+        assert decide_block_actions(v_serial).switch_to_phase == "1_over_t"
+
+    def test_in_process_flatness_run_is_wellformed(self, tmp_path) -> None:
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from tests._in_process_pool import make_in_process_wl_pool
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        pool = make_in_process_wl_pool(
+            tmp_path,
+            windows=[(lo, hi), (lo, hi)],
+            seeds=[0, 1],
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+        )
+        try:
+            for _ in range(5):
+                pool.advance_all(200)
+            for slot in pool._slots:
+                assert slot._one_over_t_gate == "flatness"
+                assert slot._bp_stall_multiple == 3.0
+                assert slot.last_halve_step is None or isinstance(
+                    slot.last_halve_step, int
+                )
+        finally:
+            pool.shutdown()
