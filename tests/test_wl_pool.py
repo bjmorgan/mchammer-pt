@@ -1920,6 +1920,31 @@ def test_process_pool_exchange_issues_no_energy_or_log_g_ipc(
     )
 
 
+def test_walker_post_block_state_schema_unchanged() -> None:
+    """The worker ADVANCE reply payload schema is IPC-neutral.
+
+    The 1/t-gate feature tracks decoupled-switch stall state parent-side;
+    nothing new crosses the worker wire. The reply each worker sends after
+    an ADVANCE is the ``WalkerPostBlockState`` dataclass, so pinning its
+    exact field list guards against a regression that silently adds a
+    reply field (and therefore a new term to the IPC payload).
+    """
+    from dataclasses import fields
+
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
+
+    assert [f.name for f in fields(WalkerPostBlockState)] == [
+        "halving_criterion_met",
+        "fill_factor",
+        "entropy",
+        "step",
+        "window_entry_step",
+        "histogram",
+        "reached_energy_window",
+        "current_energy",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 1/t-gate policy threading and stall tracking on SerialWangLandauPool
 # ---------------------------------------------------------------------------
