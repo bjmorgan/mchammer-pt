@@ -17,13 +17,17 @@ from mchammer.observers.base_observer import (
 from ..exchange import matching_for_boundary
 from ..replica import Replica
 from ..wl_coordinator import (
+    CoordinatorPlan,
     FlatnessMode,
     MergeCadence,
+    OneOverTGate,
     SlotView,
     _resolve_bins_filled,
     _resolve_recency_flatness,
+    _validate_bp_stall_multiple,
     _validate_flatness_mode,
     _validate_merge_cadence,
+    _validate_one_over_t_gate,
     decide_block_actions,
 )
 from ..wl_merge_diagnostics import MergeEvent
@@ -284,13 +288,24 @@ class SerialWangLandauPool:
         energy_spacing: float,
         flatness_mode: FlatnessMode = "pooled",
         merge_cadence: MergeCadence = "at_halve",
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> None:
         self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
+        _validate_one_over_t_gate(one_over_t_gate)
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
+        self._one_over_t_gate: OneOverTGate = one_over_t_gate
+        self._bp_stall_multiple: float = _validate_bp_stall_multiple(
+            bp_stall_multiple
+        )
+        self._last_halve_step: list[int | None] = [None] * len(self._replicas)
+        self._first_halve_duration: list[int | None] = (
+            [None] * len(self._replicas)
+        )
         self._merge_events: list[MergeEvent] = []
         for r in self._replicas:
             if r.energy_spacing != self._energy_spacing:
@@ -325,7 +340,7 @@ class SerialWangLandauPool:
     def energy_spacing(self) -> float:
         return self._energy_spacing
 
-    def _view_of(self, slot: WangLandauSlot) -> SlotView:
+    def _view_of(self, index: int, slot: WangLandauSlot) -> SlotView:
         """Build a SlotView from a slot's walker_states plus pool config."""
         return SlotView(
             walker_states=tuple(slot.walker_states),
@@ -334,7 +349,40 @@ class SerialWangLandauPool:
             merge_cadence=self._merge_cadence,
             schedule=slot.schedule,
             flatness_limit=slot.flatness_limit,
+            one_over_t_gate=self._one_over_t_gate,
+            bp_stall_multiple=self._bp_stall_multiple,
+            last_halve_step=self._last_halve_step[index],
+            first_halve_duration=self._first_halve_duration[index],
         )
+
+    def _update_stall_state(
+        self,
+        index: int,
+        plan: CoordinatorPlan,
+        step: int,
+        window_entry_steps: list[int | None],
+    ) -> None:
+        """Record the halve step (and first-stage duration) after a halve."""
+        if not plan.halve:
+            return
+        if self._last_halve_step[index] is None:
+            entries = [e for e in window_entry_steps if e is not None]
+            if entries:
+                self._first_halve_duration[index] = step - max(entries)
+        self._last_halve_step[index] = step
+
+    def seed_stall_state(
+        self, per_slot: list[tuple[int | None, int | None]]
+    ) -> None:
+        """Seed per-slot ``(last_halve_step, first_halve_duration)`` on resume."""
+        if len(per_slot) != len(self._replicas):
+            raise ValueError(
+                f"seed_stall_state expects {len(self._replicas)} entries, "
+                f"got {len(per_slot)}"
+            )
+        for i, (last, t1) in enumerate(per_slot):
+            self._last_halve_step[i] = last
+            self._first_halve_duration[i] = t1
 
     def advance_all(self, n_steps: int) -> None:
         # ADVANCE + COLLECT: each slot advances its walkers and populates
@@ -343,7 +391,9 @@ class SerialWangLandauPool:
             slot.advance(n_steps)
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
-        views = [self._view_of(s) for s in self._replicas]
+        views = [
+            self._view_of(i, s) for i, s in enumerate(self._replicas)
+        ]
         plans = [decide_block_actions(v) for v in views]
 
         # RECORD: capture merged entropy per halving merge while the
@@ -363,6 +413,21 @@ class SerialWangLandauPool:
         # APPLY: per-slot mutation. No batching benefit in-process.
         for slot, plan in zip(self._replicas, plans, strict=True):
             slot.apply_plan(plan)
+
+        # TRACK: the pool issues every halve, so it owns the stall state
+        # the decoupled BP switch reads back through the SlotView.
+        for i, (slot, plan) in enumerate(
+            zip(self._replicas, plans, strict=True)
+        ):
+            if plan.halve:
+                self._update_stall_state(
+                    i,
+                    plan,
+                    step=slot.walker_states[0].step,
+                    window_entry_steps=[
+                        s.window_entry_step for s in slot.walker_states
+                    ],
+                )
 
     def current_energies(self) -> np.ndarray:
         return np.array(
