@@ -7,6 +7,7 @@ data view. No dependency on backends, replicas, or IPC.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -66,8 +67,42 @@ Phase = Literal["halving", "1_over_t"]
 """
 
 
+OneOverTGate = Literal["visit_once", "flatness"]
+"""1/t-schedule halving-phase gate.
+
+- ``"visit_once"``: halve once every bin has been visited (default;
+  today's behaviour), with the coupled BP switch.
+- ``"flatness"``: halve on the WL flatness criterion
+  (``min(H) >= flatness_limit * mean(H)``), bundled with the decoupled
+  stall-safe switch. Only consulted under the ``"1_over_t"`` schedule.
+"""
+
+
 _VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
 _VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
+_VALID_ONE_OVER_T_GATES: tuple[str, ...] = ("visit_once", "flatness")
+
+
+def _validate_one_over_t_gate(one_over_t_gate: Any) -> None:
+    if one_over_t_gate not in _VALID_ONE_OVER_T_GATES:
+        raise ValueError(
+            f"one_over_t_gate must be one of {_VALID_ONE_OVER_T_GATES}; "
+            f"got {one_over_t_gate!r}"
+        )
+
+
+def _validate_bp_stall_multiple(bp_stall_multiple: Any) -> float:
+    if (
+        isinstance(bp_stall_multiple, bool)
+        or not isinstance(bp_stall_multiple, (int, float, np.integer, np.floating))
+        or not math.isfinite(bp_stall_multiple)
+        or float(bp_stall_multiple) <= 0.0
+    ):
+        raise ValueError(
+            f"bp_stall_multiple must be a finite positive number; "
+            f"got {bp_stall_multiple!r}"
+        )
+    return float(bp_stall_multiple)
 
 
 def _validate_flatness_mode(flatness_mode: Any) -> None:

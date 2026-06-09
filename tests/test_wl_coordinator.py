@@ -7,6 +7,9 @@ over a pure data structure.
 
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
 from mchammer_pt.wl_coordinator import (
     CoordinatorPlan,
     SlotView,
@@ -15,6 +18,8 @@ from mchammer_pt.wl_coordinator import (
     _compute_per_walker_breakdown,
     _resolve_bins_filled,
     _summed_histogram_halving_criterion_met,
+    _validate_bp_stall_multiple,
+    _validate_one_over_t_gate,
     decide_block_actions,
 )
 
@@ -502,3 +507,23 @@ def test_resolve_recency_flatness_no_candidates_is_noop():
     d = {"recency_flatness": 0.7}
     _resolve_recency_flatness(d, "pooled")
     assert d == {"recency_flatness": 0.7}
+
+
+class TestOneOverTGateValidators:
+    def test_one_over_t_gate_accepts_valid(self) -> None:
+        _validate_one_over_t_gate("visit_once")
+        _validate_one_over_t_gate("flatness")
+
+    def test_one_over_t_gate_rejects_invalid(self) -> None:
+        with pytest.raises(ValueError, match="one_over_t_gate"):
+            _validate_one_over_t_gate("flat")
+
+    def test_bp_stall_multiple_accepts_positive(self) -> None:
+        assert _validate_bp_stall_multiple(4) == 4.0
+        assert _validate_bp_stall_multiple(2.5) == 2.5
+        assert _validate_bp_stall_multiple(np.float64(3.0)) == 3.0
+
+    def test_bp_stall_multiple_rejects_nonpositive_and_nonfinite(self) -> None:
+        for bad in (0, -1.0, float("inf"), float("nan"), np.float64("nan"), True):
+            with pytest.raises(ValueError, match="bp_stall_multiple"):
+                _validate_bp_stall_multiple(bad)
