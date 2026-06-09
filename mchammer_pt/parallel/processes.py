@@ -620,6 +620,7 @@ class ProcessWangLandauWindow:
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
+        _validate_gate_schedule(one_over_t_gate, schedule)
         self.workers = workers
         self.rng = rng
         self._flatness_mode: FlatnessMode = flatness_mode

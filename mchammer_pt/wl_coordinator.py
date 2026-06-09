@@ -604,11 +604,14 @@ def reconstruct_stall_state(
     entries; that yields ``(last_halve_step, None)`` (disarmed), which is
     correct because the halving schedule has no decoupled switch.
 
+    A first-stage duration of zero is valid: a walker can enter on the
+    final step of its first halving block, so the first halve and the entry
+    share a step (the live backend records ``step - entry == 0`` there).
+
     Raises:
-        ValueError: if the first halve does not occur strictly after the
-            latest window entry (a non-positive first-stage duration). Under
-            ``1_over_t`` a collective halve requires every walker to have
-            entered first, so this is physically impossible in a correctly
+        ValueError: if the first halve *precedes* the latest window entry (a
+            negative first-stage duration). A halve cannot be recorded before
+            a walker enters, so this is physically impossible in a correctly
             round-tripped checkpoint and signals a corrupted or truncated one.
     """
     keys = sorted(int(k) for k in fill_factor_history_keys)
@@ -619,10 +622,10 @@ def reconstruct_stall_state(
     if not entries:
         return (halve_steps[-1], None)
     t1 = halve_steps[0] - max(entries)
-    if t1 <= 0:
+    if t1 < 0:
         raise ValueError(
             f"reconstruct_stall_state: first halve at step {halve_steps[0]} "
-            f"is not after the latest window entry {max(entries)} "
-            f"(first-stage duration {t1} <= 0); corrupted checkpoint."
+            f"precedes the latest window entry {max(entries)} "
+            f"(first-stage duration {t1} < 0); corrupted checkpoint."
         )
     return (halve_steps[-1], t1)

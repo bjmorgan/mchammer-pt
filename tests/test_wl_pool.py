@@ -2030,6 +2030,7 @@ class TestProcessWindowStallFields:
         win = ProcessWangLandauWindow(
             workers=[],
             rng=np.random.default_rng(0),
+            schedule="1_over_t",
             one_over_t_gate="flatness",
             bp_stall_multiple=3.0,
         )
@@ -2060,3 +2061,18 @@ class TestProcessWindowStallFields:
         assert view.bp_stall_multiple == 2.0
         assert view.last_halve_step == 1000
         assert view.first_halve_duration == 100
+
+    def test_flatness_without_one_over_t_schedule_raises(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import ProcessWangLandauWindow
+
+        # The window validates the gate string; it must also reject the
+        # silently-inert flatness + halving-schedule pairing.
+        with pytest.raises(ValueError, match="1/t schedule"):
+            ProcessWangLandauWindow(
+                workers=[],
+                rng=np.random.default_rng(0),
+                schedule="halving",
+                one_over_t_gate="flatness",
+            )

@@ -789,10 +789,14 @@ class TestReconstructStallState:
         assert reconstruct_stall_state([0, 200], [None]) == (200, None)
         assert reconstruct_stall_state([0, 200, 900], [None, None]) == (900, None)
 
-    def test_nonpositive_first_stage_duration_raises(self) -> None:
-        # First halve at/before the latest entry is impossible under 1_over_t
-        # (a halve requires every walker entered first) -> corrupted checkpoint.
+    def test_negative_first_stage_duration_raises(self) -> None:
+        # First halve before the latest entry is impossible (a halve cannot
+        # be recorded before a walker enters) -> corrupted checkpoint.
         with pytest.raises(ValueError, match="corrupted checkpoint"):
             reconstruct_stall_state([0, 40], [60])
-        with pytest.raises(ValueError, match="corrupted checkpoint"):
-            reconstruct_stall_state([0, 100], [100])  # t1 == 0
+
+    def test_zero_first_stage_duration_is_valid(self) -> None:
+        # A walker can enter on the final step of its first halving block, so
+        # the first halve and the entry share a step: T1 == 0 is legitimate
+        # and the live backend records it, so resume must accept it.
+        assert reconstruct_stall_state([0, 100], [100]) == (100, 0)
