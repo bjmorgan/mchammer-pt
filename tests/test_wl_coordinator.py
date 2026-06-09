@@ -22,6 +22,7 @@ from mchammer_pt.wl_coordinator import (
     _validate_one_over_t_gate,
     _walker_flatness_met,
     decide_block_actions,
+    reconstruct_stall_state,
 )
 
 
@@ -708,3 +709,23 @@ class TestDecoupledSwitch:
         plan = decide_block_actions(view)
         assert plan.halve is False
         assert plan.switch_to_phase == "1_over_t"
+
+
+class TestReconstructStallState:
+    def test_no_halves_returns_none(self) -> None:
+        # Only the initial fill_factor_history entry (step 0).
+        assert reconstruct_stall_state([0], [0]) == (None, None)
+
+    def test_single_halve(self) -> None:
+        # Initial entry at 0, one halve at 700; entry 200 -> T1 = 500.
+        assert reconstruct_stall_state([0, 700], [200]) == (700, 500)
+
+    def test_multi_halve_uses_first_and_last(self) -> None:
+        # last_halve = 1500; first halve 700; max entry 200 -> T1 = 500.
+        assert reconstruct_stall_state([0, 700, 1500], [200]) == (1500, 500)
+
+    def test_multi_walker_uses_latest_entry(self) -> None:
+        assert reconstruct_stall_state([0, 700], [100, 300]) == (700, 400)
+
+    def test_str_keys_coerced(self) -> None:
+        assert reconstruct_stall_state(["0", "700"], [200]) == (700, 500)

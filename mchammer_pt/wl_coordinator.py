@@ -569,3 +569,25 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
         merged_entropy=merged_entropy,
         switch_to_phase=switch_to_phase,
     )
+
+
+def reconstruct_stall_state(
+    fill_factor_history_keys: list[Any],
+    window_entry_steps: list[int | None],
+) -> tuple[int | None, int | None]:
+    """Rebuild ``(last_halve_step, first_halve_duration)`` from saved state.
+
+    ``_fill_factor_history`` keys are the initial entry plus one per
+    collective halve, so the sorted keys after the first are the halve
+    steps. ``T1`` (first-stage duration) is the first halve step minus the
+    latest walker ``window_entry_step`` in the slot. Returns ``(None, None)``
+    when the slot has not halved (so the stall escape stays disarmed).
+    Used on resume; the live run tracks these incrementally.
+    """
+    keys = sorted(int(k) for k in fill_factor_history_keys)
+    halve_steps = keys[1:]
+    if not halve_steps:
+        return (None, None)
+    entries = [int(e) for e in window_entry_steps if e is not None]
+    t1 = (halve_steps[0] - max(entries)) if entries else None
+    return (halve_steps[-1], t1)
