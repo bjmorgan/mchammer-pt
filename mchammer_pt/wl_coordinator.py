@@ -162,14 +162,17 @@ def _summed_histogram_halving_criterion_met(
     snapshots: list[WalkerPostBlockState],
     flatness_limit: float,
     schedule: Schedule,
+    one_over_t_gate: OneOverTGate = "visit_once",
 ) -> bool:
     """Pooled-histogram halving criterion across per-walker snapshots.
 
     Under ``schedule='halving'`` applies the WL flatness criterion:
     every bin count must be at least ``flatness_limit * mean(counts)``.
-    Under ``schedule='1_over_t'`` applies the BP coupon-collector
-    criterion: every bin count must be positive. Returns False if any
-    walker has not yet entered its window.
+    Under ``schedule='1_over_t'`` the gate depends on ``one_over_t_gate``:
+    ``'visit_once'`` applies the BP coupon-collector criterion (every bin
+    count positive, ``flatness_limit`` not consulted); ``'flatness'``
+    applies the same WL flatness criterion as the halving schedule.
+    Returns False if any walker has not yet entered its window.
     """
     if not snapshots:
         return False
@@ -185,13 +188,30 @@ def _summed_histogram_halving_criterion_met(
     mean_count = float(np.average(counts))
     if mean_count <= 0:
         return False
-    if schedule == "1_over_t":
+    if schedule == "1_over_t" and one_over_t_gate == "visit_once":
         # Belardinelli-Pereyra coupon-collector criterion across the
-        # pooled histogram. flatness_limit is not consulted under
-        # this schedule.
+        # pooled histogram. flatness_limit is not consulted here.
         return bool(np.all(counts > 0))
     limit = flatness_limit * mean_count
     return bool(np.all(counts >= limit))
+
+
+def _walker_flatness_met(
+    state: WalkerPostBlockState, flatness_limit: float
+) -> bool:
+    """WL flatness criterion for one walker's histogram.
+
+    ``min(H) >= flatness_limit * mean(H)`` over the walker's known bins.
+    Returns ``False`` for a walker that has not entered its window or has
+    an empty / zero-mean histogram (mirrors the pooled gate's guards).
+    """
+    if not state.reached_energy_window or not state.histogram:
+        return False
+    counts = np.array(list(state.histogram.values()))
+    mean_count = float(np.average(counts))
+    if mean_count <= 0:
+        return False
+    return bool(np.all(counts >= flatness_limit * mean_count))
 
 
 def _compute_per_walker_flat_min(

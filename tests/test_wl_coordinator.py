@@ -20,6 +20,7 @@ from mchammer_pt.wl_coordinator import (
     _summed_histogram_halving_criterion_met,
     _validate_bp_stall_multiple,
     _validate_one_over_t_gate,
+    _walker_flatness_met,
     decide_block_actions,
 )
 
@@ -543,3 +544,36 @@ class TestSlotViewDefaults:
         assert view.bp_stall_multiple == 4.0
         assert view.last_halve_step is None
         assert view.first_halve_duration is None
+
+
+class TestOneOverTFlatnessGate:
+    def test_pooled_visit_once_default_unchanged(self) -> None:
+        # min(H) > 0 passes under visit_once even when not WL-flat.
+        snaps = [_state(histogram={0: 1, 1: 100})]
+        assert _summed_histogram_halving_criterion_met(
+            snaps, flatness_limit=0.8, schedule="1_over_t"
+        )
+
+    def test_pooled_flatness_requires_flat(self) -> None:
+        snaps = [_state(histogram={0: 1, 1: 100})]
+        assert not _summed_histogram_halving_criterion_met(
+            snaps, flatness_limit=0.8, schedule="1_over_t",
+            one_over_t_gate="flatness",
+        )
+
+    def test_pooled_flatness_passes_when_flat(self) -> None:
+        snaps = [_state(histogram={0: 90, 1: 100})]
+        assert _summed_histogram_halving_criterion_met(
+            snaps, flatness_limit=0.8, schedule="1_over_t",
+            one_over_t_gate="flatness",
+        )
+
+    def test_walker_flatness_met_basic(self) -> None:
+        flat = _state(histogram={0: 90, 1: 100})
+        unflat = _state(histogram={0: 1, 1: 100})
+        empty = _state(histogram={}, reached=True)
+        unentered = _state(histogram={0: 90, 1: 100}, reached=False)
+        assert _walker_flatness_met(flat, 0.8)
+        assert not _walker_flatness_met(unflat, 0.8)
+        assert not _walker_flatness_met(empty, 0.8)
+        assert not _walker_flatness_met(unentered, 0.8)
