@@ -1918,3 +1918,161 @@ def test_process_pool_exchange_issues_no_energy_or_log_g_ipc(
         f"no longer exercises the exchange move path -- adjust the window "
         f"overlap or cycle count"
     )
+
+
+def test_walker_post_block_state_schema_unchanged() -> None:
+    """The worker ADVANCE reply payload schema is IPC-neutral.
+
+    The 1/t-gate feature tracks decoupled-switch stall state parent-side;
+    nothing new crosses the worker wire. The reply each worker sends after
+    an ADVANCE is the ``WalkerPostBlockState`` dataclass, so pinning its
+    exact field list guards against a regression that silently adds a
+    reply field (and therefore a new term to the IPC payload).
+    """
+    from dataclasses import fields
+
+    from mchammer_pt.wl_coordinator import WalkerPostBlockState
+
+    assert [f.name for f in fields(WalkerPostBlockState)] == [
+        "halving_criterion_met",
+        "fill_factor",
+        "entropy",
+        "step",
+        "window_entry_step",
+        "histogram",
+        "reached_energy_window",
+        "current_energy",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 1/t-gate policy threading and stall tracking on SerialWangLandauPool
+# ---------------------------------------------------------------------------
+
+
+def _two_wl_replicas_1overt() -> list:
+    """Two bare WangLandauReplica over a shared window, schedule=1_over_t."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 50.0, e0 + 50.0
+    return [
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=lo,
+            energy_limit_right=hi,
+            random_seed=s,
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        for s in (0, 1)
+    ]
+
+
+class TestSerialPoolPolicyThreading:
+    def test_pool_stores_and_views_new_policy(self) -> None:
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+        pool = SerialWangLandauPool(
+            _two_wl_replicas_1overt(),
+            energy_spacing=0.1,
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+        )
+        view = pool._view_of(0, pool._replicas[0])
+        assert view.one_over_t_gate == "flatness"
+        assert view.bp_stall_multiple == 3.0
+        assert view.last_halve_step is None
+        assert view.first_halve_duration is None
+
+    def test_pool_rejects_bad_policy(self) -> None:
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+        with pytest.raises(ValueError, match="one_over_t_gate"):
+            SerialWangLandauPool(
+                _two_wl_replicas_1overt(),
+                energy_spacing=0.1,
+                one_over_t_gate="bogus",
+            )
+
+    def test_stall_state_updates_on_halve(self) -> None:
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+        pool = SerialWangLandauPool(
+            _two_wl_replicas_1overt(), energy_spacing=0.1
+        )
+        # The caller guards on plan.halve; _update_stall_state records
+        # unconditionally (symmetric with the process backend).
+        pool._update_stall_state(0, step=900, window_entry_steps=[100])
+        assert pool._last_halve_step[0] == 900
+        assert pool._first_halve_duration[0] == 800
+        # A second halve keeps T1 and advances last_halve_step.
+        pool._update_stall_state(0, step=1500, window_entry_steps=[100])
+        assert pool._last_halve_step[0] == 1500
+        assert pool._first_halve_duration[0] == 800
+
+
+class TestProcessWindowStallFields:
+    def test_window_has_policy_and_stall_fields(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import ProcessWangLandauWindow
+
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+        )
+        assert win._one_over_t_gate == "flatness"
+        assert win._bp_stall_multiple == 3.0
+        assert win.last_halve_step is None
+        assert win.first_halve_duration is None
+
+    def test_view_of_injects_fields(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauWindow,
+            _view_of,
+        )
+
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            bp_stall_multiple=2.0,
+        )
+        win.last_halve_step = 1000
+        win.first_halve_duration = 100
+        view = _view_of(win)
+        assert view.one_over_t_gate == "flatness"
+        assert view.bp_stall_multiple == 2.0
+        assert view.last_halve_step == 1000
+        assert view.first_halve_duration == 100
+
+    def test_flatness_without_one_over_t_schedule_raises(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import ProcessWangLandauWindow
+
+        # The window validates the gate string; it must also reject the
+        # silently-inert flatness + halving-schedule pairing.
+        with pytest.raises(ValueError, match="1/t schedule"):
+            ProcessWangLandauWindow(
+                workers=[],
+                rng=np.random.default_rng(0),
+                schedule="halving",
+                one_over_t_gate="flatness",
+            )

@@ -21,6 +21,120 @@ def _initial_energy():
     )
 
 
+def _make_serial_wl_pt(**overrides):
+    """Smallest valid two-window serial WangLandauParallelTempering.
+
+    Keyword ``overrides`` are merged into the constructor kwargs, so a test
+    can flip ``one_over_t_gate`` / ``bp_stall_multiple`` / ``ensemble_kwargs``
+    / ``block_size`` without restating the rest.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 50.0, e0 + 50.0
+    kwargs = dict(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+    )
+    kwargs.update(overrides)
+    return WangLandauParallelTempering(**kwargs)
+
+
+class TestOrchestratorOneOverTGate:
+    def test_constructor_stores_and_forwards(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._one_over_t_gate == "flatness"
+        assert pt._bp_stall_multiple == 3.0
+        # forwarded to the default serial pool
+        assert pt._pool._one_over_t_gate == "flatness"
+        assert pt._pool._bp_stall_multiple == 3.0
+
+    def test_constructor_rejects_bad_values(self) -> None:
+        with pytest.raises(ValueError, match="one_over_t_gate"):
+            _make_serial_wl_pt(one_over_t_gate="bogus")
+        with pytest.raises(ValueError, match="bp_stall_multiple"):
+            _make_serial_wl_pt(bp_stall_multiple=-1.0)
+
+    def test_checkpoint_meta_round_trips_policy(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        meta = pt._checkpoint_meta()
+        assert meta["one_over_t_gate"] == "flatness"
+        assert meta["bp_stall_multiple"] == 3.0
+
+    def test_flatness_gate_without_one_over_t_schedule_raises(self) -> None:
+        # The flatness gate is inert under the (default) halving schedule;
+        # selecting it without schedule="1_over_t" is a silent no-op, so
+        # construction must reject it.
+        with pytest.raises(ValueError, match="1/t schedule"):
+            _make_serial_wl_pt(one_over_t_gate="flatness")
+
+    def test_explicit_pool_policy_is_source_of_truth(self) -> None:
+        # With an explicit pool=, the orchestrator (and its checkpoint meta)
+        # must reflect the POOL's policy, not the constructor's default args.
+        # Otherwise a run governed by the pool checkpoints a different policy
+        # and resume silently diverges.
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+        from mchammer_pt.wl import WangLandauParallelTempering
+        from mchammer_pt.wl_replica import WangLandauReplica
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        replicas = [
+            WangLandauReplica(
+                cluster_expansion=ce, atoms=atoms, energy_spacing=0.1,
+                energy_limit_left=lo, energy_limit_right=hi, random_seed=s,
+                ensemble_kwargs={"schedule": "1_over_t"},
+            )
+            for s in (0, 1)
+        ]
+        pool = SerialWangLandauPool(
+            replicas, energy_spacing=0.1,
+            flatness_mode="per_walker", merge_cadence="never",
+            one_over_t_gate="flatness", bp_stall_multiple=2.5,
+        )
+        # The orchestrator receives the pool but only DEFAULT policy args.
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce, atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)], energy_spacing=0.1,
+            block_size=10, random_seed=0, pool=pool,
+        )
+        assert pt._one_over_t_gate == "flatness"
+        assert pt._bp_stall_multiple == 2.5
+        assert pt._flatness_mode == "per_walker"
+        assert pt._merge_cadence == "never"
+        meta = pt._checkpoint_meta()
+        assert meta["one_over_t_gate"] == "flatness"
+        assert meta["bp_stall_multiple"] == 2.5
+        assert meta["flatness_mode"] == "per_walker"
+        assert meta["merge_cadence"] == "never"
+
+
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
@@ -2195,3 +2309,216 @@ def test_resume_round_trips_non_empty_1_over_t_snapshot_store(tmp_path):
         df = window.get_entropy(fill_factor_limit=1.0 / 64)
         assert df is not None
         assert not df.empty
+
+
+class TestResumeOneOverTGate:
+    def test_resume_round_trips_policy(self, tmp_path) -> None:
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ekw = {"schedule": "1_over_t"}
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness", bp_stall_multiple=3.0, ensemble_kwargs=ekw,
+        )
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_policy.hdf5"
+        pt.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._one_over_t_gate == "flatness"
+        assert resumed._bp_stall_multiple == 3.0
+
+    def test_resume_preserves_stall_state(self, tmp_path) -> None:
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        # Narrow windows + coarse spacing -> few bins -> visit-once halves fast.
+        lo, hi = e0 - 3.0, e0 + 3.0
+        ekw = {"schedule": "1_over_t"}
+        pt_a = WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.5,
+            block_size=500,
+            random_seed=0,
+            ensemble_kwargs=ekw,
+        )
+        pt_a.run(n_cycles=10)
+        assert any(x is not None for x in pt_a._pool._last_halve_step), (
+            "fixture did not halve; narrow the window or raise n_cycles"
+        )
+        cp = tmp_path / "wl_stall.hdf5"
+        pt_a.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._pool._last_halve_step == pt_a._pool._last_halve_step
+        assert (
+            resumed._pool._first_halve_duration
+            == pt_a._pool._first_halve_duration
+        )
+
+
+def test_resume_process_pool_preserves_stall_state(tmp_path) -> None:
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 3.0, e0 + 3.0
+    ekw = {"schedule": "1_over_t"}
+    cp = tmp_path / "wl_proc_stall.hdf5"
+    pt_a = WangLandauParallelTempering.process_pool(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.5,
+        block_size=500,
+        random_seed=0,
+        ensemble_kwargs=ekw,
+    )
+    try:
+        pt_a.run(n_cycles=10)
+        live = [s.last_halve_step for s in pt_a._pool._slots]
+        live_t1 = [s.first_halve_duration for s in pt_a._pool._slots]
+        assert any(x is not None for x in live), (
+            "fixture did not halve; narrow the window or raise n_cycles"
+        )
+        pt_a.save_checkpoint(cp)
+    finally:
+        pt_a._pool.shutdown()
+
+    resumed = WangLandauParallelTempering.resume_process_pool(
+        cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+    )
+    try:
+        assert [s.last_halve_step for s in resumed._pool._slots] == live
+        assert [s.first_halve_duration for s in resumed._pool._slots] == live_t1
+    finally:
+        resumed._pool.shutdown()
+
+
+class TestOneOverTGateIntegration:
+    def test_default_run_unchanged(self) -> None:
+        # random_seed is fixed inside _make_serial_wl_pt, so the only
+        # difference is the explicit visit_once kwarg vs the default.
+        pt_a = _make_serial_wl_pt(ensemble_kwargs={"schedule": "1_over_t"})
+        pt_b = _make_serial_wl_pt(
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_gate="visit_once",
+        )
+        pt_a.run(n_cycles=5)
+        pt_b.run(n_cycles=5)
+        ent_a = dict(pt_a._pool._replicas[0].ensemble._entropy)
+        ent_b = dict(pt_b._pool._replicas[0].ensemble._entropy)
+        assert ent_a == ent_b
+
+    def test_serial_process_view_parity(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauWindow,
+            _view_of,
+        )
+        from mchammer_pt.wl_coordinator import (
+            WalkerPostBlockState,
+            decide_block_actions,
+        )
+
+        # A stalled, un-flat, halved-once walker state (trips the escape).
+        state = WalkerPostBlockState(
+            halving_criterion_met=False,
+            fill_factor=0.25,
+            entropy={0: 1.0, 1: 2.0},
+            step=5000,
+            window_entry_step=0,
+            histogram={0: 1, 1: 100},
+            reached_energy_window=True,
+            current_energy=0.0,
+        )
+
+        # Serial slot: a real W=1 replica under the flatness variant.
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        serial_pool = pt._pool
+        serial_slot = serial_pool._replicas[0]
+        serial_slot.walker_states = (state,)
+        serial_pool._last_halve_step[0] = 1000
+        serial_pool._first_halve_duration[0] = 100
+        v_serial = serial_pool._view_of(0, serial_slot)
+
+        # Process window: identical state.
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+        )
+        win.walker_states = [state]
+        win.last_halve_step = 1000
+        win.first_halve_duration = 100
+        v_proc = _view_of(win)
+
+        assert v_serial == v_proc
+        assert decide_block_actions(v_serial) == decide_block_actions(v_proc)
+        # And the shared decision is the stuck-window escape.
+        assert decide_block_actions(v_serial).halve is False
+        assert decide_block_actions(v_serial).switch_to_phase == "1_over_t"
+
+    def test_in_process_flatness_run_halves_and_tracks(self, tmp_path) -> None:
+        # End-to-end exercise of ProcessWangLandauPool.advance_all under the
+        # flatness variant: a narrow window halves under the flatness gate,
+        # and the process backend tracks the halve (last_halve_step set, with
+        # a consistent first-stage duration). A real, non-vacuous assertion
+        # about the new path -- not just a type check.
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from tests._in_process_pool import make_in_process_wl_pool
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        # Narrow window (few bins at the fixture's 0.1 spacing) so the
+        # flatness gate is reachable within the step budget.
+        lo, hi = e0 - 1.0, e0 + 1.0
+        pool = make_in_process_wl_pool(
+            tmp_path,
+            windows=[(lo, hi), (lo, hi)],
+            seeds=[0, 1],
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+        )
+        try:
+            for _ in range(20):
+                pool.advance_all(500)
+            assert any(s.last_halve_step is not None for s in pool._slots), (
+                "no window halved under the flatness gate; narrow the window "
+                "or raise the step budget"
+            )
+            for slot in pool._slots:
+                assert slot._one_over_t_gate == "flatness"
+                assert slot._bp_stall_multiple == 3.0
+                # A first-stage duration is only set once a halve is recorded.
+                if slot.first_halve_duration is not None:
+                    assert slot.last_halve_step is not None
+        finally:
+            pool.shutdown()

@@ -33,8 +33,12 @@ from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTGate,
+    _validate_bp_stall_multiple,
     _validate_flatness_mode,
     _validate_merge_cadence,
+    _validate_one_over_t_gate,
+    reconstruct_stall_state,
 )
 from .wl_ensemble import (
     CoordinatedWangLandauEnsemble,
@@ -270,6 +274,22 @@ class WangLandauParallelTempering(BaseParallelTempering):
             convergence-vs-length diagnostics. Default 2.0 (a snapshot
             each time f halves); None disables snapshotting. Read back
             via WindowResult.get_entropy(fill_factor_limit=...).
+        one_over_t_gate: halving-phase gate under the 1/t schedule.
+            ``"visit_once"`` (default) halves once every bin has been
+            visited, with the coupled Belardinelli-Pereyra switch.
+            ``"flatness"`` halves on the WL flatness criterion
+            (``min(H) >= flatness_limit * mean(H)``, reusing the
+            ``flatness_limit`` ensemble kwarg) bundled with a decoupled,
+            stall-safe switch evaluated every block. Only meaningful under
+            ``ensemble_kwargs={"schedule": "1_over_t"}``; selecting
+            ``"flatness"`` without that schedule raises. Recorded in the
+            checkpoint and adopted from there on resume.
+        bp_stall_multiple: only consulted under ``one_over_t_gate="flatness"``.
+            A window that has halved at least once but then stalls (cannot
+            meet the flatness gate) adopts the 1/t schedule once it has run
+            ``bp_stall_multiple`` times its first-stage duration since its
+            last halve. Default 4.0; larger is more patient. Recorded in
+            the checkpoint and adopted from there on resume.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -298,6 +318,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -323,6 +345,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             recency_visits_per_bin
         )
         dos_snapshot_ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(bp_stall_multiple)
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -390,6 +414,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 energy_spacing=energy_spacing,
                 flatness_mode=flatness_mode,
                 merge_cadence=merge_cadence,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         else:
             if len(pool) != len(windows):
@@ -417,10 +443,16 @@ class WangLandauParallelTempering(BaseParallelTempering):
             (lo, hi) for lo, hi in windows
         ]
         self._energy_spacing = float(energy_spacing)
-        self._flatness_mode: FlatnessMode = flatness_mode
-        self._merge_cadence: MergeCadence = merge_cadence
+        # The pool is the single source of truth for halving/switch policy.
+        # The constructor's policy kwargs only build the default pool (when
+        # pool is None); read the effective values back from the pool so an
+        # explicit pool= cannot diverge from the persisted checkpoint meta.
+        self._flatness_mode: FlatnessMode = pool.flatness_mode
+        self._merge_cadence: MergeCadence = pool.merge_cadence
         self._recency_visits_per_bin: int = recency_visits_per_bin
         self._dos_snapshot_ratio: float | None = dos_snapshot_ratio
+        self._one_over_t_gate: OneOverTGate = pool.one_over_t_gate
+        self._bp_stall_multiple: float = pool.bp_stall_multiple
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
@@ -497,6 +529,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             "flatness_mode": self._flatness_mode,
             "merge_cadence": self._merge_cadence,
             "recency_visits_per_bin": int(self._recency_visits_per_bin),
+            "one_over_t_gate": self._one_over_t_gate,
+            "bp_stall_multiple": float(self._bp_stall_multiple),
             # None is not in MetaValue; encode "disabled" as NaN.
             # The resume path reverses this: a NaN reads back as None.
             "dos_snapshot_ratio": (
@@ -684,6 +718,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("recency_visits_per_bin", 1000)
         )
         dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
+        one_over_t_gate: OneOverTGate = str(
+            meta.get("one_over_t_gate", "visit_once")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(
+            meta.get("bp_stall_multiple", 4.0)
+        )
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -753,7 +794,22 @@ class WangLandauParallelTempering(BaseParallelTempering):
             energy_spacing=energy_spacing,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
+
+        # Reconstruct per-slot stall state from the restored fill-factor
+        # history (its halve boundaries) and each walker's window entry.
+        per_slot_stall: list[tuple[int | None, int | None]] = []
+        offset = 0
+        for g in range(len(windows)):
+            nw = walkers_per_window[g]
+            slot_replicas = flat_replicas[offset : offset + nw]
+            ffh_keys = list(slot_replicas[0].ensemble._fill_factor_history.keys())
+            entries = [r.ensemble._window_entry_step for r in slot_replicas]
+            per_slot_stall.append(reconstruct_stall_state(ffh_keys, entries))
+            offset += nw
+        pool.seed_stall_state(per_slot_stall)
 
         # One Atoms per window (not per walker) for the constructor.
         atoms_per_window: list[Atoms] = []
@@ -774,6 +830,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -870,6 +928,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("recency_visits_per_bin", 1000)
         )
         dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
+        one_over_t_gate: OneOverTGate = str(
+            meta.get("one_over_t_gate", "visit_once")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(
+            meta.get("bp_stall_multiple", 4.0)
+        )
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -892,6 +957,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
@@ -899,6 +966,26 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 per_walker_extras=replica_extras,
                 group_state=window_groups,
             )
+            # Reconstruct per-slot stall state parent-side from the
+            # restored container _last_state (fill-factor history halve
+            # boundaries and each walker's window entry).
+            offset = 0
+            for g, slot in enumerate(pt._pool._slots):  # type: ignore[attr-defined]
+                nw = walkers_per_window[g]
+                slot_containers = containers[offset : offset + nw]
+                ffh_keys = list(
+                    slot_containers[0]._last_state.get(
+                        "fill_factor_history", {}
+                    ).keys()
+                )
+                entries = [
+                    c._last_state.get("window_entry_step")
+                    for c in slot_containers
+                ]
+                slot.last_halve_step, slot.first_halve_duration = (
+                    reconstruct_stall_state(ffh_keys, entries)
+                )
+                offset += nw
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
             pt._replica_labels = _restored_replica_labels(
@@ -937,13 +1024,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
         Wraps icet's `get_bins_for_parallel_simulations` for the
         common case of an even split. Power users construct
-        `windows` by hand. ``flatness_mode``, ``merge_cadence``, and
-        ``recency_visits_per_bin`` have the same meaning as on
+        `windows` by hand. The ensemble and policy keywords (``flatness_mode``,
+        ``merge_cadence``, ``recency_visits_per_bin``,
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
         ``atoms`` accepts the same broadcast-or-per-walker shape as
@@ -987,6 +1078,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
 
     @classmethod
@@ -1009,13 +1102,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
         Owns CE-write to tempdir and worker spawn; the tempdir is
         cleaned when the returned orchestrator is garbage-collected.
-        ``flatness_mode``, ``merge_cadence``, and
-        ``recency_visits_per_bin`` have the same meaning as on
+        The ensemble and policy keywords (``flatness_mode``,
+        ``merge_cadence``, ``recency_visits_per_bin``,
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
         ``atoms`` accepts the same broadcast-or-per-walker shape as
@@ -1042,6 +1139,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 merge_cadence=merge_cadence,
                 recency_visits_per_bin=recency_visits_per_bin,
                 dos_snapshot_ratio=dos_snapshot_ratio,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -1061,6 +1160,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 merge_cadence=merge_cadence,
                 recency_visits_per_bin=recency_visits_per_bin,
                 dos_snapshot_ratio=dos_snapshot_ratio,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         except BaseException:
             pool.shutdown()

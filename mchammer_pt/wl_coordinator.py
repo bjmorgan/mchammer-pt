@@ -7,6 +7,7 @@ data view. No dependency on backends, replicas, or IPC.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -66,8 +67,58 @@ Phase = Literal["halving", "1_over_t"]
 """
 
 
+OneOverTGate = Literal["visit_once", "flatness"]
+"""1/t-schedule halving-phase gate.
+
+- ``"visit_once"`` (default): halve once every bin has been visited,
+  with the coupled BP switch.
+- ``"flatness"``: halve on the WL flatness criterion
+  (``min(H) >= flatness_limit * mean(H)``), bundled with the decoupled
+  stall-safe switch. Only consulted under the ``"1_over_t"`` schedule.
+"""
+
+
 _VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
 _VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
+_VALID_ONE_OVER_T_GATES: tuple[str, ...] = ("visit_once", "flatness")
+
+
+def _validate_one_over_t_gate(one_over_t_gate: Any) -> None:
+    if one_over_t_gate not in _VALID_ONE_OVER_T_GATES:
+        raise ValueError(
+            f"one_over_t_gate must be one of {_VALID_ONE_OVER_T_GATES}; "
+            f"got {one_over_t_gate!r}"
+        )
+
+
+def _validate_bp_stall_multiple(bp_stall_multiple: Any) -> float:
+    if (
+        isinstance(bp_stall_multiple, bool)
+        or not isinstance(bp_stall_multiple, (int, float, np.integer, np.floating))
+        or not math.isfinite(bp_stall_multiple)
+        or float(bp_stall_multiple) <= 0.0
+    ):
+        raise ValueError(
+            f"bp_stall_multiple must be a finite positive number; "
+            f"got {bp_stall_multiple!r}"
+        )
+    return float(bp_stall_multiple)
+
+
+def _validate_gate_schedule(one_over_t_gate: Any, schedule: Any) -> None:
+    """Reject the flatness gate selected without the 1/t schedule.
+
+    ``one_over_t_gate='flatness'`` only affects the ``'1_over_t'`` schedule;
+    under ``'halving'`` it would silently do nothing. Raising at construction
+    surfaces the misconfiguration rather than letting it become a silent
+    no-op run (the worst outcome for an A/B study).
+    """
+    if one_over_t_gate == "flatness" and schedule != "1_over_t":
+        raise ValueError(
+            "one_over_t_gate='flatness' requires the 1/t schedule; pass "
+            "ensemble_kwargs={'schedule': '1_over_t'} to use the flatness "
+            "gate, or leave one_over_t_gate='visit_once'."
+        )
 
 
 def _validate_flatness_mode(flatness_mode: Any) -> None:
@@ -96,10 +147,26 @@ class SlotView:
     merge_cadence: MergeCadence
     schedule: Schedule
     flatness_limit: float
+    one_over_t_gate: OneOverTGate = "visit_once"
+    bp_stall_multiple: float = 4.0
+    last_halve_step: int | None = None
+    first_halve_duration: int | None = None
 
     @property
     def n_walkers(self) -> int:
         return len(self.walker_states)
+
+    @property
+    def walker_ts(self) -> list[int]:
+        """Per-walker ``t = step - window_entry_step + 1`` (BP time since entry).
+
+        Only meaningful once every walker has entered its window; callers
+        must guard on ``window_entry_step is not None`` first.
+        """
+        return [
+            s.step - s.window_entry_step + 1  # type: ignore[operator]
+            for s in self.walker_states
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,14 +190,17 @@ def _summed_histogram_halving_criterion_met(
     snapshots: list[WalkerPostBlockState],
     flatness_limit: float,
     schedule: Schedule,
+    one_over_t_gate: OneOverTGate = "visit_once",
 ) -> bool:
     """Pooled-histogram halving criterion across per-walker snapshots.
 
     Under ``schedule='halving'`` applies the WL flatness criterion:
     every bin count must be at least ``flatness_limit * mean(counts)``.
-    Under ``schedule='1_over_t'`` applies the BP coupon-collector
-    criterion: every bin count must be positive. Returns False if any
-    walker has not yet entered its window.
+    Under ``schedule='1_over_t'`` the gate depends on ``one_over_t_gate``:
+    ``'visit_once'`` applies the BP coupon-collector criterion (every bin
+    count positive, ``flatness_limit`` not consulted); ``'flatness'``
+    applies the same WL flatness criterion as the halving schedule.
+    Returns False if any walker has not yet entered its window.
     """
     if not snapshots:
         return False
@@ -146,13 +216,30 @@ def _summed_histogram_halving_criterion_met(
     mean_count = float(np.average(counts))
     if mean_count <= 0:
         return False
-    if schedule == "1_over_t":
+    if schedule == "1_over_t" and one_over_t_gate == "visit_once":
         # Belardinelli-Pereyra coupon-collector criterion across the
-        # pooled histogram. flatness_limit is not consulted under
-        # this schedule.
+        # pooled histogram. flatness_limit is not consulted here.
         return bool(np.all(counts > 0))
     limit = flatness_limit * mean_count
     return bool(np.all(counts >= limit))
+
+
+def _walker_flatness_met(
+    state: WalkerPostBlockState, flatness_limit: float
+) -> bool:
+    """WL flatness criterion for one walker's histogram.
+
+    ``min(H) >= flatness_limit * mean(H)`` over the walker's known bins.
+    Returns ``False`` for a walker that has not entered its window or has
+    an empty / zero-mean histogram (mirrors the pooled gate's guards).
+    """
+    if not state.reached_energy_window or not state.histogram:
+        return False
+    counts = np.array(list(state.histogram.values()))
+    mean_count = float(np.average(counts))
+    if mean_count <= 0:
+        return False
+    return bool(np.all(counts >= flatness_limit * mean_count))
 
 
 def _compute_per_walker_flat_min(
@@ -378,6 +465,70 @@ def merge_entropies(
     return {b: v - shift for b, v in merged.items()}
 
 
+def _decoupled_switch_to_phase(
+    view: SlotView, should_halve: bool
+) -> Literal["1_over_t"] | None:
+    """Decoupled BP switch: canonical crossing OR stall escape.
+
+    Collective: returns ``"1_over_t"`` only if every walker qualifies.
+    Blocked while any walker is unentered.
+
+    Unlike the coupled switch, this is evaluated every block, so a window
+    can enter the 1/t phase without a halve firing (via the stall escape).
+    """
+    states = view.walker_states
+    if not states:
+        return None
+    if any(s.window_entry_step is None for s in states):
+        return None
+    # Walkers in a slot run in lockstep (one collective advance per block),
+    # so they share a single step and fill factor; read them from walker 0.
+    f_now = states[0].fill_factor
+    ts = view.walker_ts
+    # (a) canonical crossing (post-halve f when a halve fires this block).
+    f_ref = (f_now / 2.0) if should_halve else f_now
+    canonical = all((1.0 / t) > f_ref for t in ts)
+    # (b) stall escape: only for a slot that has halved at least once.
+    escape = False
+    if view.last_halve_step is not None and view.first_halve_duration is not None:
+        continuity = all((1.0 / t) <= f_now for t in ts)
+        since = states[0].step - view.last_halve_step
+        stall = since > view.bp_stall_multiple * view.first_halve_duration
+        escape = continuity and stall
+    return "1_over_t" if (canonical or escape) else None
+
+
+def _decide_flatness_decoupled(view: SlotView) -> CoordinatorPlan:
+    """1/t-schedule flatness gate plus the decoupled switch.
+
+    Runs the flatness halving gate and delegates the switch decision to
+    :func:`_decoupled_switch_to_phase` on every block.
+    """
+    if view.flatness_mode == "per_walker":
+        should_halve = all(
+            _walker_flatness_met(s, view.flatness_limit)
+            for s in view.walker_states
+        )
+    else:
+        should_halve = _summed_histogram_halving_criterion_met(
+            list(view.walker_states),
+            view.flatness_limit,
+            view.schedule,
+            one_over_t_gate="flatness",
+        )
+    switch_to_phase = _decoupled_switch_to_phase(view, should_halve)
+    merged_entropy: dict[int, float] | None = None
+    if should_halve and view.merge_cadence == "at_halve" and view.n_walkers > 1:
+        merged_entropy = merge_entropies(
+            [dict(s.entropy) for s in view.walker_states]
+        )
+    return CoordinatorPlan(
+        halve=should_halve,
+        merged_entropy=merged_entropy,
+        switch_to_phase=switch_to_phase,
+    )
+
+
 def decide_block_actions(view: SlotView) -> CoordinatorPlan:
     """Decide the per-block coordinator actions for one slot.
 
@@ -389,6 +540,9 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
         return CoordinatorPlan(
             halve=False, merged_entropy=None, switch_to_phase=None
         )
+
+    if view.schedule == "1_over_t" and view.one_over_t_gate == "flatness":
+        return _decide_flatness_decoupled(view)
 
     if view.flatness_mode == "per_walker":
         should_halve = all(
@@ -418,10 +572,7 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
             s.window_entry_step is None for s in view.walker_states
         )
         if not unentered:
-            ts = [
-                s.step - s.window_entry_step + 1  # type: ignore[operator]
-                for s in view.walker_states
-            ]
+            ts = view.walker_ts
             post_halve_fs = [
                 s.fill_factor / 2.0 for s in view.walker_states
             ]
@@ -433,3 +584,48 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
         merged_entropy=merged_entropy,
         switch_to_phase=switch_to_phase,
     )
+
+
+def reconstruct_stall_state(
+    fill_factor_history_keys: list[Any],
+    window_entry_steps: list[int | None],
+) -> tuple[int | None, int | None]:
+    """Rebuild ``(last_halve_step, first_halve_duration)`` from saved state.
+
+    ``_fill_factor_history`` keys are the initial entry plus one per
+    collective halve, so the sorted keys after the first are the halve
+    steps. ``T1`` (first-stage duration) is the first halve step minus the
+    latest walker ``window_entry_step`` in the slot. Returns ``(None, None)``
+    when the slot has not halved (so the stall escape stays disarmed).
+    Used on resume; the live run tracks these incrementally.
+
+    ``window_entry_step`` is only recorded under the ``1_over_t`` schedule,
+    so a slot that halved under the ``halving`` schedule legitimately has no
+    entries; that yields ``(last_halve_step, None)`` (disarmed), which is
+    correct because the halving schedule has no decoupled switch.
+
+    A first-stage duration of zero is valid: a walker can enter on the
+    final step of its first halving block, so the first halve and the entry
+    share a step (the live backend records ``step - entry == 0`` there).
+
+    Raises:
+        ValueError: if the first halve *precedes* the latest window entry (a
+            negative first-stage duration). A halve cannot be recorded before
+            a walker enters, so this is physically impossible in a correctly
+            round-tripped checkpoint and signals a corrupted or truncated one.
+    """
+    keys = sorted(int(k) for k in fill_factor_history_keys)
+    halve_steps = keys[1:]
+    if not halve_steps:
+        return (None, None)
+    entries = [int(e) for e in window_entry_steps if e is not None]
+    if not entries:
+        return (halve_steps[-1], None)
+    t1 = halve_steps[0] - max(entries)
+    if t1 < 0:
+        raise ValueError(
+            f"reconstruct_stall_state: first halve at step {halve_steps[0]} "
+            f"precedes the latest window entry {max(entries)} "
+            f"(first-stage duration {t1} < 0); corrupted checkpoint."
+        )
+    return (halve_steps[-1], t1)

@@ -35,6 +35,7 @@ from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTGate,
     Phase,
     Schedule,
     SlotView,
@@ -43,8 +44,11 @@ from ..wl_coordinator import (
     _compute_per_walker_breakdown,
     _compute_per_walker_flat_min,
     _compute_recency_flatness,
+    _validate_bp_stall_multiple,
     _validate_flatness_mode,
+    _validate_gate_schedule,
     _validate_merge_cadence,
+    _validate_one_over_t_gate,
     decide_block_actions,
     merge_entropies,
 )
@@ -610,15 +614,25 @@ class ProcessWangLandauWindow:
         merge_cadence: MergeCadence = "at_halve",
         schedule: Schedule = "halving",
         flatness_limit: float = 0.8,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> None:
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
+        _validate_one_over_t_gate(one_over_t_gate)
+        _validate_gate_schedule(one_over_t_gate, schedule)
         self.workers = workers
         self.rng = rng
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._schedule: Schedule = schedule
         self._flatness_limit: float = float(flatness_limit)
+        self._one_over_t_gate: OneOverTGate = one_over_t_gate
+        self._bp_stall_multiple: float = _validate_bp_stall_multiple(
+            bp_stall_multiple
+        )
+        self.last_halve_step: int | None = None
+        self.first_halve_duration: int | None = None
         self.phase: Phase = "halving"
         self.walker_states: list[WalkerPostBlockState] = [
             WalkerPostBlockState(
@@ -722,6 +736,10 @@ def _view_of(slot: ProcessWangLandauWindow) -> SlotView:
         merge_cadence=slot._merge_cadence,
         schedule=slot._schedule,
         flatness_limit=slot._flatness_limit,
+        one_over_t_gate=slot._one_over_t_gate,
+        bp_stall_multiple=slot._bp_stall_multiple,
+        last_halve_step=slot.last_halve_step,
+        first_halve_duration=slot.first_halve_duration,
     )
 
 
@@ -784,10 +802,20 @@ class ProcessWangLandauPool:
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
+        _validate_one_over_t_gate(one_over_t_gate)
+        _validate_gate_schedule(
+            one_over_t_gate, (ensemble_kwargs or {}).get("schedule", "halving")
+        )
+        self._one_over_t_gate: OneOverTGate = one_over_t_gate
+        self._bp_stall_multiple: float = _validate_bp_stall_multiple(
+            bp_stall_multiple
+        )
         self._flatness_mode: FlatnessMode = flatness_mode
         self._merge_cadence: MergeCadence = merge_cadence
         self._recency_visits_per_bin: int = _validate_recency_visits_per_bin(
@@ -905,6 +933,8 @@ class ProcessWangLandauPool:
                         Schedule, extra_kwargs.get("schedule", "halving")
                     ),
                     flatness_limit=self._flatness_limit,
+                    one_over_t_gate=self._one_over_t_gate,
+                    bp_stall_multiple=self._bp_stall_multiple,
                 ))
 
             for i, slot in enumerate(self._slots):
@@ -979,6 +1009,26 @@ class ProcessWangLandauPool:
     def energy_spacing(self) -> float:
         return self._energy_spacing
 
+    @property
+    def flatness_mode(self) -> FlatnessMode:
+        """Collective-halving flatness mode this pool drives."""
+        return self._flatness_mode
+
+    @property
+    def merge_cadence(self) -> MergeCadence:
+        """Entropy-merge cadence this pool drives."""
+        return self._merge_cadence
+
+    @property
+    def one_over_t_gate(self) -> OneOverTGate:
+        """1/t-schedule halving-phase gate this pool drives."""
+        return self._one_over_t_gate
+
+    @property
+    def bp_stall_multiple(self) -> float:
+        """Stall-escape multiple this pool drives (consulted under flatness)."""
+        return self._bp_stall_multiple
+
     def advance_all(self, n_steps: int) -> None:
         # Three stages: ADVANCE (one fan-out across every worker in
         # every window), DECIDE (pure-Python coordinator decisions
@@ -1035,6 +1085,16 @@ class ProcessWangLandauPool:
                 broadcast_gather(halve_targets, ("FORCE_HALVE",))
                 for slot, plan in zip(self._slots, plans, strict=True):
                     if plan.halve:
+                        step = slot.walker_states[0].step
+                        if slot.last_halve_step is None:
+                            entries = [
+                                s.window_entry_step
+                                for s in slot.walker_states
+                                if s.window_entry_step is not None
+                            ]
+                            if entries:
+                                slot.first_halve_duration = step - max(entries)
+                        slot.last_halve_step = step
                         slot.walker_states = [
                             replace(s, fill_factor=s.fill_factor / 2.0)
                             for s in slot.walker_states

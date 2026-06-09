@@ -102,6 +102,8 @@ def make_in_process_wl_pool(
     ensemble_kwargs: dict[str, Any] | None = None,
     flatness_mode: str = "pooled",
     merge_cadence: str = "at_halve",
+    one_over_t_gate: str = "visit_once",
+    bp_stall_multiple: float = 4.0,
 ) -> ProcessWangLandauPool:
     """Build a :class:`ProcessWangLandauPool` whose workers are in-process conns.
 
@@ -130,6 +132,8 @@ def make_in_process_wl_pool(
     pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
     pool._flatness_mode = flatness_mode  # type: ignore[assignment]
     pool._merge_cadence = merge_cadence  # type: ignore[assignment]
+    pool._one_over_t_gate = one_over_t_gate  # type: ignore[assignment]
+    pool._bp_stall_multiple = bp_stall_multiple
     pool._merge_events = []
     pool._flatness_limit = flatness_limit
     pool._windows = list(windows)
@@ -171,6 +175,8 @@ def make_in_process_wl_pool(
             merge_cadence=merge_cadence,  # type: ignore[arg-type]
             schedule=str(extra_kwargs.get("schedule", "halving")),
             flatness_limit=flatness_limit,
+            one_over_t_gate=one_over_t_gate,  # type: ignore[arg-type]
+            bp_stall_multiple=bp_stall_multiple,
         ))
     pool._ensemble_cls_fqn = (
         f"{CoordinatedWangLandauEnsemble.__module__}."
