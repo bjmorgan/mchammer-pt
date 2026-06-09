@@ -38,6 +38,7 @@ from .wl_coordinator import (
     _validate_flatness_mode,
     _validate_merge_cadence,
     _validate_one_over_t_gate,
+    reconstruct_stall_state,
 )
 from .wl_ensemble import (
     CoordinatedWangLandauEnsemble,
@@ -697,6 +698,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("recency_visits_per_bin", 1000)
         )
         dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
+        one_over_t_gate: OneOverTGate = str(
+            meta.get("one_over_t_gate", "visit_once")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(
+            meta.get("bp_stall_multiple", 4.0)
+        )
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -766,7 +774,22 @@ class WangLandauParallelTempering(BaseParallelTempering):
             energy_spacing=energy_spacing,
             flatness_mode=flatness_mode,
             merge_cadence=merge_cadence,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
+
+        # Reconstruct per-slot stall state from the restored fill-factor
+        # history (its halve boundaries) and each walker's window entry.
+        per_slot_stall: list[tuple[int | None, int | None]] = []
+        offset = 0
+        for g in range(len(windows)):
+            nw = walkers_per_window[g]
+            slot_replicas = flat_replicas[offset : offset + nw]
+            ffh_keys = list(slot_replicas[0].ensemble._fill_factor_history.keys())
+            entries = [r.ensemble._window_entry_step for r in slot_replicas]
+            per_slot_stall.append(reconstruct_stall_state(ffh_keys, entries))
+            offset += nw
+        pool.seed_stall_state(per_slot_stall)
 
         # One Atoms per window (not per walker) for the constructor.
         atoms_per_window: list[Atoms] = []
@@ -787,6 +810,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -883,6 +908,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
             meta.get("recency_visits_per_bin", 1000)
         )
         dos_snapshot_ratio = _decode_dos_snapshot_ratio(meta)
+        one_over_t_gate: OneOverTGate = str(
+            meta.get("one_over_t_gate", "visit_once")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(
+            meta.get("bp_stall_multiple", 4.0)
+        )
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -905,6 +937,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
@@ -912,6 +946,26 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 per_walker_extras=replica_extras,
                 group_state=window_groups,
             )
+            # Reconstruct per-slot stall state parent-side from the
+            # restored container _last_state (fill-factor history halve
+            # boundaries and each walker's window entry).
+            offset = 0
+            for g, slot in enumerate(pt._pool._slots):  # type: ignore[attr-defined]
+                nw = walkers_per_window[g]
+                slot_containers = containers[offset : offset + nw]
+                ffh_keys = list(
+                    slot_containers[0]._last_state.get(
+                        "fill_factor_history", {}
+                    ).keys()
+                )
+                entries = [
+                    c._last_state.get("window_entry_step")
+                    for c in slot_containers
+                ]
+                slot.last_halve_step, slot.first_halve_duration = (
+                    reconstruct_stall_state(ffh_keys, entries)
+                )
+                offset += nw
             pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
             pt._ensemble_kwargs_hash = str(meta["ensemble_kwargs_hash"])
             pt._replica_labels = _restored_replica_labels(

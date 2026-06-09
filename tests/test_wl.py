@@ -2255,3 +2255,59 @@ def test_resume_round_trips_non_empty_1_over_t_snapshot_store(tmp_path):
         df = window.get_entropy(fill_factor_limit=1.0 / 64)
         assert df is not None
         assert not df.empty
+
+
+class TestResumeOneOverTGate:
+    def test_resume_round_trips_policy(self, tmp_path) -> None:
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ekw = {"schedule": "1_over_t"}
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness", bp_stall_multiple=3.0, ensemble_kwargs=ekw,
+        )
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_policy.hdf5"
+        pt.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._one_over_t_gate == "flatness"
+        assert resumed._bp_stall_multiple == 3.0
+
+    def test_resume_preserves_stall_state(self, tmp_path) -> None:
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        # Narrow windows + coarse spacing -> few bins -> visit-once halves fast.
+        lo, hi = e0 - 3.0, e0 + 3.0
+        ekw = {"schedule": "1_over_t"}
+        pt_a = WangLandauParallelTempering(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)],
+            energy_spacing=0.5,
+            block_size=500,
+            random_seed=0,
+            ensemble_kwargs=ekw,
+        )
+        pt_a.run(n_cycles=10)
+        assert any(x is not None for x in pt_a._pool._last_halve_step), (
+            "fixture did not halve; narrow the window or raise n_cycles"
+        )
+        cp = tmp_path / "wl_stall.hdf5"
+        pt_a.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._pool._last_halve_step == pt_a._pool._last_halve_step
+        assert (
+            resumed._pool._first_halve_duration
+            == pt_a._pool._first_halve_duration
+        )
