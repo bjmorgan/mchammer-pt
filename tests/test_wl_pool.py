@@ -1996,3 +1996,44 @@ class TestSerialPoolPolicyThreading:
         pool._update_stall_state(0, halve, step=1500, window_entry_steps=[100])
         assert pool._last_halve_step[0] == 1500
         assert pool._first_halve_duration[0] == 800
+
+
+class TestProcessWindowStallFields:
+    def test_window_has_policy_and_stall_fields(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import ProcessWangLandauWindow
+
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+        )
+        assert win._one_over_t_gate == "flatness"
+        assert win._bp_stall_multiple == 3.0
+        assert win.last_halve_step is None
+        assert win.first_halve_duration is None
+
+    def test_view_of_injects_fields(self) -> None:
+        import numpy as np
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauWindow,
+            _view_of,
+        )
+
+        win = ProcessWangLandauWindow(
+            workers=[],
+            rng=np.random.default_rng(0),
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            bp_stall_multiple=2.0,
+        )
+        win.last_halve_step = 1000
+        win.first_halve_duration = 100
+        view = _view_of(win)
+        assert view.one_over_t_gate == "flatness"
+        assert view.bp_stall_multiple == 2.0
+        assert view.last_halve_step == 1000
+        assert view.first_halve_duration == 100
