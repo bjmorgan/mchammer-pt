@@ -33,8 +33,11 @@ from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTGate,
+    _validate_bp_stall_multiple,
     _validate_flatness_mode,
     _validate_merge_cadence,
+    _validate_one_over_t_gate,
 )
 from .wl_ensemble import (
     CoordinatedWangLandauEnsemble,
@@ -298,6 +301,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -323,6 +328,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             recency_visits_per_bin
         )
         dos_snapshot_ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
+        _validate_one_over_t_gate(one_over_t_gate)
+        bp_stall_multiple = _validate_bp_stall_multiple(bp_stall_multiple)
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -390,6 +397,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 energy_spacing=energy_spacing,
                 flatness_mode=flatness_mode,
                 merge_cadence=merge_cadence,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         else:
             if len(pool) != len(windows):
@@ -421,6 +430,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         self._merge_cadence: MergeCadence = merge_cadence
         self._recency_visits_per_bin: int = recency_visits_per_bin
         self._dos_snapshot_ratio: float | None = dos_snapshot_ratio
+        self._one_over_t_gate: OneOverTGate = one_over_t_gate
+        self._bp_stall_multiple: float = bp_stall_multiple
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
@@ -497,6 +508,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             "flatness_mode": self._flatness_mode,
             "merge_cadence": self._merge_cadence,
             "recency_visits_per_bin": int(self._recency_visits_per_bin),
+            "one_over_t_gate": self._one_over_t_gate,
+            "bp_stall_multiple": float(self._bp_stall_multiple),
             # None is not in MetaValue; encode "disabled" as NaN.
             # The resume path reverses this: a NaN reads back as None.
             "dos_snapshot_ratio": (
@@ -937,6 +950,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
@@ -987,6 +1002,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_gate=one_over_t_gate,
+            bp_stall_multiple=bp_stall_multiple,
         )
 
     @classmethod
@@ -1009,6 +1026,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         merge_cadence: MergeCadence = "at_halve",
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_gate: OneOverTGate = "visit_once",
+        bp_stall_multiple: float = 4.0,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
@@ -1042,6 +1061,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 merge_cadence=merge_cadence,
                 recency_visits_per_bin=recency_visits_per_bin,
                 dos_snapshot_ratio=dos_snapshot_ratio,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -1061,6 +1082,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 merge_cadence=merge_cadence,
                 recency_visits_per_bin=recency_visits_per_bin,
                 dos_snapshot_ratio=dos_snapshot_ratio,
+                one_over_t_gate=one_over_t_gate,
+                bp_stall_multiple=bp_stall_multiple,
             )
         except BaseException:
             pool.shutdown()

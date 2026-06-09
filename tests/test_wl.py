@@ -21,6 +21,66 @@ def _initial_energy():
     )
 
 
+def _make_serial_wl_pt(**overrides):
+    """Smallest valid two-window serial WangLandauParallelTempering.
+
+    Keyword ``overrides`` are merged into the constructor kwargs, so a test
+    can flip ``one_over_t_gate`` / ``bp_stall_multiple`` / ``ensemble_kwargs``
+    / ``block_size`` without restating the rest.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 50.0, e0 + 50.0
+    kwargs = dict(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+    )
+    kwargs.update(overrides)
+    return WangLandauParallelTempering(**kwargs)
+
+
+class TestOrchestratorOneOverTGate:
+    def test_constructor_stores_and_forwards(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._one_over_t_gate == "flatness"
+        assert pt._bp_stall_multiple == 3.0
+        # forwarded to the default serial pool
+        assert pt._pool._one_over_t_gate == "flatness"
+        assert pt._pool._bp_stall_multiple == 3.0
+
+    def test_constructor_rejects_bad_values(self) -> None:
+        with pytest.raises(ValueError, match="one_over_t_gate"):
+            _make_serial_wl_pt(one_over_t_gate="bogus")
+        with pytest.raises(ValueError, match="bp_stall_multiple"):
+            _make_serial_wl_pt(bp_stall_multiple=-1.0)
+
+    def test_checkpoint_meta_round_trips_policy(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_gate="flatness",
+            bp_stall_multiple=3.0,
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        meta = pt._checkpoint_meta()
+        assert meta["one_over_t_gate"] == "flatness"
+        assert meta["bp_stall_multiple"] == 3.0
+
+
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
