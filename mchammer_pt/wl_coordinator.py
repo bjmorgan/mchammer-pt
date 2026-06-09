@@ -131,6 +131,10 @@ class SlotView:
     merge_cadence: MergeCadence
     schedule: Schedule
     flatness_limit: float
+    one_over_t_gate: OneOverTGate = "visit_once"
+    bp_stall_multiple: float = 4.0
+    last_halve_step: int | None = None
+    first_halve_duration: int | None = None
 
     @property
     def n_walkers(self) -> int:

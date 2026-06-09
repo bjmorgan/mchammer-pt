@@ -527,3 +527,19 @@ class TestOneOverTGateValidators:
         for bad in (0, -1.0, float("inf"), float("nan"), np.float64("nan"), True):
             with pytest.raises(ValueError, match="bp_stall_multiple"):
                 _validate_bp_stall_multiple(bad)
+
+
+class TestSlotViewDefaults:
+    def test_new_fields_default_to_today(self) -> None:
+        view = SlotView(
+            walker_states=(),
+            phase="halving",
+            flatness_mode="pooled",
+            merge_cadence="at_halve",
+            schedule="1_over_t",
+            flatness_limit=0.8,
+        )
+        assert view.one_over_t_gate == "visit_once"
+        assert view.bp_stall_multiple == 4.0
+        assert view.last_halve_step is None
+        assert view.first_halve_duration is None
