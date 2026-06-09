@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``one_over_t_gate`` keyword on ``WangLandauParallelTempering`` (also on
+  ``from_bin_count`` and ``process_pool``; default ``"visit_once"``):
+  selects the gate that controls when a window halves its fill factor and
+  switches to the Belardinelli-Pereyra 1/t schedule. The default
+  ``"visit_once"`` reproduces today's 1/t-schedule behaviour (a visit-once
+  halving gate coupled to the switch). ``"flatness"`` selects a flatness
+  halving gate (reusing ``flatness_limit`` as the threshold) bundled with a
+  decoupled, stall-safe 1/t switch evaluated every block.
+- ``bp_stall_multiple`` keyword on ``WangLandauParallelTempering`` (also on
+  ``from_bin_count`` and ``process_pool``; default ``4.0``): the multiple of
+  the first-stage duration after which a stalled window (one that has halved
+  at least once but cannot meet the flatness gate) adopts the 1/t schedule.
+  Only consulted under ``one_over_t_gate="flatness"``.
+
 ## [0.20.0] - 2026-06-08
 
 ### Added
