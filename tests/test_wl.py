@@ -87,6 +87,53 @@ class TestOrchestratorOneOverTGate:
         with pytest.raises(ValueError, match="1/t schedule"):
             _make_serial_wl_pt(one_over_t_gate="flatness")
 
+    def test_explicit_pool_policy_is_source_of_truth(self) -> None:
+        # With an explicit pool=, the orchestrator (and its checkpoint meta)
+        # must reflect the POOL's policy, not the constructor's default args.
+        # Otherwise a run governed by the pool checkpoints a different policy
+        # and resume silently diverges.
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+        from mchammer_pt.wl import WangLandauParallelTempering
+        from mchammer_pt.wl_replica import WangLandauReplica
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        replicas = [
+            WangLandauReplica(
+                cluster_expansion=ce, atoms=atoms, energy_spacing=0.1,
+                energy_limit_left=lo, energy_limit_right=hi, random_seed=s,
+                ensemble_kwargs={"schedule": "1_over_t"},
+            )
+            for s in (0, 1)
+        ]
+        pool = SerialWangLandauPool(
+            replicas, energy_spacing=0.1,
+            flatness_mode="per_walker", merge_cadence="never",
+            one_over_t_gate="flatness", bp_stall_multiple=2.5,
+        )
+        # The orchestrator receives the pool but only DEFAULT policy args.
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce, atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)], energy_spacing=0.1,
+            block_size=10, random_seed=0, pool=pool,
+        )
+        assert pt._one_over_t_gate == "flatness"
+        assert pt._bp_stall_multiple == 2.5
+        assert pt._flatness_mode == "per_walker"
+        assert pt._merge_cadence == "never"
+        meta = pt._checkpoint_meta()
+        assert meta["one_over_t_gate"] == "flatness"
+        assert meta["bp_stall_multiple"] == 2.5
+        assert meta["flatness_mode"] == "per_walker"
+        assert meta["merge_cadence"] == "never"
+
 
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ..replica import Replica
+    from ..wl_coordinator import FlatnessMode, MergeCadence, OneOverTGate
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (
@@ -185,6 +186,26 @@ class WangLandauPool(ReplicaPool, Protocol):
 
     @property
     def energy_spacing(self) -> float: ...
+
+    @property
+    def flatness_mode(self) -> FlatnessMode:
+        """Collective-halving flatness mode this pool drives."""
+        ...
+
+    @property
+    def merge_cadence(self) -> MergeCadence:
+        """Entropy-merge cadence this pool drives."""
+        ...
+
+    @property
+    def one_over_t_gate(self) -> OneOverTGate:
+        """1/t-schedule halving-phase gate this pool drives."""
+        ...
+
+    @property
+    def bp_stall_multiple(self) -> float:
+        """Stall-escape multiple this pool drives (consulted under flatness)."""
+        ...
 
     @property
     def ensemble_cls_fqn(self) -> str:

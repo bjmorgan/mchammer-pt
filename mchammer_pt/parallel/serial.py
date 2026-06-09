@@ -341,6 +341,26 @@ class SerialWangLandauPool:
     def energy_spacing(self) -> float:
         return self._energy_spacing
 
+    @property
+    def flatness_mode(self) -> FlatnessMode:
+        """Collective-halving flatness mode this pool drives."""
+        return self._flatness_mode
+
+    @property
+    def merge_cadence(self) -> MergeCadence:
+        """Entropy-merge cadence this pool drives."""
+        return self._merge_cadence
+
+    @property
+    def one_over_t_gate(self) -> OneOverTGate:
+        """1/t-schedule halving-phase gate this pool drives."""
+        return self._one_over_t_gate
+
+    @property
+    def bp_stall_multiple(self) -> float:
+        """Stall-escape multiple this pool drives (consulted under flatness)."""
+        return self._bp_stall_multiple
+
     def _view_of(self, index: int, slot: WangLandauSlot) -> SlotView:
         """Build a SlotView from a slot's walker_states plus pool config."""
         return SlotView(

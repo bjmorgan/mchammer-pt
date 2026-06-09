@@ -1009,6 +1009,26 @@ class ProcessWangLandauPool:
     def energy_spacing(self) -> float:
         return self._energy_spacing
 
+    @property
+    def flatness_mode(self) -> FlatnessMode:
+        """Collective-halving flatness mode this pool drives."""
+        return self._flatness_mode
+
+    @property
+    def merge_cadence(self) -> MergeCadence:
+        """Entropy-merge cadence this pool drives."""
+        return self._merge_cadence
+
+    @property
+    def one_over_t_gate(self) -> OneOverTGate:
+        """1/t-schedule halving-phase gate this pool drives."""
+        return self._one_over_t_gate
+
+    @property
+    def bp_stall_multiple(self) -> float:
+        """Stall-escape multiple this pool drives (consulted under flatness)."""
+        return self._bp_stall_multiple
+
     def advance_all(self, n_steps: int) -> None:
         # Three stages: ADVANCE (one fan-out across every worker in
         # every window), DECIDE (pure-Python coordinator decisions
