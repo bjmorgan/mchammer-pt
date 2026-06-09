@@ -16,12 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``"visit_once"`` reproduces today's 1/t-schedule behaviour (a visit-once
   halving gate coupled to the switch). ``"flatness"`` selects a flatness
   halving gate (reusing ``flatness_limit`` as the threshold) bundled with a
-  decoupled, stall-safe 1/t switch evaluated every block.
+  decoupled, stall-safe 1/t switch evaluated every block. Selecting
+  ``"flatness"`` without ``ensemble_kwargs={"schedule": "1_over_t"}`` raises
+  at construction, since the gate is inert under the halving schedule.
 - ``bp_stall_multiple`` keyword on ``WangLandauParallelTempering`` (also on
   ``from_bin_count`` and ``process_pool``; default ``4.0``): the multiple of
   the first-stage duration after which a stalled window (one that has halved
   at least once but cannot meet the flatness gate) adopts the 1/t schedule.
   Only consulted under ``one_over_t_gate="flatness"``.
+- Read-only ``flatness_mode``, ``merge_cadence``, ``one_over_t_gate``, and
+  ``bp_stall_multiple`` properties on ``SerialWangLandauPool`` and
+  ``ProcessWangLandauPool`` (and the ``WangLandauPool`` protocol). When an
+  explicit ``pool=`` is passed to ``WangLandauParallelTempering`` these
+  pool-held values are the single source of truth: the orchestrator adopts
+  them (and records them in checkpoint metadata) in preference to its own
+  policy keyword arguments, which then only build the default pool when
+  ``pool`` is ``None``. A caller therefore sets each policy once, on the
+  pool, without repeating it to the orchestrator.
 
 ## [0.20.0] - 2026-06-08
 
