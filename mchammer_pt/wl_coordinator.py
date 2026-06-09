@@ -140,6 +140,18 @@ class SlotView:
     def n_walkers(self) -> int:
         return len(self.walker_states)
 
+    @property
+    def walker_ts(self) -> list[int]:
+        """Per-walker ``t = step - window_entry_step + 1`` (BP time since entry).
+
+        Only meaningful once every walker has entered its window; callers
+        must guard on ``window_entry_step is not None`` first.
+        """
+        return [
+            s.step - s.window_entry_step + 1  # type: ignore[operator]
+            for s in self.walker_states
+        ]
+
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorPlan:
@@ -437,6 +449,71 @@ def merge_entropies(
     return {b: v - shift for b, v in merged.items()}
 
 
+def _decoupled_switch_to_phase(
+    view: SlotView, should_halve: bool
+) -> Literal["1_over_t"] | None:
+    """Decoupled BP switch: canonical crossing OR stall escape.
+
+    Collective: returns ``"1_over_t"`` only if every walker qualifies.
+    Blocked while any walker is unentered.
+
+    Unlike the coupled switch, this is evaluated every block, so a window
+    can enter the 1/t phase without a halve firing (via the stall escape)
+    -- which is what makes a flatness gate safe from permanent stalls.
+    """
+    states = view.walker_states
+    if not states:
+        return None
+    if any(s.window_entry_step is None for s in states):
+        return None
+    # Walkers in a slot run in lockstep (one collective advance per block),
+    # so they share a single step and fill factor; read them from walker 0.
+    f_now = states[0].fill_factor
+    ts = view.walker_ts
+    # (a) canonical crossing (post-halve f when a halve fires this block).
+    f_ref = (f_now / 2.0) if should_halve else f_now
+    canonical = all((1.0 / t) > f_ref for t in ts)
+    # (b) stall escape: only for a slot that has halved at least once.
+    escape = False
+    if view.last_halve_step is not None and view.first_halve_duration is not None:
+        continuity = all((1.0 / t) <= f_now for t in ts)
+        since = states[0].step - view.last_halve_step
+        stall = since > view.bp_stall_multiple * view.first_halve_duration
+        escape = continuity and stall
+    return "1_over_t" if (canonical or escape) else None
+
+
+def _decide_flatness_decoupled(view: SlotView) -> CoordinatorPlan:
+    """1/t-schedule flatness gate plus the decoupled switch.
+
+    The switch is evaluated every block regardless of whether a halve
+    fires, so a stalled window can still enter the 1/t phase.
+    """
+    if view.flatness_mode == "per_walker":
+        should_halve = all(
+            _walker_flatness_met(s, view.flatness_limit)
+            for s in view.walker_states
+        )
+    else:
+        should_halve = _summed_histogram_halving_criterion_met(
+            list(view.walker_states),
+            view.flatness_limit,
+            view.schedule,
+            one_over_t_gate="flatness",
+        )
+    switch_to_phase = _decoupled_switch_to_phase(view, should_halve)
+    merged_entropy: dict[int, float] | None = None
+    if should_halve and view.merge_cadence == "at_halve" and view.n_walkers > 1:
+        merged_entropy = merge_entropies(
+            [dict(s.entropy) for s in view.walker_states]
+        )
+    return CoordinatorPlan(
+        halve=should_halve,
+        merged_entropy=merged_entropy,
+        switch_to_phase=switch_to_phase,
+    )
+
+
 def decide_block_actions(view: SlotView) -> CoordinatorPlan:
     """Decide the per-block coordinator actions for one slot.
 
@@ -448,6 +525,9 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
         return CoordinatorPlan(
             halve=False, merged_entropy=None, switch_to_phase=None
         )
+
+    if view.schedule == "1_over_t" and view.one_over_t_gate == "flatness":
+        return _decide_flatness_decoupled(view)
 
     if view.flatness_mode == "per_walker":
         should_halve = all(
@@ -477,10 +557,7 @@ def decide_block_actions(view: SlotView) -> CoordinatorPlan:
             s.window_entry_step is None for s in view.walker_states
         )
         if not unentered:
-            ts = [
-                s.step - s.window_entry_step + 1  # type: ignore[operator]
-                for s in view.walker_states
-            ]
+            ts = view.walker_ts
             post_halve_fs = [
                 s.fill_factor / 2.0 for s in view.walker_states
             ]

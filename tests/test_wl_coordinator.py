@@ -56,6 +56,10 @@ def _view(
     merge_cadence: str = "at_halve",
     schedule: str = "halving",
     flatness_limit: float = 0.8,
+    one_over_t_gate: str = "visit_once",
+    bp_stall_multiple: float = 4.0,
+    last_halve_step: int | None = None,
+    first_halve_duration: int | None = None,
 ) -> SlotView:
     return SlotView(
         walker_states=tuple(states),
@@ -64,6 +68,10 @@ def _view(
         merge_cadence=merge_cadence,  # type: ignore[arg-type]
         schedule=schedule,
         flatness_limit=flatness_limit,
+        one_over_t_gate=one_over_t_gate,  # type: ignore[arg-type]
+        bp_stall_multiple=bp_stall_multiple,
+        last_halve_step=last_halve_step,
+        first_halve_duration=first_halve_duration,
     )
 
 
@@ -577,3 +585,126 @@ class TestOneOverTFlatnessGate:
         assert not _walker_flatness_met(unflat, 0.8)
         assert not _walker_flatness_met(empty, 0.8)
         assert not _walker_flatness_met(unentered, 0.8)
+
+
+class TestDecoupledSwitch:
+    def test_stuck_window_enters_one_over_t_without_halving(self) -> None:
+        # Persistently un-flat, but has halved (T1 set) and stalled long.
+        # last_halve_step=1000, T1=100, M=4 -> threshold 400; since=5000-1000.
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=0.25,
+                step=5000,
+                window_entry_step=0,
+            )
+        ]
+        view = _view(
+            states,
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            last_halve_step=1000,
+            first_halve_duration=100,
+            bp_stall_multiple=4.0,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is False
+        assert plan.switch_to_phase == "1_over_t"
+
+    def test_never_halved_is_not_escaped(self) -> None:
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=1.0,
+                step=5000,
+                window_entry_step=0,
+            )
+        ]
+        view = _view(
+            states,
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            last_halve_step=None,
+            first_halve_duration=None,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is False
+        assert plan.switch_to_phase is None
+
+    def test_canonical_crossing_fires_at_same_point_as_coupled(self) -> None:
+        # t=1 (step 0, entry 0), post-halve f=0.5, 1/t=1.0 > 0.5 -> switch.
+        # Flat histogram so the halve fires too, matching the coupled test.
+        states = [
+            _state(
+                histogram={0: 100, 1: 100},
+                fill_factor=1.0,
+                step=0,
+                window_entry_step=0,
+            )
+        ]
+        view = _view(
+            states,
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            last_halve_step=None,
+            first_halve_duration=None,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is True
+        assert plan.switch_to_phase == "1_over_t"
+
+    def test_no_stall_no_crossing_does_not_switch(self) -> None:
+        # Halved, not stalled (since=100 < 4*100), 1/t small, not flat.
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=0.25,
+                step=1100,
+                window_entry_step=0,
+            )
+        ]
+        view = _view(
+            states,
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+            last_halve_step=1000,
+            first_halve_duration=100,
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is False
+        assert plan.switch_to_phase is None
+
+    def test_unentered_walker_blocks_decoupled_switch(self) -> None:
+        states = [
+            _state(histogram={0: 1, 1: 100}, fill_factor=0.25, step=5000,
+                   window_entry_step=0),
+            _state(histogram={0: 1, 1: 100}, fill_factor=0.25, step=5000,
+                   window_entry_step=None),
+        ]
+        view = _view(
+            states, flatness_mode="pooled", schedule="1_over_t",
+            one_over_t_gate="flatness", last_halve_step=1000,
+            first_halve_duration=100,
+        )
+        plan = decide_block_actions(view)
+        assert plan.switch_to_phase is None
+
+    def test_canonical_crossing_without_halve(self) -> None:
+        # Not flat -> no halve; but 1/t (= 1.0 at t=1) > f_now (0.5) -> the
+        # canonical crossing fires on a no-halve block (the decoupling).
+        states = [
+            _state(
+                histogram={0: 1, 1: 100},
+                fill_factor=0.5,
+                step=0,
+                window_entry_step=0,
+            )
+        ]
+        view = _view(
+            states,
+            schedule="1_over_t",
+            one_over_t_gate="flatness",
+        )
+        plan = decide_block_actions(view)
+        assert plan.halve is False
+        assert plan.switch_to_phase == "1_over_t"
