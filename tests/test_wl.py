@@ -2313,6 +2313,50 @@ class TestResumeOneOverTGate:
         )
 
 
+def test_resume_process_pool_preserves_stall_state(tmp_path) -> None:
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl import WangLandauParallelTempering
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 3.0, e0 + 3.0
+    ekw = {"schedule": "1_over_t"}
+    cp = tmp_path / "wl_proc_stall.hdf5"
+    pt_a = WangLandauParallelTempering.process_pool(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.5,
+        block_size=500,
+        random_seed=0,
+        ensemble_kwargs=ekw,
+    )
+    try:
+        pt_a.run(n_cycles=10)
+        live = [s.last_halve_step for s in pt_a._pool._slots]
+        live_t1 = [s.first_halve_duration for s in pt_a._pool._slots]
+        assert any(x is not None for x in live), (
+            "fixture did not halve; narrow the window or raise n_cycles"
+        )
+        pt_a.save_checkpoint(cp)
+    finally:
+        pt_a._pool.shutdown()
+
+    resumed = WangLandauParallelTempering.resume_process_pool(
+        cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+    )
+    try:
+        assert [s.last_halve_step for s in resumed._pool._slots] == live
+        assert [s.first_halve_duration for s in resumed._pool._slots] == live_t1
+    finally:
+        resumed._pool.shutdown()
+
+
 class TestOneOverTGateIntegration:
     def test_default_run_unchanged(self) -> None:
         # random_seed is fixed inside _make_serial_wl_pt, so the only
