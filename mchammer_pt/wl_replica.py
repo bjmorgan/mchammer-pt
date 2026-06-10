@@ -748,6 +748,9 @@ class WangLandauReplica:
         e._data_container._last_state["schedule"] = e._schedule
         e._data_container._last_state["phase"] = e._phase
         e._data_container._last_state["window_entry_step"] = e._window_entry_step
+        e._data_container._last_state["one_over_t_origin_step"] = (
+            e._one_over_t_origin_step
+        )
         e._data_container._last_state["visited_bins"] = sorted(
             e._visited_bins
         )
@@ -862,6 +865,14 @@ class WangLandauReplica:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
+        # Schedule-clock origin: present on checkpoints written after
+        # f-continuous entry landed; absent (or None) restores None,
+        # so the 1/t clock falls back to the window-entry clock --
+        # exactly the pre-feature behaviour.
+        saved_origin = last_state.get("one_over_t_origin_step")
+        e._one_over_t_origin_step = (
+            None if saved_origin is None else int(saved_origin)
+        )
         # Snapshot store: present on checkpoints written after this
         # feature landed; older checkpoints restore to an empty store.
         # `last_state` has already passed through

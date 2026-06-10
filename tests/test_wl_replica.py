@@ -1309,3 +1309,49 @@ def test_restore_state_raises_on_half_present_snapshot_store():
     dst = _make_wl_replica()
     with pytest.raises(ValueError, match="only one of"):
         dst.restore_state(container)
+
+
+def test_refresh_last_state_records_one_over_t_origin():
+    replica = _make_wl_replica(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    replica.advance(50)
+    e = replica.ensemble
+    e._one_over_t_origin_step = -7
+    replica.refresh_last_state()
+    assert e._data_container._last_state["one_over_t_origin_step"] == -7
+
+
+def test_restore_state_round_trips_one_over_t_origin():
+    src = _make_wl_replica(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    src.advance(50)
+    src.ensemble._one_over_t_origin_step = -7
+    src.refresh_last_state()
+
+    dst = _make_wl_replica(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    dst.restore_state(src.data_container())
+
+    assert dst.ensemble._one_over_t_origin_step == -7
+
+
+def test_restore_state_pre_feature_checkpoint_restores_origin_none():
+    """A checkpoint without ``one_over_t_origin_step`` (written before
+    this feature) restores with no origin, falling back to the
+    window-entry clock, and continues without error."""
+    src = _make_wl_replica(schedule="1_over_t")
+    src.advance(50)
+    src.refresh_last_state()
+    container = src.data_container()
+    container._last_state.pop("one_over_t_origin_step", None)
+
+    dst = _make_wl_replica(schedule="1_over_t")
+    dst.ensemble._one_over_t_origin_step = 99  # must be replaced
+
+    dst.restore_state(container)
+
+    assert dst.ensemble._one_over_t_origin_step is None
+    dst.advance(10)
