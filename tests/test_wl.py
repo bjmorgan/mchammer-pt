@@ -135,6 +135,37 @@ class TestOrchestratorOneOverTGate:
         assert meta["merge_cadence"] == "never"
 
 
+class TestOrchestratorOneOverTEntry:
+    def test_constructor_stores_and_forwards_to_replicas(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._one_over_t_entry == "f_continuous"
+        for slot in pt._pool.replicas:
+            assert slot.one_over_t_entry == "f_continuous"
+
+    def test_default_is_window_clock(self) -> None:
+        pt = _make_serial_wl_pt()
+        assert pt._one_over_t_entry == "window_clock"
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "window_clock"
+
+    def test_constructor_rejects_bad_value(self) -> None:
+        with pytest.raises(ValueError, match="one_over_t_entry"):
+            _make_serial_wl_pt(one_over_t_entry="bogus")
+
+    def test_f_continuous_without_one_over_t_schedule_raises(self) -> None:
+        with pytest.raises(ValueError, match="1/t schedule"):
+            _make_serial_wl_pt(one_over_t_entry="f_continuous")
+
+    def test_checkpoint_meta_round_trips_policy(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "f_continuous"
+
+
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
@@ -2365,6 +2396,52 @@ class TestResumeOneOverTGate:
             resumed._pool._first_halve_duration
             == pt_a._pool._first_halve_duration
         )
+
+
+class TestResumeOneOverTEntry:
+    def test_resume_round_trips_policy(self, tmp_path) -> None:
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ekw = {"schedule": "1_over_t"}
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous", ensemble_kwargs=ekw,
+        )
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_entry_policy.hdf5"
+        pt.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._one_over_t_entry == "f_continuous"
+        for slot in resumed._pool.replicas:
+            assert slot.one_over_t_entry == "f_continuous"
+
+    def test_resume_defaults_missing_key_to_window_clock(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A pre-feature checkpoint has no ``one_over_t_entry`` in its
+        metadata; resume must fall back to the pre-feature policy."""
+        from mchammer_pt.history import read_hdf5 as real_read_hdf5
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        pt = _make_serial_wl_pt()
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_pre_feature.hdf5"
+        pt.save_checkpoint(cp)
+
+        def read_without_entry_key(path):
+            histories, containers, meta = real_read_hdf5(path)
+            meta = dict(meta)
+            meta.pop("one_over_t_entry", None)
+            return histories, containers, meta
+
+        monkeypatch.setattr(
+            "mchammer_pt.history.read_hdf5", read_without_entry_key
+        )
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(),
+        )
+        assert resumed._one_over_t_entry == "window_clock"
 
 
 def test_resume_process_pool_preserves_stall_state(tmp_path) -> None:
