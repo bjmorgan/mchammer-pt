@@ -19,7 +19,10 @@ from tests._wl_fixtures import (
 )
 
 
-def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
+def _make_wl_in_process_conn(
+    ensemble_kwargs: dict | None = None,
+    one_over_t_entry: str = "window_clock",
+):
     """Build an :class:`InProcessWorkerConn` around a real WL replica.
 
     Uses the same seeds, energy limits and ensemble class as
@@ -49,6 +52,7 @@ def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
         random_seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs=dict(ensemble_kwargs or {}),
+        one_over_t_entry=one_over_t_entry,
     )
     return InProcessWorkerConn(replica)
 
@@ -1237,6 +1241,21 @@ def test_wl_worker_set_phase_round_trip():
     # Subsequent ADVANCE in 1_over_t phase tracks 1/t.
     after = request(conn, ("ADVANCE", 5), 0)
     assert isinstance(after.fill_factor, float)
+
+
+def test_wl_worker_set_phase_f_continuous_records_origin():
+    """SET_PHASE delegates to ``switch_to_phase``: under f_continuous
+    the schedule-clock origin is recorded and f is unchanged."""
+    conn = _make_wl_in_process_conn(
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    request(conn, ("ADVANCE", 50), 0)
+    before = request(conn, ("ADVANCE", 0), 0)
+    request(conn, ("SET_PHASE", "1_over_t"), 0)
+    e = conn._worker._replica.ensemble
+    assert e._one_over_t_origin_step is not None
+    assert e._fill_factor == before.fill_factor
 
 
 def test_serial_pool_finalise_for_reporting_merges_walker_entropies():
