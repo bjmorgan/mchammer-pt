@@ -466,11 +466,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         # explicit pool= cannot diverge from the persisted checkpoint meta.
         self._flatness_mode: FlatnessMode = pool.flatness_mode
         self._merge_cadence: MergeCadence = pool.merge_cadence
+        self._one_over_t_gate: OneOverTGate = pool.one_over_t_gate
+        self._bp_stall_multiple: float = pool.bp_stall_multiple
+        # Walker-side config lives on the replicas, which pools do not
+        # expose; store it from the constructor arguments instead.
         self._recency_visits_per_bin: int = recency_visits_per_bin
         self._dos_snapshot_ratio: float | None = dos_snapshot_ratio
         self._one_over_t_entry: OneOverTEntry = one_over_t_entry
-        self._one_over_t_gate: OneOverTGate = pool.one_over_t_gate
-        self._bp_stall_multiple: float = pool.bp_stall_multiple
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
