@@ -35,6 +35,7 @@ from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTEntry,
     OneOverTGate,
     Phase,
     Schedule,
@@ -45,9 +46,11 @@ from ..wl_coordinator import (
     _compute_per_walker_flat_min,
     _compute_recency_flatness,
     _validate_bp_stall_multiple,
+    _validate_entry_schedule,
     _validate_flatness_mode,
     _validate_gate_schedule,
     _validate_merge_cadence,
+    _validate_one_over_t_entry,
     _validate_one_over_t_gate,
     decide_block_actions,
     merge_entropies,
@@ -783,6 +786,10 @@ class ProcessWangLandauPool:
         recency_visits_per_bin: EWMA timescale (default 1000) forwarded
             to every walker's ensemble for the recency-flatness
             diagnostic.
+        one_over_t_entry: 1/t entry policy forwarded to every walker's
+            replica (see WangLandauParallelTempering). Selecting
+            ``"f_continuous"`` without
+            ``ensemble_kwargs={"schedule": "1_over_t"}`` raises.
     """
 
     def __init__(
@@ -804,6 +811,7 @@ class ProcessWangLandauPool:
         dos_snapshot_ratio: float | None = 2.0,
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         _validate_flatness_mode(flatness_mode)
@@ -812,6 +820,11 @@ class ProcessWangLandauPool:
         _validate_gate_schedule(
             one_over_t_gate, (ensemble_kwargs or {}).get("schedule", "halving")
         )
+        _validate_one_over_t_entry(one_over_t_entry)
+        _validate_entry_schedule(
+            one_over_t_entry, (ensemble_kwargs or {}).get("schedule", "halving")
+        )
+        self._one_over_t_entry: OneOverTEntry = one_over_t_entry
         self._one_over_t_gate: OneOverTGate = one_over_t_gate
         self._bp_stall_multiple: float = _validate_bp_stall_multiple(
             bp_stall_multiple
@@ -908,6 +921,7 @@ class ProcessWangLandauPool:
                             ensemble_kwargs=dict(extra_kwargs),
                             recency_visits_per_bin=self._recency_visits_per_bin,
                             dos_snapshot_ratio=self._dos_snapshot_ratio,
+                            one_over_t_entry=self._one_over_t_entry,
                         )
                         process = ctx.Process(
                             target=_wl_worker,
