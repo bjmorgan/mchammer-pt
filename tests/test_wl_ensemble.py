@@ -407,3 +407,29 @@ def test_rung_tracker_rebuild_on_resume_continues_without_duplicate_or_skip():
     assert set(resumed._fill_factor_snapshots) == {0, 1, 3, 7, 15}
     assert resumed._fill_factor_snapshots[15] == pytest.approx(1.0 / 16)
     assert resumed._max_snapshot_rung == 4
+
+
+def test_one_over_t_origin_step_defaults_to_none():
+    """A fresh ensemble has no recorded schedule-clock origin."""
+    e = _make_ensemble()
+    assert e._one_over_t_origin_step is None
+
+
+def test_update_entropy_one_over_t_phase_uses_recorded_origin():
+    """With an origin recorded, the 1/t clock runs from it, not from
+    ``_window_entry_step``. The origin is a clock origin (it may be
+    negative), so ``t_eff = step - origin + 1``."""
+    e = _make_ensemble(
+        schedule="1_over_t", flatness_check_interval=1_000_000
+    )
+    e._reached_energy_window = True
+    e._phase = "1_over_t"
+    e._window_entry_step = 10
+    e._one_over_t_origin_step = -39
+    e._step = 60
+    e._fill_factor = 0.5  # whatever; should be overwritten
+
+    e._update_entropy(0)
+    # t_eff = 60 - (-39) + 1 = 100; the window-entry clock would give
+    # 60 - 10 + 1 = 51.
+    assert e._fill_factor == pytest.approx(1.0 / 100)
