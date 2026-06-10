@@ -18,6 +18,7 @@ from icet import ClusterExpansion
 from mchammer.ensembles import CanonicalEnsemble
 
 from ..replica import Replica
+from ..wl_coordinator import OneOverTEntry
 from ..wl_ensemble import CoordinatedWangLandauEnsemble
 from ..wl_replica import WangLandauReplica
 
@@ -120,6 +121,7 @@ class WLBuilder:
     ensemble_kwargs: dict[str, Any]
     recency_visits_per_bin: int
     dos_snapshot_ratio: float | None
+    one_over_t_entry: OneOverTEntry = "window_clock"
 
     def build(self) -> WangLandauReplica:
         """Construct the replica from the configured inputs.
@@ -140,5 +142,6 @@ class WLBuilder:
             ensemble_kwargs=self.ensemble_kwargs,
             recency_visits_per_bin=self.recency_visits_per_bin,
             dos_snapshot_ratio=self.dos_snapshot_ratio,
+            one_over_t_entry=self.one_over_t_entry,
             cluster_expansion_path=self.ce_path,
         )

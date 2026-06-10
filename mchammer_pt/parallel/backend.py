@@ -20,7 +20,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ..replica import Replica
-    from ..wl_coordinator import FlatnessMode, MergeCadence, OneOverTGate
+    from ..wl_coordinator import (
+        FlatnessMode,
+        MergeCadence,
+        OneOverTEntry,
+        OneOverTGate,
+    )
 
 import numpy as np
 from mchammer.data_containers.base_data_container import (
@@ -205,6 +210,11 @@ class WangLandauPool(ReplicaPool, Protocol):
     @property
     def bp_stall_multiple(self) -> float:
         """Stall-escape multiple this pool drives (consulted under flatness)."""
+        ...
+
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy applied by this pool's walkers."""
         ...
 
     @property

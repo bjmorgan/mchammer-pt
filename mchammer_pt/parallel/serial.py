@@ -19,6 +19,7 @@ from ..replica import Replica
 from ..wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTEntry,
     OneOverTGate,
     SlotView,
     _resolve_bins_filled,
@@ -314,6 +315,15 @@ class SerialWangLandauPool:
                     f"match pool energy_spacing {self._energy_spacing}"
                 )
             _validate_gate_schedule(one_over_t_gate, r.schedule)
+            if r.one_over_t_entry != self._replicas[0].one_over_t_entry:
+                raise ValueError(
+                    "all slots in a SerialWangLandauPool must share the "
+                    f"same one_over_t_entry; got "
+                    f"{self._replicas[0].one_over_t_entry!r} on slot 0 "
+                    f"and {r.one_over_t_entry!r} on a subsequent slot. "
+                    "Checkpoint metadata records a single entry policy "
+                    "for the run."
+                )
 
     def __len__(self) -> int:
         return len(self._replicas)
@@ -360,6 +370,16 @@ class SerialWangLandauPool:
     def bp_stall_multiple(self) -> float:
         """Stall-escape multiple this pool drives (consulted under flatness)."""
         return self._bp_stall_multiple
+
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy shared by this pool's walkers.
+
+        Walker-side config held by the replicas; the constructor
+        enforces that all slots agree, so reading slot 0 is
+        representative.
+        """
+        return self._replicas[0].one_over_t_entry
 
     def _view_of(self, index: int, slot: WangLandauSlot) -> SlotView:
         """Build a SlotView from a slot's walker_states plus pool config."""

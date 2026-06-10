@@ -19,7 +19,10 @@ from tests._wl_fixtures import (
 )
 
 
-def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
+def _make_wl_in_process_conn(
+    ensemble_kwargs: dict | None = None,
+    one_over_t_entry: str = "window_clock",
+):
     """Build an :class:`InProcessWorkerConn` around a real WL replica.
 
     Uses the same seeds, energy limits and ensemble class as
@@ -49,6 +52,7 @@ def _make_wl_in_process_conn(ensemble_kwargs: dict | None = None):
         random_seed=42,
         ensemble_cls=CoordinatedWangLandauEnsemble,
         ensemble_kwargs=dict(ensemble_kwargs or {}),
+        one_over_t_entry=one_over_t_entry,
     )
     return InProcessWorkerConn(replica)
 
@@ -1239,6 +1243,21 @@ def test_wl_worker_set_phase_round_trip():
     assert isinstance(after.fill_factor, float)
 
 
+def test_wl_worker_set_phase_f_continuous_records_origin():
+    """SET_PHASE delegates to ``switch_to_phase``: under f_continuous
+    the schedule-clock origin is recorded and f is unchanged."""
+    conn = _make_wl_in_process_conn(
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    request(conn, ("ADVANCE", 50), 0)
+    before = request(conn, ("ADVANCE", 0), 0)
+    request(conn, ("SET_PHASE", "1_over_t"), 0)
+    e = conn._worker._replica.ensemble
+    assert e._one_over_t_origin_step is not None
+    assert e._fill_factor == before.fill_factor
+
+
 def test_serial_pool_finalise_for_reporting_merges_walker_entropies():
     """SerialWangLandauPool.finalise_for_reporting merges per-window."""
     pool = _make_wl_pool_with_groups(n_windows=2, n_walkers=2)
@@ -2076,3 +2095,92 @@ class TestProcessWindowStallFields:
                 schedule="halving",
                 one_over_t_gate="flatness",
             )
+
+
+def _make_serial_entry_replicas(entries):
+    """One wide-window 1/t-schedule replica per requested entry policy."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    return [
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=i,
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_entry=entry,
+        )
+        for i, entry in enumerate(entries)
+    ]
+
+
+def test_serial_pool_one_over_t_entry_derived_from_replicas():
+    """SerialWangLandauPool exposes the entry policy its replicas hold."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+    pool = SerialWangLandauPool(
+        _make_serial_entry_replicas(["f_continuous", "f_continuous"]),
+        energy_spacing=0.1,
+    )
+    assert pool.one_over_t_entry == "f_continuous"
+
+
+def test_serial_pool_rejects_mixed_one_over_t_entry():
+    """Checkpoint metadata records a single entry policy for the run, so
+    a pool whose slots disagree could not round-trip faithfully."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+    with pytest.raises(ValueError, match="one_over_t_entry"):
+        SerialWangLandauPool(
+            _make_serial_entry_replicas(["window_clock", "f_continuous"]),
+            energy_spacing=0.1,
+        )
+
+
+def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
+    """ProcessWangLandauPool retains the one_over_t_entry it threads."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    ) as pool:
+        assert pool.one_over_t_entry == "f_continuous"
+
+
+def test_wl_worker_force_halve_then_set_phase_uses_post_halve_origin():
+    """FORCE_HALVE then SET_PHASE (the coordinator's EXECUTE order for
+    a coupled halve+switch plan) records the origin from the
+    post-halve fill factor under f_continuous."""
+    import math
+
+    conn = _make_wl_in_process_conn(
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    request(conn, ("ADVANCE", 50), 0)
+    e = conn._worker._replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    e._fill_factor = 2.0 ** -4
+    step = int(e.step)
+    request(conn, ("FORCE_HALVE",), 0)
+    request(conn, ("SET_PHASE", "1_over_t"), 0)
+    assert e._fill_factor == 2.0 ** -5
+    assert e._one_over_t_origin_step == step - math.ceil(2.0 ** 5) + 1

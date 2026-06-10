@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ``one_over_t_entry`` keyword on ``WangLandauParallelTempering`` (also on
+  ``from_bin_count`` and ``process_pool``; default ``"window_clock"``):
+  selects how a window's fill factor enters the Belardinelli-Pereyra 1/t
+  phase at the switch. The default ``"window_clock"`` reproduces today's
+  behaviour bit-for-bit (f jumps to ``1/(t since window entry)``).
+  ``"f_continuous"`` starts the 1/t clock from the fill factor halving
+  actually reached, so f is continuous across the switch; this applies
+  uniformly at every switch path (canonical crossing and stall escape,
+  coupled and decoupled) and is orthogonal to ``one_over_t_gate``. On the
+  stall-escape path this removes the f cliff (factors of 40-3000 observed
+  in production data) that froze pre-switch entropy errors into the 1/t
+  regime. Selecting ``"f_continuous"`` without
+  ``ensemble_kwargs={"schedule": "1_over_t"}`` raises at construction,
+  since no switch ever fires under the halving schedule. The policy is
+  recorded in checkpoint metadata and adopted from there on resume; the
+  per-walker schedule-clock origin round-trips through the checkpoint,
+  and checkpoints written before this feature restore and continue with
+  the pre-feature behaviour. Restoring per-walker state across entry
+  policies (an f-continuous container into a window-clock replica, or a
+  1/t-phase window-clock container into an f-continuous replica) raises
+  rather than silently switching the f schedule. Threaded through the
+  serial and process-pool backends.
+- Read-only ``one_over_t_entry`` property on ``SerialWangLandauPool``,
+  ``ProcessWangLandauPool``, ``WangLandauWindowGroup``, and the
+  ``WangLandauPool`` protocol. As with the policy properties added in
+  0.21.0, the pool-held value is the single source of truth when an
+  explicit ``pool=`` is passed to ``WangLandauParallelTempering``: the
+  orchestrator adopts it and records it in checkpoint metadata, so a
+  pool built with f-continuous walkers cannot checkpoint
+  ``window_clock``. The serial pool derives the value from its replicas
+  and rejects construction from slots with mixed entry policies.
+
 ## [0.21.0] - 2026-06-09
 
 ### Added

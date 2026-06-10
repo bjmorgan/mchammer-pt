@@ -135,6 +135,74 @@ class TestOrchestratorOneOverTGate:
         assert meta["merge_cadence"] == "never"
 
 
+class TestOrchestratorOneOverTEntry:
+    def test_constructor_stores_and_forwards_to_replicas(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._one_over_t_entry == "f_continuous"
+        for slot in pt._pool.replicas:
+            assert slot.one_over_t_entry == "f_continuous"
+
+    def test_default_is_window_clock(self) -> None:
+        pt = _make_serial_wl_pt()
+        assert pt._one_over_t_entry == "window_clock"
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "window_clock"
+
+    def test_constructor_rejects_bad_value(self) -> None:
+        with pytest.raises(ValueError, match="one_over_t_entry"):
+            _make_serial_wl_pt(one_over_t_entry="bogus")
+
+    def test_f_continuous_without_one_over_t_schedule_raises(self) -> None:
+        with pytest.raises(ValueError, match="1/t schedule"):
+            _make_serial_wl_pt(one_over_t_entry="f_continuous")
+
+    def test_checkpoint_meta_round_trips_policy(self) -> None:
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous",
+            ensemble_kwargs={"schedule": "1_over_t"},
+        )
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "f_continuous"
+
+    def test_explicit_pool_entry_policy_is_source_of_truth(self) -> None:
+        # With an explicit pool=, the orchestrator (and its checkpoint
+        # meta) must reflect the policy the pool's replicas were built
+        # with, not the constructor's default arg. Otherwise a run
+        # whose walkers are f-continuous checkpoints window_clock, and
+        # resume silently restores the entry cliff.
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+        from mchammer_pt.wl import WangLandauParallelTempering
+        from mchammer_pt.wl_replica import WangLandauReplica
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        replicas = [
+            WangLandauReplica(
+                cluster_expansion=ce, atoms=atoms, energy_spacing=0.1,
+                energy_limit_left=lo, energy_limit_right=hi, random_seed=s,
+                ensemble_kwargs={"schedule": "1_over_t"},
+                one_over_t_entry="f_continuous",
+            )
+            for s in (0, 1)
+        ]
+        pool = SerialWangLandauPool(replicas, energy_spacing=0.1)
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce, atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)], energy_spacing=0.1,
+            block_size=10, random_seed=0, pool=pool,
+        )
+        assert pt._one_over_t_entry == "f_continuous"
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "f_continuous"
+
+
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering
     e0 = _initial_energy()
@@ -746,11 +814,12 @@ def test_resume_defaults_recency_visits_per_bin_for_pre_feature_checkpoint(
 ):
     """A checkpoint lacking the meta key resumes with the 1000 default.
 
-    Pre-feature checkpoints have no ``recency_visits_per_bin`` entry in
-    ``/meta``. Resume must fall back to ``meta.get(..., 1000)`` rather
-    than raising a ``KeyError``. The meta is stored as HDF5 attributes
-    on the ``meta`` group (see ``history.write_hdf5``), so deleting the
-    attribute simulates a pre-feature file.
+    Checkpoints written before ``recency_visits_per_bin`` was recorded
+    have no such entry in ``/meta``. Resume must fall back to
+    ``meta.get(..., 1000)`` rather than raising a ``KeyError``. The
+    meta is stored as HDF5 attributes on the ``meta`` group (see
+    ``history.write_hdf5``), so deleting the attribute simulates such
+    a file.
     """
     import h5py
 
@@ -2365,6 +2434,53 @@ class TestResumeOneOverTGate:
             resumed._pool._first_halve_duration
             == pt_a._pool._first_halve_duration
         )
+
+
+class TestResumeOneOverTEntry:
+    def test_resume_round_trips_policy(self, tmp_path) -> None:
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ekw = {"schedule": "1_over_t"}
+        pt = _make_serial_wl_pt(
+            one_over_t_entry="f_continuous", ensemble_kwargs=ekw,
+        )
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_entry_policy.hdf5"
+        pt.save_checkpoint(cp)
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(), ensemble_kwargs=ekw,
+        )
+        assert resumed._one_over_t_entry == "f_continuous"
+        for slot in resumed._pool.replicas:
+            assert slot.one_over_t_entry == "f_continuous"
+
+    def test_resume_defaults_missing_key_to_window_clock(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A checkpoint written before ``one_over_t_entry`` was
+        recorded has no such meta key; resume must fall back to
+        ``window_clock``."""
+        from mchammer_pt.history import read_hdf5 as real_read_hdf5
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        pt = _make_serial_wl_pt()
+        pt.run(n_cycles=2)
+        cp = tmp_path / "wl_pre_feature.hdf5"
+        pt.save_checkpoint(cp)
+
+        def read_without_entry_key(path):
+            histories, containers, meta = real_read_hdf5(path)
+            meta = dict(meta)
+            meta.pop("one_over_t_entry", None)
+            return histories, containers, meta
+
+        monkeypatch.setattr(
+            "mchammer_pt.history.read_hdf5", read_without_entry_key
+        )
+        resumed = WangLandauParallelTempering.resume(
+            cp, cluster_expansion=make_wl_ce(),
+        )
+        assert resumed._one_over_t_entry == "window_clock"
 
 
 def test_resume_process_pool_preserves_stall_state(tmp_path) -> None:

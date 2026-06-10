@@ -201,6 +201,39 @@ def test_wl_builder_forwards_dos_snapshot_ratio(tmp_path):
     assert replica.ensemble._dos_snapshot_ratio == 4.0
 
 
+def test_wl_builder_forwards_one_over_t_entry(tmp_path):
+    """WLBuilder.build() forwards one_over_t_entry to the replica."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce = make_wl_ce()
+    atoms = make_wl_atoms()
+    ce_path = tmp_path / "ce.dat"
+    ce.write(str(ce_path))
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    builder = WLBuilder(
+        ce_path=str(ce_path),
+        atoms=AtomsSpec.from_atoms(atoms),
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        seed=42,
+        ensemble_cls=CoordinatedWangLandauEnsemble,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        recency_visits_per_bin=1000,
+        dos_snapshot_ratio=2.0,
+        one_over_t_entry="f_continuous",
+    )
+    replica = builder.build()
+    assert replica.one_over_t_entry == "f_continuous"
+
+
 def test_wl_builder_picklable(tmp_path):
     """WLBuilder round-trips through pickle (required for spawn)."""
     from mchammer_pt.parallel._builder import AtomsSpec, WLBuilder
@@ -222,6 +255,7 @@ def test_wl_builder_picklable(tmp_path):
         ensemble_kwargs={},
         recency_visits_per_bin=1000,
         dos_snapshot_ratio=2.0,
+        one_over_t_entry="f_continuous",
     )
     restored = pickle.loads(pickle.dumps(builder))
     assert restored.ce_path == builder.ce_path
@@ -231,6 +265,7 @@ def test_wl_builder_picklable(tmp_path):
     assert restored.seed == builder.seed
     assert restored.ensemble_cls is builder.ensemble_cls
     assert restored.ensemble_kwargs == builder.ensemble_kwargs
+    assert restored.one_over_t_entry == builder.one_over_t_entry
     assert np.array_equal(restored.atoms.numbers, builder.atoms.numbers)
     assert np.array_equal(restored.atoms.positions, builder.atoms.positions)
     assert np.array_equal(restored.atoms.cell, builder.atoms.cell)

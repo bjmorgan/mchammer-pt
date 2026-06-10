@@ -335,20 +335,10 @@ class WangLandauWorker(BaseWorker):
         self._reply(None)
 
     def _handle_set_phase(self, cmd: tuple[Any, ...]) -> None:
-        # Flips ``_phase`` and, on transition to ``1_over_t``, sets
-        # ``_fill_factor`` to the current ``1/t``. Does not write to
-        # ``_fill_factor_history``: history records halve events
-        # (shared keys with ``_entropy_history``); in the 1/t phase
-        # ``_fill_factor`` is reconstructed from
-        # ``step - _window_entry_step + 1``.
-        phase = str(cmd[1])
-        e = self._replica.ensemble
-        e._phase = phase
-        if phase == "1_over_t":
-            entry = e._window_entry_step
-            if entry is not None:
-                t = e.step - entry + 1
-                e._fill_factor = 1.0 / t
+        # Entry mechanics (fill-factor continuity policy, schedule-clock
+        # origin, history non-write) live on the replica's
+        # ``switch_to_phase`` seam.
+        self._replica.switch_to_phase(str(cmd[1]))
         self._reply(None)
 
     def _handle_finalise_merge(self, cmd: tuple[Any, ...]) -> None:

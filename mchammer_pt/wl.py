@@ -33,10 +33,12 @@ from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
     FlatnessMode,
     MergeCadence,
+    OneOverTEntry,
     OneOverTGate,
     _validate_bp_stall_multiple,
     _validate_flatness_mode,
     _validate_merge_cadence,
+    _validate_one_over_t_entry,
     _validate_one_over_t_gate,
     reconstruct_stall_state,
 )
@@ -290,6 +292,17 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ``bp_stall_multiple`` times its first-stage duration since its
             last halve. Default 4.0; larger is more patient. Recorded in
             the checkpoint and adopted from there on resume.
+        one_over_t_entry: how a window's fill factor enters the 1/t
+            phase at the BP switch. ``"window_clock"`` (default):
+            f jumps to ``1/(step - window_entry + 1)`` and the 1/t
+            clock runs from window entry. ``"f_continuous"`` starts the 1/t clock
+            from the f that halving actually reached, so f is
+            continuous across the switch; this applies at every switch
+            path (canonical and stall, coupled and decoupled) and is
+            orthogonal to ``one_over_t_gate``. Requires
+            ``ensemble_kwargs={"schedule": "1_over_t"}``; selecting it
+            without that schedule raises. Recorded in the checkpoint
+            and adopted from there on resume.
 
     Raises:
         TypeError: if `atoms` is a single `Atoms` rather than a sequence.
@@ -320,6 +333,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         dos_snapshot_ratio: float | None = 2.0,
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
     ) -> None:
         if isinstance(atoms, Atoms):
             raise TypeError(
@@ -347,6 +361,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         dos_snapshot_ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         _validate_one_over_t_gate(one_over_t_gate)
         bp_stall_multiple = _validate_bp_stall_multiple(bp_stall_multiple)
+        _validate_one_over_t_entry(one_over_t_entry)
 
         if isinstance(n_walkers_per_window, int):
             walkers_per_window = [int(n_walkers_per_window)] * n_windows
@@ -397,6 +412,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         ensemble_kwargs=ensemble_kwargs,
                         recency_visits_per_bin=recency_visits_per_bin,
                         dos_snapshot_ratio=dos_snapshot_ratio,
+                        one_over_t_entry=one_over_t_entry,
                     )
                     for j in range(W_w)
                 ]
@@ -449,10 +465,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         # explicit pool= cannot diverge from the persisted checkpoint meta.
         self._flatness_mode: FlatnessMode = pool.flatness_mode
         self._merge_cadence: MergeCadence = pool.merge_cadence
-        self._recency_visits_per_bin: int = recency_visits_per_bin
-        self._dos_snapshot_ratio: float | None = dos_snapshot_ratio
         self._one_over_t_gate: OneOverTGate = pool.one_over_t_gate
         self._bp_stall_multiple: float = pool.bp_stall_multiple
+        self._one_over_t_entry: OneOverTEntry = pool.one_over_t_entry
+        # Walker-side diagnostics config lives on the replicas, which
+        # pools do not expose; store it from the constructor arguments.
+        self._recency_visits_per_bin: int = recency_visits_per_bin
+        self._dos_snapshot_ratio: float | None = dos_snapshot_ratio
         self._walkers_per_window: list[int] = walkers_per_window
         self._data_container_file = data_container_file
         self._random_seed = int(random_seed)
@@ -531,6 +550,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             "recency_visits_per_bin": int(self._recency_visits_per_bin),
             "one_over_t_gate": self._one_over_t_gate,
             "bp_stall_multiple": float(self._bp_stall_multiple),
+            "one_over_t_entry": self._one_over_t_entry,
             # None is not in MetaValue; encode "disabled" as NaN.
             # The resume path reverses this: a NaN reads back as None.
             "dos_snapshot_ratio": (
@@ -725,6 +745,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         bp_stall_multiple = _validate_bp_stall_multiple(
             meta.get("bp_stall_multiple", 4.0)
         )
+        one_over_t_entry: OneOverTEntry = str(
+            meta.get("one_over_t_entry", "window_clock")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_entry(one_over_t_entry)
 
         # _master_seed unused: the orchestrator RNG is restored from
         # orchestrator_state["rng_state"] further down.
@@ -755,6 +779,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         sites_by_species=replica_extras[flat_idx]["sites_by_species"],
                         recency_visits_per_bin=recency_visits_per_bin,
                         dos_snapshot_ratio=dos_snapshot_ratio,
+                        one_over_t_entry=one_over_t_entry,
                     )
                 )
                 flat_idx += 1
@@ -832,6 +857,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             dos_snapshot_ratio=dos_snapshot_ratio,
             one_over_t_gate=one_over_t_gate,
             bp_stall_multiple=bp_stall_multiple,
+            one_over_t_entry=one_over_t_entry,
             n_walkers_per_window=walkers_per_window,
         )
         pt._ensemble_cls_fqn = str(meta["ensemble_cls_fqn"])
@@ -935,6 +961,10 @@ class WangLandauParallelTempering(BaseParallelTempering):
         bp_stall_multiple = _validate_bp_stall_multiple(
             meta.get("bp_stall_multiple", 4.0)
         )
+        one_over_t_entry: OneOverTEntry = str(
+            meta.get("one_over_t_entry", "window_clock")
+        )  # type: ignore[assignment]
+        _validate_one_over_t_entry(one_over_t_entry)
 
         # One Atoms per window (not per walker) for the constructor path.
         atoms_per_window: list[Atoms] = []
@@ -959,6 +989,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             dos_snapshot_ratio=dos_snapshot_ratio,
             one_over_t_gate=one_over_t_gate,
             bp_stall_multiple=bp_stall_multiple,
+            one_over_t_entry=one_over_t_entry,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
@@ -1026,6 +1057,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         dos_snapshot_ratio: float | None = 2.0,
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
     ) -> WangLandauParallelTempering:
         """Construct an REWL run from a uniform bin specification.
 
@@ -1033,7 +1065,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         common case of an even split. Power users construct
         `windows` by hand. The ensemble and policy keywords (``flatness_mode``,
         ``merge_cadence``, ``recency_visits_per_bin``,
-        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``,
+        ``one_over_t_entry``)
         have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
@@ -1080,6 +1113,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             dos_snapshot_ratio=dos_snapshot_ratio,
             one_over_t_gate=one_over_t_gate,
             bp_stall_multiple=bp_stall_multiple,
+            one_over_t_entry=one_over_t_entry,
         )
 
     @classmethod
@@ -1104,6 +1138,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         dos_snapshot_ratio: float | None = 2.0,
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
@@ -1111,7 +1146,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         cleaned when the returned orchestrator is garbage-collected.
         The ensemble and policy keywords (``flatness_mode``,
         ``merge_cadence``, ``recency_visits_per_bin``,
-        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``)
+        ``dos_snapshot_ratio``, ``one_over_t_gate``, ``bp_stall_multiple``,
+        ``one_over_t_entry``)
         have the same meaning as on
         :class:`WangLandauParallelTempering`.
 
@@ -1141,6 +1177,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 dos_snapshot_ratio=dos_snapshot_ratio,
                 one_over_t_gate=one_over_t_gate,
                 bp_stall_multiple=bp_stall_multiple,
+                one_over_t_entry=one_over_t_entry,
             )
         except BaseException:
             tmpdir.cleanup()
@@ -1162,6 +1199,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 dos_snapshot_ratio=dos_snapshot_ratio,
                 one_over_t_gate=one_over_t_gate,
                 bp_stall_multiple=bp_stall_multiple,
+                one_over_t_entry=one_over_t_entry,
             )
         except BaseException:
             pool.shutdown()

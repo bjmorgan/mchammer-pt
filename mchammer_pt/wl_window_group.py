@@ -11,6 +11,7 @@ from mchammer.observers.base_observer import BaseObserver
 
 from .wl_coordinator import (
     CoordinatorPlan,
+    OneOverTEntry,
     Phase,
     Schedule,
     WalkerPostBlockState,
@@ -42,14 +43,15 @@ class WangLandauWindowGroup:
     mechanically.
 
     All replicas must share the same energy window, energy spacing,
-    schedule, and flatness limit. The constructor enforces these
-    invariants because coordinator decisions are taken against
-    walker 0's cached values and applied uniformly across the group.
+    schedule, flatness limit, and 1/t entry policy. The constructor
+    enforces these invariants because coordinator decisions are taken
+    against walker 0's cached values and applied uniformly across the
+    group.
 
     Args:
         replicas: pre-constructed WangLandauReplica instances, all with
-            the same energy window, energy spacing, schedule, and
-            flatness limit.
+            the same energy window, energy spacing, schedule, flatness
+            limit, and 1/t entry policy.
         random_seed: seed for the per-window RNG whose state is
             checkpointed for reproducible resume.
     """
@@ -69,6 +71,7 @@ class WangLandauWindowGroup:
         s0 = replicas[0].energy_spacing
         sched0 = replicas[0].ensemble._schedule
         fl0 = replicas[0].ensemble._flatness_limit
+        entry0 = replicas[0].one_over_t_entry
         for r in replicas[1:]:
             if r.energy_window != w0 or r.energy_spacing != s0:
                 raise ValueError(
@@ -87,6 +90,13 @@ class WangLandauWindowGroup:
                     f"the same flatness_limit; got {fl0!r} on replica 0 "
                     f"and {r.ensemble._flatness_limit!r} on a subsequent "
                     "replica"
+                )
+            if r.one_over_t_entry != entry0:
+                raise ValueError(
+                    "all replicas in a WangLandauWindowGroup must share "
+                    f"the same one_over_t_entry; got {entry0!r} on "
+                    f"replica 0 and {r.one_over_t_entry!r} on a "
+                    "subsequent replica"
                 )
         self._replicas = list(replicas)
         self._rng = np.random.default_rng(int(random_seed))
@@ -135,14 +145,8 @@ class WangLandauWindowGroup:
             for r in self._replicas:
                 r.ensemble._entropy = dict(merged)
         if plan.switch_to_phase is not None:
-            phase = plan.switch_to_phase
             for r in self._replicas:
-                r.ensemble._phase = phase
-                if phase == "1_over_t":
-                    entry = r.ensemble._window_entry_step
-                    if entry is not None:
-                        t = r.ensemble.step - entry + 1
-                        r.ensemble._fill_factor = 1.0 / t
+                r.switch_to_phase(plan.switch_to_phase)
 
     def finalise_for_reporting(self) -> None:
         """Merge per-walker entropies; write the result into every walker.
@@ -194,6 +198,15 @@ class WangLandauWindowGroup:
     @property
     def flatness_limit(self) -> float:
         return float(self._replicas[0].ensemble._flatness_limit)
+
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy shared by the group's walkers.
+
+        The constructor enforces that all walkers agree, so reading
+        walker 0 is representative.
+        """
+        return self._replicas[0].one_over_t_entry
 
     def log_g(self, energy: float) -> float:
         return self._replicas[0].log_g(energy)

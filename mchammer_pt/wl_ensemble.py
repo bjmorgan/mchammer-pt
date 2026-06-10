@@ -111,6 +111,15 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         self._recency_visits_per_bin: int = recency
         self._recent_weight: dict[int, float] = {}
         self._recent_last_step: dict[int, int] = {}
+        # Schedule-clock origin for the 1/t phase, recorded by
+        # `WangLandauReplica.switch_to_phase` under
+        # `one_over_t_entry='f_continuous'` so that
+        # `t_eff = step - origin + 1 = ceil(1/f)` at the switch. A
+        # clock origin, not a step index: it is negative when halving
+        # reached small f in few steps. `None` (the `window_clock`
+        # policy, and walkers restored from checkpoints carrying no
+        # origin) falls back to `_window_entry_step`.
+        self._one_over_t_origin_step: int | None = None
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's
@@ -126,11 +135,15 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             entry = self.step
 
         if self._phase == "1_over_t":
-            # By construction, ``_phase == '1_over_t'`` only after
-            # ``_window_entry_step`` has been set (the coordinator
-            # flips the phase post-entry). Narrow for the type
-            # checker.
-            t = self.step - cast(int, entry) + 1
+            origin = self._one_over_t_origin_step
+            if origin is None:
+                # Window-entry clock. By construction,
+                # ``_phase == '1_over_t'`` only after
+                # ``_window_entry_step`` has been set (the coordinator
+                # flips the phase post-entry). Narrow for the type
+                # checker.
+                origin = cast(int, entry)
+            t = self.step - origin + 1
             self._fill_factor = 1.0 / t
 
         self._entropy[bin_cur] = (
