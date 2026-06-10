@@ -800,3 +800,32 @@ class TestReconstructStallState:
         # the first halve and the entry share a step: T1 == 0 is legitimate
         # and the live backend records it, so resume must accept it.
         assert reconstruct_stall_state([0, 100], [100]) == (100, 0)
+
+
+class TestValidateOneOverTEntry:
+    def test_accepts_both_values(self) -> None:
+        from mchammer_pt.wl_coordinator import _validate_one_over_t_entry
+
+        _validate_one_over_t_entry("window_clock")
+        _validate_one_over_t_entry("f_continuous")
+
+    def test_rejects_invalid_value_naming_options(self) -> None:
+        from mchammer_pt.wl_coordinator import _validate_one_over_t_entry
+
+        with pytest.raises(
+            ValueError, match=r"one_over_t_entry.*window_clock.*f_continuous"
+        ):
+            _validate_one_over_t_entry("bogus")
+
+    def test_f_continuous_without_one_over_t_schedule_rejected(self) -> None:
+        from mchammer_pt.wl_coordinator import _validate_entry_schedule
+
+        with pytest.raises(ValueError, match="1/t schedule"):
+            _validate_entry_schedule("f_continuous", "halving")
+
+    def test_valid_pairings_accepted(self) -> None:
+        from mchammer_pt.wl_coordinator import _validate_entry_schedule
+
+        _validate_entry_schedule("window_clock", "halving")
+        _validate_entry_schedule("window_clock", "1_over_t")
+        _validate_entry_schedule("f_continuous", "1_over_t")

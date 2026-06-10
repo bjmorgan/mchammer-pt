@@ -78,9 +78,23 @@ OneOverTGate = Literal["visit_once", "flatness"]
 """
 
 
+OneOverTEntry = Literal["window_clock", "f_continuous"]
+"""How a walker's fill factor enters the 1/t phase at the BP switch.
+
+- ``"window_clock"`` (default): the 1/t clock runs from
+  ``_window_entry_step``; at the switch ``f`` jumps to
+  ``1/(step - window_entry + 1)``. Pre-feature behaviour.
+- ``"f_continuous"``: the 1/t clock starts so that ``1/t_eff`` equals
+  the fill factor halving actually reached; ``f`` is continuous across
+  the switch. Applies at every switch path (canonical and stall,
+  coupled and decoupled).
+"""
+
+
 _VALID_FLATNESS_MODES: tuple[str, ...] = ("per_walker", "pooled")
 _VALID_MERGE_CADENCES: tuple[str, ...] = ("at_halve", "never")
 _VALID_ONE_OVER_T_GATES: tuple[str, ...] = ("visit_once", "flatness")
+_VALID_ONE_OVER_T_ENTRIES: tuple[str, ...] = ("window_clock", "f_continuous")
 
 
 def _validate_one_over_t_gate(one_over_t_gate: Any) -> None:
@@ -88,6 +102,14 @@ def _validate_one_over_t_gate(one_over_t_gate: Any) -> None:
         raise ValueError(
             f"one_over_t_gate must be one of {_VALID_ONE_OVER_T_GATES}; "
             f"got {one_over_t_gate!r}"
+        )
+
+
+def _validate_one_over_t_entry(one_over_t_entry: Any) -> None:
+    if one_over_t_entry not in _VALID_ONE_OVER_T_ENTRIES:
+        raise ValueError(
+            f"one_over_t_entry must be one of {_VALID_ONE_OVER_T_ENTRIES}; "
+            f"got {one_over_t_entry!r}"
         )
 
 
@@ -118,6 +140,23 @@ def _validate_gate_schedule(one_over_t_gate: Any, schedule: Any) -> None:
             "one_over_t_gate='flatness' requires the 1/t schedule; pass "
             "ensemble_kwargs={'schedule': '1_over_t'} to use the flatness "
             "gate, or leave one_over_t_gate='visit_once'."
+        )
+
+
+def _validate_entry_schedule(one_over_t_entry: Any, schedule: Any) -> None:
+    """Reject f-continuous entry selected without the 1/t schedule.
+
+    ``one_over_t_entry='f_continuous'`` only affects the ``'1_over_t'``
+    schedule; under ``'halving'`` no switch ever fires, so it would
+    silently do nothing. Raising at construction surfaces the
+    misconfiguration rather than letting it become a silent no-op run
+    (the worst outcome for an A/B study).
+    """
+    if one_over_t_entry == "f_continuous" and schedule != "1_over_t":
+        raise ValueError(
+            "one_over_t_entry='f_continuous' requires the 1/t schedule; "
+            "pass ensemble_kwargs={'schedule': '1_over_t'} to use "
+            "f-continuous entry, or leave one_over_t_entry='window_clock'."
         )
 
 
