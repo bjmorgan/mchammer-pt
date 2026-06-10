@@ -104,6 +104,7 @@ def make_in_process_wl_pool(
     merge_cadence: str = "at_halve",
     one_over_t_gate: str = "visit_once",
     bp_stall_multiple: float = 4.0,
+    one_over_t_entry: str = "window_clock",
 ) -> ProcessWangLandauPool:
     """Build a :class:`ProcessWangLandauPool` whose workers are in-process conns.
 
@@ -134,6 +135,7 @@ def make_in_process_wl_pool(
     pool._merge_cadence = merge_cadence  # type: ignore[assignment]
     pool._one_over_t_gate = one_over_t_gate  # type: ignore[assignment]
     pool._bp_stall_multiple = bp_stall_multiple
+    pool._one_over_t_entry = one_over_t_entry  # type: ignore[assignment]
     pool._merge_events = []
     pool._flatness_limit = flatness_limit
     pool._windows = list(windows)

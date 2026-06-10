@@ -11,6 +11,7 @@ from mchammer.observers.base_observer import BaseObserver
 
 from .wl_coordinator import (
     CoordinatorPlan,
+    OneOverTEntry,
     Phase,
     Schedule,
     WalkerPostBlockState,
@@ -197,6 +198,15 @@ class WangLandauWindowGroup:
     @property
     def flatness_limit(self) -> float:
         return float(self._replicas[0].ensemble._flatness_limit)
+
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy shared by the group's walkers.
+
+        The constructor enforces that all walkers agree, so reading
+        walker 0 is representative.
+        """
+        return self._replicas[0].one_over_t_entry
 
     def log_g(self, energy: float) -> float:
         return self._replicas[0].log_g(energy)

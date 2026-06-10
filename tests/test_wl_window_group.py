@@ -895,3 +895,17 @@ def test_group_rejects_mixed_one_over_t_entry():
     )[0]
     with pytest.raises(ValueError, match="one_over_t_entry"):
         WangLandauWindowGroup([r0, r1], random_seed=0)
+
+
+def test_group_exposes_one_over_t_entry():
+    """The group surfaces its walkers' shared entry policy for pool
+    read-back (the constructor enforces the shared-policy invariant)."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(
+        2,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    assert group.one_over_t_entry == "f_continuous"

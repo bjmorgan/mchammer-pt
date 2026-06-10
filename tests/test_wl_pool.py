@@ -2095,3 +2095,70 @@ class TestProcessWindowStallFields:
                 schedule="halving",
                 one_over_t_gate="flatness",
             )
+
+
+def _make_serial_entry_replicas(entries):
+    """One wide-window 1/t-schedule replica per requested entry policy."""
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_replica import WangLandauReplica
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    return [
+        WangLandauReplica(
+            cluster_expansion=ce,
+            atoms=atoms,
+            energy_spacing=0.1,
+            energy_limit_left=e0 - 100.0,
+            energy_limit_right=e0 + 100.0,
+            random_seed=i,
+            ensemble_kwargs={"schedule": "1_over_t"},
+            one_over_t_entry=entry,
+        )
+        for i, entry in enumerate(entries)
+    ]
+
+
+def test_serial_pool_one_over_t_entry_derived_from_replicas():
+    """SerialWangLandauPool exposes the entry policy its replicas hold."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+    pool = SerialWangLandauPool(
+        _make_serial_entry_replicas(["f_continuous", "f_continuous"]),
+        energy_spacing=0.1,
+    )
+    assert pool.one_over_t_entry == "f_continuous"
+
+
+def test_serial_pool_rejects_mixed_one_over_t_entry():
+    """Checkpoint metadata records a single entry policy for the run, so
+    a pool whose slots disagree could not round-trip faithfully."""
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+    with pytest.raises(ValueError, match="one_over_t_entry"):
+        SerialWangLandauPool(
+            _make_serial_entry_replicas(["window_clock", "f_continuous"]),
+            energy_spacing=0.1,
+        )
+
+
+def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
+    """ProcessWangLandauPool retains the one_over_t_entry it threads."""
+    from mchammer_pt.parallel.processes import ProcessWangLandauPool
+
+    ce_path, atoms, e0 = _wl_pool_factory_kwargs(tmp_path)
+    with ProcessWangLandauPool(
+        ce_path=ce_path,
+        initial_atoms=[atoms, atoms],
+        windows=[(e0 - 50.0, e0 + 50.0), (e0 - 50.0, e0 + 50.0)],
+        energy_spacing=0.1,
+        seeds=[0, 1],
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    ) as pool:
+        assert pool.one_over_t_entry == "f_continuous"

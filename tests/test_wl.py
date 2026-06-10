@@ -165,6 +165,43 @@ class TestOrchestratorOneOverTEntry:
         )
         assert pt._checkpoint_meta()["one_over_t_entry"] == "f_continuous"
 
+    def test_explicit_pool_entry_policy_is_source_of_truth(self) -> None:
+        # With an explicit pool=, the orchestrator (and its checkpoint
+        # meta) must reflect the policy the pool's replicas were built
+        # with, not the constructor's default arg. Otherwise a run
+        # whose walkers are f-continuous checkpoints window_clock, and
+        # resume silently restores the entry cliff.
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.serial import SerialWangLandauPool
+        from mchammer_pt.wl import WangLandauParallelTempering
+        from mchammer_pt.wl_replica import WangLandauReplica
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        replicas = [
+            WangLandauReplica(
+                cluster_expansion=ce, atoms=atoms, energy_spacing=0.1,
+                energy_limit_left=lo, energy_limit_right=hi, random_seed=s,
+                ensemble_kwargs={"schedule": "1_over_t"},
+                one_over_t_entry="f_continuous",
+            )
+            for s in (0, 1)
+        ]
+        pool = SerialWangLandauPool(replicas, energy_spacing=0.1)
+        pt = WangLandauParallelTempering(
+            cluster_expansion=ce, atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)], energy_spacing=0.1,
+            block_size=10, random_seed=0, pool=pool,
+        )
+        assert pt._one_over_t_entry == "f_continuous"
+        assert pt._checkpoint_meta()["one_over_t_entry"] == "f_continuous"
+
 
 def test_wl_pt_constructs_with_two_windows():
     from mchammer_pt.wl import WangLandauParallelTempering

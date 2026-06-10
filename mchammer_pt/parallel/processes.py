@@ -1043,6 +1043,11 @@ class ProcessWangLandauPool:
         """Stall-escape multiple this pool drives (consulted under flatness)."""
         return self._bp_stall_multiple
 
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy forwarded to every walker's replica."""
+        return self._one_over_t_entry
+
     def advance_all(self, n_steps: int) -> None:
         # Three stages: ADVANCE (one fan-out across every worker in
         # every window), DECIDE (pure-Python coordinator decisions
