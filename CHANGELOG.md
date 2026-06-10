@@ -26,8 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded in checkpoint metadata and adopted from there on resume; the
   per-walker schedule-clock origin round-trips through the checkpoint,
   and checkpoints written before this feature restore and continue with
-  the pre-feature behaviour. Threaded through the serial and process-pool
-  backends.
+  the pre-feature behaviour. Restoring per-walker state across entry
+  policies (an f-continuous container into a window-clock replica, or a
+  1/t-phase window-clock container into an f-continuous replica) raises
+  rather than silently switching the f schedule. Threaded through the
+  serial and process-pool backends.
+- Read-only ``one_over_t_entry`` property on ``SerialWangLandauPool``,
+  ``ProcessWangLandauPool``, ``WangLandauWindowGroup``, and the
+  ``WangLandauPool`` protocol. As with the policy properties added in
+  0.21.0, the pool-held value is the single source of truth when an
+  explicit ``pool=`` is passed to ``WangLandauParallelTempering``: the
+  orchestrator adopts it and records it in checkpoint metadata, so a
+  pool built with f-continuous walkers cannot checkpoint
+  ``window_clock``. The serial pool derives the value from its replicas
+  and rejects construction from slots with mixed entry policies.
 
 ## [0.21.0] - 2026-06-09
 
