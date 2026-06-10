@@ -117,8 +117,8 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # `t_eff = step - origin + 1 = ceil(1/f)` at the switch. A
         # clock origin, not a step index: it is negative when halving
         # reached small f in few steps. `None` (the `window_clock`
-        # policy, and walkers restored from pre-feature checkpoints)
-        # falls back to `_window_entry_step`.
+        # policy, and walkers restored from checkpoints carrying no
+        # origin) falls back to `_window_entry_step`.
         self._one_over_t_origin_step: int | None = None
 
     def _update_entropy(self, bin_cur: int) -> None:

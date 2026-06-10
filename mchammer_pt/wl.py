@@ -293,10 +293,9 @@ class WangLandauParallelTempering(BaseParallelTempering):
             last halve. Default 4.0; larger is more patient. Recorded in
             the checkpoint and adopted from there on resume.
         one_over_t_entry: how a window's fill factor enters the 1/t
-            phase at the BP switch. ``"window_clock"`` (default)
-            reproduces the pre-feature behaviour: f jumps to
-            ``1/(step - window_entry + 1)`` and the 1/t clock runs
-            from window entry. ``"f_continuous"`` starts the 1/t clock
+            phase at the BP switch. ``"window_clock"`` (default):
+            f jumps to ``1/(step - window_entry + 1)`` and the 1/t
+            clock runs from window entry. ``"f_continuous"`` starts the 1/t clock
             from the f that halving actually reached, so f is
             continuous across the switch; this applies at every switch
             path (canonical and stall, coupled and decoupled) and is

@@ -83,7 +83,7 @@ OneOverTEntry = Literal["window_clock", "f_continuous"]
 
 - ``"window_clock"`` (default): the 1/t clock runs from
   ``_window_entry_step``; at the switch ``f`` jumps to
-  ``1/(step - window_entry + 1)``. Pre-feature behaviour.
+  ``1/(step - window_entry + 1)``.
 - ``"f_continuous"``: the 1/t clock starts so that ``1/t_eff`` equals
   the fill factor halving actually reached; ``f`` is continuous across
   the switch. Applies at every switch path (canonical and stall,

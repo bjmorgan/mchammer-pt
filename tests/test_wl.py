@@ -777,11 +777,12 @@ def test_resume_defaults_recency_visits_per_bin_for_pre_feature_checkpoint(
 ):
     """A checkpoint lacking the meta key resumes with the 1000 default.
 
-    Pre-feature checkpoints have no ``recency_visits_per_bin`` entry in
-    ``/meta``. Resume must fall back to ``meta.get(..., 1000)`` rather
-    than raising a ``KeyError``. The meta is stored as HDF5 attributes
-    on the ``meta`` group (see ``history.write_hdf5``), so deleting the
-    attribute simulates a pre-feature file.
+    Checkpoints written before ``recency_visits_per_bin`` was recorded
+    have no such entry in ``/meta``. Resume must fall back to
+    ``meta.get(..., 1000)`` rather than raising a ``KeyError``. The
+    meta is stored as HDF5 attributes on the ``meta`` group (see
+    ``history.write_hdf5``), so deleting the attribute simulates such
+    a file.
     """
     import h5py
 
@@ -2419,8 +2420,9 @@ class TestResumeOneOverTEntry:
     def test_resume_defaults_missing_key_to_window_clock(
         self, tmp_path, monkeypatch
     ) -> None:
-        """A pre-feature checkpoint has no ``one_over_t_entry`` in its
-        metadata; resume must fall back to the pre-feature policy."""
+        """A checkpoint written before ``one_over_t_entry`` was
+        recorded has no such meta key; resume must fall back to
+        ``window_clock``."""
         from mchammer_pt.history import read_hdf5 as real_read_hdf5
         from mchammer_pt.wl import WangLandauParallelTempering
 

@@ -1338,10 +1338,14 @@ def test_restore_state_round_trips_one_over_t_origin():
     assert dst.ensemble._one_over_t_origin_step == -7
 
 
-def test_restore_state_pre_feature_checkpoint_restores_origin_none():
-    """A checkpoint without ``one_over_t_origin_step`` (written before
-    this feature) restores with no origin, falling back to the
-    window-entry clock, and continues without error."""
+def test_restore_state_legacy_checkpoint_restores_origin_none():
+    """A checkpoint without ``one_over_t_origin_step`` restores with no
+    origin, falling back to the window-entry clock, and continues
+    without error.
+
+    Backwards-compatibility path for checkpoints written before the
+    schedule-clock origin was persisted.
+    """
     src = _make_wl_replica(schedule="1_over_t")
     src.advance(50)
     src.refresh_last_state()

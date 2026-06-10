@@ -261,9 +261,9 @@ class WangLandauReplica:
         dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot ladder
             forwarded to the ensemble; ``None`` disables snapshotting.
         one_over_t_entry: how the fill factor enters the 1/t phase at
-            the BP switch. ``"window_clock"`` (default) reproduces the
-            pre-feature behaviour: f jumps to ``1/(step - window_entry
-            + 1)`` and the 1/t clock runs from window entry.
+            the BP switch. ``"window_clock"`` (default): f jumps to
+            ``1/(step - window_entry + 1)`` and the 1/t clock runs
+            from window entry.
             ``"f_continuous"`` starts the 1/t clock from the f that
             halving actually reached, so f is continuous across the
             switch. Requires ``ensemble_kwargs={'schedule':
@@ -586,8 +586,7 @@ class WangLandauReplica:
         ``_fill_factor`` is left unchanged: f is continuous across the
         switch. Under ``'window_clock'`` (default) no origin is
         recorded and ``_fill_factor`` jumps to
-        ``1/(step - window_entry + 1)``, reproducing the pre-feature
-        behaviour exactly.
+        ``1/(step - window_entry + 1)``.
 
         Args:
             phase: target phase; only ``"1_over_t"`` has entry
@@ -865,16 +864,16 @@ class WangLandauReplica:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
-        # Schedule-clock origin: present on checkpoints written after
-        # f-continuous entry landed; absent (or None) restores None,
-        # so the 1/t clock falls back to the window-entry clock --
-        # exactly the pre-feature behaviour.
+        # Schedule-clock origin: absent or None -- as written by
+        # `window_clock` runs and by checkpoints predating the key --
+        # restores None, so the 1/t clock falls back to the
+        # window-entry clock.
         saved_origin = last_state.get("one_over_t_origin_step")
         e._one_over_t_origin_step = (
             None if saved_origin is None else int(saved_origin)
         )
-        # Snapshot store: present on checkpoints written after this
-        # feature landed; older checkpoints restore to an empty store.
+        # Snapshot store: checkpoints predating the store carry
+        # neither key and restore to an empty store.
         # `last_state` has already passed through
         # `_coerce_wl_last_state_keys_to_int`, so keys are ints.
         saved_ff_snaps = last_state.get("fill_factor_snapshots")
