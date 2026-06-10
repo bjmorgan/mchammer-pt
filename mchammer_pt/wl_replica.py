@@ -582,7 +582,8 @@ class WangLandauReplica:
         Under ``one_over_t_entry='f_continuous'`` the clock origin is
         recorded so that ``t_eff = step - origin + 1 = ceil(1/f)`` for
         the current fill factor (the post-halve value when a halve
-        fired in the same plan, given ``apply_plan``'s ordering), and
+        fired in the same plan: ``apply_plan`` and the process pool's
+        EXECUTE sequence both apply halves before the switch), and
         ``_fill_factor`` is left unchanged: f is continuous across the
         switch. Under ``'window_clock'`` (default) no origin is
         recorded and ``_fill_factor`` jumps to
@@ -727,8 +728,8 @@ class WangLandauReplica:
         Writes the fields that ``WindowResult`` reads (entropy,
         histogram, fill_factor, fill_factor_history, entropy_history,
         fill_factor_snapshots, entropy_snapshots), the 1/t-schedule
-        fields (schedule, phase, window_entry_step), and visited_bins.
-        Idempotent.
+        fields (schedule, phase, window_entry_step,
+        one_over_t_origin_step), and visited_bins. Idempotent.
         """
         from collections import OrderedDict
 

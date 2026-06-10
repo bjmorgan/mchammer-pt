@@ -217,7 +217,11 @@ class CoordinatorPlan:
     ``merged_entropy``: if not None, written into every walker's
     ``_entropy``.
     ``switch_to_phase``: if not None, the slot's phase is flipped and
-    per-walker ``_fill_factor`` is set to ``1/t``.
+    each walker applies its 1/t entry policy
+    (``WangLandauReplica.switch_to_phase``): under ``window_clock``
+    ``_fill_factor`` jumps to ``1/t``; under ``f_continuous`` the
+    schedule-clock origin is recorded and ``_fill_factor`` is left
+    unchanged.
     """
 
     halve: bool
