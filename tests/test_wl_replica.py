@@ -27,6 +27,7 @@ def _make_wl_replica(
     schedule: str | None = None,
     recency_visits_per_bin: int = 1000,
     dos_snapshot_ratio: float | None = 2.0,
+    one_over_t_entry: str = "window_clock",
 ) -> WangLandauReplica:
     """Construct a WangLandauReplica over a wide window.
 
@@ -39,6 +40,7 @@ def _make_wl_replica(
         dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot
             ladder forwarded to the ensemble; ``None`` disables
             snapshotting.
+        one_over_t_entry: 1/t entry policy forwarded to the replica.
     """
     ce = make_wl_ce()
     atoms = make_wl_atoms()
@@ -58,6 +60,7 @@ def _make_wl_replica(
         ensemble_kwargs=ensemble_kwargs,
         recency_visits_per_bin=recency_visits_per_bin,
         dos_snapshot_ratio=dos_snapshot_ratio,
+        one_over_t_entry=one_over_t_entry,
     )
 
 
@@ -693,6 +696,145 @@ def test_apply_plan_switch_to_phase_flips_and_recomputes_fill_factor(
     ))
     assert replica.ensemble._phase == "1_over_t"
     assert replica.ensemble._fill_factor == 1.0 / expected_t
+
+
+def test_apply_plan_switch_window_clock_leaves_origin_unset(
+    wl_replica_factory,
+):
+    """Default policy: the switch never records a schedule-clock origin."""
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory(schedule="1_over_t")
+    replica.advance(200)
+    e = replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    replica.apply_plan(CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+    assert e._one_over_t_origin_step is None
+
+
+def test_switch_f_continuous_preserves_fill_factor_and_sets_origin(
+    wl_replica_factory,
+):
+    """f_continuous: f is unchanged across the switch and the origin
+    gives ``t_eff = ceil(1/f)`` (the stall-escape plan shape: no halve)."""
+    import math
+
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    replica.advance(200)
+    e = replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    # Place the walker at the small f halving would have reached; the
+    # window-entry clock would re-enter orders of magnitude below it.
+    e._fill_factor = 2.0 ** -10
+    step = int(e.step)
+    replica.apply_plan(CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+    assert e._phase == "1_over_t"
+    assert e._fill_factor == 2.0 ** -10
+    t0 = math.ceil(2.0 ** 10)
+    assert e._one_over_t_origin_step == step - t0 + 1
+
+
+def test_switch_f_continuous_decays_from_ceil_inverse_f(
+    wl_replica_factory,
+):
+    """After an f_continuous switch, per-trial updates decay f from the
+    recorded origin, not from window entry.
+
+    Two things are pinned here:
+
+    1. Exact contract (via direct ``_update_entropy`` call): each trial
+       sets ``f = 1 / (step - origin + 1)`` where ``origin`` is the
+       value written by the switch, not ``_window_entry_step``.
+
+    2. Qualitative end-to-end: after a subsequent ``replica.advance``,
+       the fill factor stays on the continuous clock (at or below
+       ``1/t0`` where ``t0 = ceil(1/f_before_switch)``) and is strictly
+       less than what the window-entry clock would give.  The exact step
+       seen by the final in-loop ``_update_entropy`` call is an mchammer
+       run-loop implementation detail, so only the inequality is checked.
+    """
+    import math
+
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    replica.advance(200)
+    e = replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    e._fill_factor = 2.0 ** -10
+    replica.apply_plan(CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+    origin = e._one_over_t_origin_step
+
+    # --- Exact per-trial pin ---
+    # Advance the step counter by hand and call _update_entropy directly,
+    # so the assertion is independent of where the mchammer run loop
+    # increments _step relative to _do_trial_step.
+    e._step = int(e.step) + 7
+    e._update_entropy(0)
+    assert e._fill_factor == 1.0 / (e._step - origin + 1)
+
+    # --- Qualitative end-to-end check ---
+    t0 = math.ceil(2.0 ** 10)
+    replica.advance(50)
+    # Continuous clock keeps f <= 1/t0 (entry clock would give much larger f).
+    assert e._fill_factor <= 1.0 / t0
+    t_entry = int(e.step) - int(e._window_entry_step) + 1
+    assert 1.0 / t_entry > e._fill_factor
+
+
+def test_switch_f_continuous_uses_post_halve_fill_factor(
+    wl_replica_factory,
+):
+    """Halve and switch in one plan (the coupled-canonical shape): the
+    origin is computed from the post-halve f, per apply_plan's
+    halve -> entropy -> phase ordering."""
+    import math
+
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+
+    replica = wl_replica_factory(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    replica.advance(200)
+    e = replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    e._fill_factor = 2.0 ** -4
+    step = int(e.step)
+    replica.apply_plan(CoordinatorPlan(
+        halve=True, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+    assert e._fill_factor == 2.0 ** -5
+    assert e._one_over_t_origin_step == step - math.ceil(2.0 ** 5) + 1
+
+
+def test_replica_rejects_invalid_one_over_t_entry():
+    with pytest.raises(
+        ValueError, match=r"one_over_t_entry.*window_clock.*f_continuous"
+    ):
+        _make_wl_replica(one_over_t_entry="bogus")
+
+
+def test_replica_rejects_f_continuous_without_one_over_t_schedule():
+    """f_continuous is inert under the halving schedule (no switch ever
+    fires), so selecting it without schedule='1_over_t' must raise."""
+    with pytest.raises(ValueError, match="1/t schedule"):
+        _make_wl_replica(one_over_t_entry="f_continuous")
 
 
 def test_replica_satisfies_wang_landau_slot_protocol(wl_replica_factory):

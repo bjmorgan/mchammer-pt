@@ -10,6 +10,7 @@ orchestrator. To use the Belardinelli-Pereyra 1/t schedule, pass
 from __future__ import annotations
 
 import copy
+import math
 import os
 import random
 from collections.abc import Callable, Mapping, Sequence
@@ -34,10 +35,13 @@ from mchammer.observers.base_observer import (
 
 from .wl_coordinator import (
     CoordinatorPlan,
+    OneOverTEntry,
     Phase,
     Schedule,
     WalkerPostBlockState,
     _min_over_mean,
+    _validate_entry_schedule,
+    _validate_one_over_t_entry,
 )
 from .wl_ensemble import CoordinatedWangLandauEnsemble
 
@@ -256,6 +260,14 @@ class WangLandauReplica:
             ensemble's recency-flatness diagnostic.
         dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot ladder
             forwarded to the ensemble; ``None`` disables snapshotting.
+        one_over_t_entry: how the fill factor enters the 1/t phase at
+            the BP switch. ``"window_clock"`` (default) reproduces the
+            pre-feature behaviour: f jumps to ``1/(step - window_entry
+            + 1)`` and the 1/t clock runs from window entry.
+            ``"f_continuous"`` starts the 1/t clock from the f that
+            halving actually reached, so f is continuous across the
+            switch. Requires ``ensemble_kwargs={'schedule':
+            '1_over_t'}``; selecting it without that schedule raises.
         cluster_expansion_path: same semantics as
             `mchammer_pt.replica.Replica`.
 
@@ -280,6 +292,7 @@ class WangLandauReplica:
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
         cluster_expansion_path: str | os.PathLike[str] | None = None,
     ) -> None:
         self._energy_spacing = float(energy_spacing)
@@ -303,6 +316,12 @@ class WangLandauReplica:
                 f"WangLandauEnsemble would autonomously halve and "
                 f"conflict with the coordinator."
             )
+        _validate_one_over_t_entry(one_over_t_entry)
+        _validate_entry_schedule(
+            one_over_t_entry,
+            (ensemble_kwargs or {}).get("schedule", "halving"),
+        )
+        self._one_over_t_entry: OneOverTEntry = one_over_t_entry
         extra = dict(ensemble_kwargs) if ensemble_kwargs else {}
         clash = _RESERVED_ENSEMBLE_KWARGS & extra.keys()
         if clash:
@@ -389,6 +408,11 @@ class WangLandauReplica:
     @property
     def flatness_limit(self) -> float:
         return float(self._ensemble._flatness_limit)
+
+    @property
+    def one_over_t_entry(self) -> OneOverTEntry:
+        """1/t entry policy applied by :meth:`switch_to_phase`."""
+        return self._one_over_t_entry
 
     def current_energy(self) -> float:
         """Cached running total of the WL ensemble (eV)."""
@@ -542,13 +566,45 @@ class WangLandauReplica:
         if plan.merged_entropy is not None:
             self._ensemble._entropy = dict(plan.merged_entropy)
         if plan.switch_to_phase is not None:
-            phase = plan.switch_to_phase
-            self._ensemble._phase = phase
-            if phase == "1_over_t":
-                entry = self._ensemble._window_entry_step
-                if entry is not None:
-                    t = self._ensemble.step - entry + 1
-                    self._ensemble._fill_factor = 1.0 / t
+            self.switch_to_phase(plan.switch_to_phase)
+
+    def switch_to_phase(self, phase: Phase) -> None:
+        """Flip the WL phase; on entering 1/t, start the schedule clock.
+
+        The single switch seam: ``apply_plan`` (single walker),
+        ``WangLandauWindowGroup.apply_plan`` (per walker), and the
+        process worker's ``SET_PHASE`` handler all delegate here. Does
+        not write ``_fill_factor_history``: history records halve
+        events (shared keys with ``_entropy_history``), and in the 1/t
+        phase ``_fill_factor`` is recomputed per trial from the
+        schedule clock.
+
+        Under ``one_over_t_entry='f_continuous'`` the clock origin is
+        recorded so that ``t_eff = step - origin + 1 = ceil(1/f)`` for
+        the current fill factor (the post-halve value when a halve
+        fired in the same plan, given ``apply_plan``'s ordering), and
+        ``_fill_factor`` is left unchanged: f is continuous across the
+        switch. Under ``'window_clock'`` (default) no origin is
+        recorded and ``_fill_factor`` jumps to
+        ``1/(step - window_entry + 1)``, reproducing the pre-feature
+        behaviour exactly.
+
+        Args:
+            phase: target phase; only ``"1_over_t"`` has entry
+                mechanics.
+        """
+        e = self._ensemble
+        e._phase = phase
+        if phase != "1_over_t":
+            return
+        if self._one_over_t_entry == "f_continuous":
+            t0 = math.ceil(1.0 / e._fill_factor)
+            e._one_over_t_origin_step = int(e.step) - t0 + 1
+            return
+        entry = e._window_entry_step
+        if entry is not None:
+            t = e.step - entry + 1
+            e._fill_factor = 1.0 / t
 
     def force_halve(self) -> None:
         """Halve ``_fill_factor`` and record the event in history.
@@ -855,6 +911,7 @@ class WangLandauReplica:
         ensemble_kwargs: Mapping[str, Any] | None = None,
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        one_over_t_entry: OneOverTEntry = "window_clock",
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
     ) -> WangLandauReplica:
@@ -870,6 +927,7 @@ class WangLandauReplica:
             ensemble_kwargs=ensemble_kwargs,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
+            one_over_t_entry=one_over_t_entry,
             cluster_expansion_path=cluster_expansion_path,
         )
         replica.restore_state(container, sites_by_species=sites_by_species)
