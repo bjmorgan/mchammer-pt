@@ -52,6 +52,7 @@ class _StubWLSlot:
     phase: str = "halving"
     schedule: str = "halving"
     flatness_limit: float = 0.8
+    one_over_t_entry: str = "window_clock"
     applied_plans: list[CoordinatorPlan] = field(default_factory=list)
     # Read by SerialWangLandauPool.ensemble_cls_fqn.
     ensemble: object = field(default_factory=object)

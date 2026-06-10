@@ -909,3 +909,39 @@ def test_group_exposes_one_over_t_entry():
     )
     group = WangLandauWindowGroup(replicas, random_seed=0)
     assert group.one_over_t_entry == "f_continuous"
+
+
+def test_group_apply_plan_halve_and_switch_uses_post_halve_origin():
+    """A coupled halve+switch plan computes each walker's origin from
+    the post-halve fill factor (halve applies before the switch).
+
+    A reordering regression would record ``t_eff`` smaller by exactly
+    a factor of two, permanently, since the origin is written once.
+    """
+    import math
+
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(
+        2,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.advance(100)
+    for r in replicas:
+        if r.ensemble._window_entry_step is None:
+            r.ensemble._window_entry_step = 0
+        r.ensemble._fill_factor = 2.0 ** -4
+
+    group.apply_plan(CoordinatorPlan(
+        halve=True, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+
+    for r in replicas:
+        e = r.ensemble
+        assert e._fill_factor == 2.0 ** -5
+        assert e._one_over_t_origin_step == (
+            int(e.step) - math.ceil(2.0 ** 5) + 1
+        )

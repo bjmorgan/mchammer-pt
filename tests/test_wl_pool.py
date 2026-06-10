@@ -2162,3 +2162,25 @@ def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
         one_over_t_entry="f_continuous",
     ) as pool:
         assert pool.one_over_t_entry == "f_continuous"
+
+
+def test_wl_worker_force_halve_then_set_phase_uses_post_halve_origin():
+    """FORCE_HALVE then SET_PHASE (the coordinator's EXECUTE order for
+    a coupled halve+switch plan) records the origin from the
+    post-halve fill factor under f_continuous."""
+    import math
+
+    conn = _make_wl_in_process_conn(
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    request(conn, ("ADVANCE", 50), 0)
+    e = conn._worker._replica.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    e._fill_factor = 2.0 ** -4
+    step = int(e.step)
+    request(conn, ("FORCE_HALVE",), 0)
+    request(conn, ("SET_PHASE", "1_over_t"), 0)
+    assert e._fill_factor == 2.0 ** -5
+    assert e._one_over_t_origin_step == step - math.ceil(2.0 ** 5) + 1
