@@ -1359,3 +1359,50 @@ def test_restore_state_legacy_checkpoint_restores_origin_none():
 
     assert dst.ensemble._one_over_t_origin_step is None
     dst.advance(10)
+
+
+def test_restore_state_rejects_originless_1t_container_under_f_continuous():
+    """An f_continuous replica refuses a 1/t-phase container with no
+    schedule-clock origin.
+
+    Such a container can only come from a window-clock run (or one
+    predating the origin key); honouring it would silently run the
+    window-entry clock inside an f-continuous campaign. The energy
+    check's leave-untouched contract applies: the destination replica
+    is not mutated.
+    """
+    src = _make_wl_replica(schedule="1_over_t")
+    src.advance(50)
+    e = src.ensemble
+    if e._window_entry_step is None:
+        e._window_entry_step = 0
+    src.switch_to_phase("1_over_t")
+    src.refresh_last_state()
+
+    dst = _make_wl_replica(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    phase_before = dst.ensemble._phase
+    with pytest.raises(ValueError, match="one_over_t_entry"):
+        dst.restore_state(src.data_container())
+    assert dst.ensemble._phase == phase_before
+
+
+def test_restore_state_rejects_origin_bearing_container_under_window_clock():
+    """A window_clock replica refuses a container carrying a
+    schedule-clock origin.
+
+    The per-trial update honours any recorded origin regardless of the
+    replica's policy, so restoring an f-continuous container into a
+    window_clock replica would silently run f-continuous semantics.
+    """
+    src = _make_wl_replica(
+        schedule="1_over_t", one_over_t_entry="f_continuous"
+    )
+    src.advance(50)
+    src.ensemble._one_over_t_origin_step = -7
+    src.refresh_last_state()
+
+    dst = _make_wl_replica(schedule="1_over_t")
+    with pytest.raises(ValueError, match="one_over_t_entry"):
+        dst.restore_state(src.data_container())

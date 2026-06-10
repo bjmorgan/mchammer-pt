@@ -840,6 +840,31 @@ class WangLandauReplica:
                 f"[{self._energy_limit_left}, {self._energy_limit_right}]."
             )
 
+        # Validate 1/t entry-policy consistency before mutating any
+        # ensemble state. The per-trial update honours a recorded
+        # origin regardless of the replica's policy, so a mismatched
+        # restore would silently run the wrong f schedule.
+        saved_origin = last_state.get("one_over_t_origin_step")
+        if self._one_over_t_entry == "f_continuous":
+            if last_state.get("phase") == "1_over_t" and saved_origin is None:
+                raise ValueError(
+                    "restore_state: container is in the 1/t phase but "
+                    "carries no schedule-clock origin, while this "
+                    "replica has one_over_t_entry='f_continuous'; the "
+                    "container was written by a window-clock run or "
+                    "predates the origin key. Restoring it would "
+                    "silently switch the run to the window-entry "
+                    "clock."
+                )
+        elif saved_origin is not None:
+            raise ValueError(
+                "restore_state: container carries a schedule-clock "
+                "origin, while this replica has "
+                "one_over_t_entry='window_clock'; the container was "
+                "written by an f-continuous run. Restoring it would "
+                "silently keep the run on the f-continuous clock."
+            )
+
         # Copy the saved state into the existing WL-typed container
         # rather than replacing it wholesale. `read_hdf5` returns
         # `BaseDataContainer` instances; assigning one to the ensemble
@@ -865,11 +890,10 @@ class WangLandauReplica:
             e._visited_bins = {int(b) for b in saved_visited}
         else:
             e._visited_bins = set()
-        # Schedule-clock origin: absent or None -- as written by
-        # `window_clock` runs and by checkpoints predating the key --
-        # restores None, so the 1/t clock falls back to the
-        # window-entry clock.
-        saved_origin = last_state.get("one_over_t_origin_step")
+        # Schedule-clock origin (consistency-checked above): absent or
+        # None -- as written by `window_clock` runs and by checkpoints
+        # predating the key -- restores None, so the 1/t clock falls
+        # back to the window-entry clock.
         e._one_over_t_origin_step = (
             None if saved_origin is None else int(saved_origin)
         )
