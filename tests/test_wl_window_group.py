@@ -7,8 +7,13 @@ import pytest
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
 
 
-def _make_replicas(n: int = 2):
-    """N WangLandauReplica instances sharing a wide window."""
+def _make_replicas(n: int = 2, **replica_kwargs):
+    """N WangLandauReplica instances sharing a wide window.
+
+    ``replica_kwargs`` are forwarded to every ``WangLandauReplica``
+    (e.g. ``ensemble_kwargs={"schedule": "1_over_t"}`` or
+    ``one_over_t_entry="f_continuous"``).
+    """
     from mchammer.calculators import ClusterExpansionCalculator
 
     from mchammer_pt.wl_replica import WangLandauReplica
@@ -27,6 +32,7 @@ def _make_replicas(n: int = 2):
             energy_limit_left=e0 - 100.0,
             energy_limit_right=e0 + 100.0,
             random_seed=i,
+            **replica_kwargs,
         )
         for i in range(n)
     ]
@@ -837,3 +843,55 @@ def test_window_group_restore_state_rejects_wrong_length_containers():
             per_walker_extras=snap["per_walker"],
             group_state=snap["group_state"],
         )
+
+
+def test_group_apply_plan_switch_f_continuous_records_origin_per_walker():
+    """A switch plan under f_continuous records the schedule-clock
+    origin on every walker and leaves every f unchanged."""
+    import math
+
+    from mchammer_pt.wl_coordinator import CoordinatorPlan
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    replicas = _make_replicas(
+        2,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )
+    group = WangLandauWindowGroup(replicas, random_seed=0)
+    group.advance(100)
+    for r in replicas:
+        if r.ensemble._window_entry_step is None:
+            r.ensemble._window_entry_step = 0
+        r.ensemble._fill_factor = 2.0 ** -6
+
+    group.apply_plan(CoordinatorPlan(
+        halve=False, merged_entropy=None, switch_to_phase="1_over_t"
+    ))
+
+    for r in replicas:
+        e = r.ensemble
+        assert e._phase == "1_over_t"
+        assert e._fill_factor == 2.0 ** -6
+        assert e._one_over_t_origin_step == (
+            int(e.step) - math.ceil(2.0 ** 6) + 1
+        )
+
+
+def test_group_rejects_mixed_one_over_t_entry():
+    """Plans are applied uniformly across a group; a mixed entry policy
+    would silently diverge per-walker fill factors at the switch."""
+    from mchammer_pt.wl_window_group import WangLandauWindowGroup
+
+    r0 = _make_replicas(
+        1,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="window_clock",
+    )[0]
+    r1 = _make_replicas(
+        1,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        one_over_t_entry="f_continuous",
+    )[0]
+    with pytest.raises(ValueError, match="one_over_t_entry"):
+        WangLandauWindowGroup([r0, r1], random_seed=0)
