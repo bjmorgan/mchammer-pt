@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-06-11
+
 ### Added
 
 - ``one_over_t_entry`` keyword on ``WangLandauParallelTempering`` (also on
