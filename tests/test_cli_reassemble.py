@@ -1,6 +1,7 @@
 """Tests for mchammer_pt.cli.reassemble."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -9,7 +10,7 @@ from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
-from mchammer_pt.cli.reassemble import reassemble_pieces
+from mchammer_pt.cli.reassemble import main, reassemble_pieces
 
 WL_FQN = "mchammer.ensembles.wang_landau_ensemble.WangLandauEnsemble"
 
@@ -115,20 +116,11 @@ def test_reassemble_rejects_window_collision_with_multirun_hint():
     assert "--multi-run" in msg
 
 
-from pathlib import Path
-
-from mchammer_pt.cli.reassemble import main
-
-
 def _patch_reads(monkeypatch, mapping):
     monkeypatch.setattr(
         "mchammer_pt.cli.reassemble.read_hdf5",
-        lambda p: (None, mapping[Path(p)][2], _meta_of(mapping[Path(p)])),
+        lambda p: (None, mapping[Path(p)][2], mapping[Path(p)][1]),
     )
-
-
-def _meta_of(piece):
-    return piece[1]
 
 
 def test_main_requires_two_inputs(tmp_path, capsys):
