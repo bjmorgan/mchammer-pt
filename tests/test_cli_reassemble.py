@@ -67,3 +67,49 @@ def test_reassemble_output_meta_describes_the_union():
     np.testing.assert_allclose(
         np.asarray(meta["windows"]), np.array([[-1.0, 0.0], [0.0, 1.0]])
     )
+
+
+def test_reassemble_rejects_fewer_than_two_pieces():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0)])
+    with pytest.raises(ValueError, match="at least two checkpoint pieces"):
+        reassemble_pieces([a])
+
+
+def test_reassemble_rejects_non_wl_checkpoint():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0)],
+               fqn="mchammer.ensembles.CanonicalEnsemble")
+    b = _piece("B.h5", [_mock_dc(0.0, 1.0)])
+    with pytest.raises(ValueError, match="not a Wang-Landau checkpoint"):
+        reassemble_pieces([a, b])
+
+
+def test_reassemble_rejects_ce_mismatch():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0)], ce="aaaa")
+    b = _piece("B.h5", [_mock_dc(0.0, 1.0)], ce="bbbb")
+    with pytest.raises(ValueError, match="cluster-expansion identity"):
+        reassemble_pieces([a, b])
+
+
+def test_reassemble_rejects_system_size_mismatch():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0, n_sites=32)])
+    b = _piece("B.h5", [_mock_dc(0.0, 1.0, n_sites=64)])
+    with pytest.raises(ValueError, match="system size"):
+        reassemble_pieces([a, b])
+
+
+def test_reassemble_rejects_energy_spacing_mismatch():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0, energy_spacing=0.5)], spacing=0.5)
+    b = _piece("B.h5", [_mock_dc(0.0, 1.0, energy_spacing=0.25)], spacing=0.25)
+    with pytest.raises(ValueError, match="energy_spacing"):
+        reassemble_pieces([a, b])
+
+
+def test_reassemble_rejects_window_collision_with_multirun_hint():
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0)])
+    b = _piece("B.h5", [_mock_dc(-1.0, 0.0)])  # same window key as A
+    with pytest.raises(ValueError) as exc:
+        reassemble_pieces([a, b])
+    msg = str(exc.value)
+    assert "appears in more than one input" in msg
+    assert "A.h5" in msg and "B.h5" in msg
+    assert "--multi-run" in msg

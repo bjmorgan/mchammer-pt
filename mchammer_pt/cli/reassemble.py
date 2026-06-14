@@ -78,6 +78,94 @@ def reassemble_pieces(
     return union_containers, out_meta
 
 
+def _validate_pieces(pieces: list[Piece]) -> None:
+    """Raise ``ValueError`` if the pieces cannot form one complete run.
+
+    Owns the guards that fire where heterogeneous files first meet: at
+    least two pieces; every piece a Wang-Landau checkpoint; a shared
+    cluster-expansion identity; a shared system size (supercell); a shared
+    energy spacing; and no window-key collision across pieces (the same
+    window in two inputs). Grid/overlap/gap checks are left to
+    ``stitch_entropy`` on the unioned result.
+    """
+    if len(pieces) < 2:
+        raise ValueError(
+            f"reassembly needs at least two checkpoint pieces; "
+            f"got {len(pieces)}"
+        )
+
+    # Every piece is a Wang-Landau checkpoint.
+    for label, meta, _ in pieces:
+        fqn = str(meta.get("ensemble_cls_fqn", ""))
+        if "WangLandau" not in fqn:
+            raise ValueError(
+                f"{label} is not a Wang-Landau checkpoint "
+                f"(ensemble_cls_fqn={fqn!r}); reassembly applies to "
+                f"REWL runs only"
+            )
+
+    # Identical cluster-expansion identity. The CE identity hash covers
+    # only the primitive structure, so it is necessary but not sufficient;
+    # the system-size guard below catches a shared CE on different cells.
+    ref_label, ref_meta, _ = pieces[0]
+    ref_ce = str(ref_meta.get("ce_identity", ""))
+    for label, meta, _ in pieces[1:]:
+        ce = str(meta.get("ce_identity", ""))
+        if ce != ref_ce:
+            raise ValueError(
+                f"inputs disagree on cluster-expansion identity: "
+                f"{ref_label} has {ref_ce[:12]}..., "
+                f"{label} has {ce[:12]}...; all pieces must come from "
+                f"the same cluster expansion"
+            )
+
+    # Identical system size (n_sc) across every container.
+    size_label: dict[int, str] = {}
+    for label, _, containers in pieces:
+        for dc in containers:
+            size_label.setdefault(len(dc.structure), label)
+    if len(size_label) > 1:
+        (n_a, label_a), (n_b, label_b) = sorted(size_label.items())[:2]
+        raise ValueError(
+            f"inputs disagree on system size: {label_a} has {n_a} sites, "
+            f"{label_b} has {n_b} sites; all pieces must come from the "
+            f"same supercell"
+        )
+
+    # Identical energy spacing.
+    spacings = sorted({float(meta["energy_spacing"]) for _, meta, _ in pieces})
+    if len(spacings) > 1:
+        raise ValueError(
+            f"inputs disagree on energy_spacing: {spacings}; reassembly "
+            f"requires a common grid"
+        )
+
+    # No window-key collision across pieces. Within a piece, repeats of a
+    # key are legitimate multi-walker data; the same key in two different
+    # pieces is the collision reassembly refuses.
+    seen: dict[WindowKey, str] = {}
+    for label, _, containers in pieces:
+        piece_keys: set[WindowKey] = set()
+        for dc in containers:
+            params, err = _get_window_params(dc, label)
+            if err is not None:
+                raise ValueError(err)
+            piece_keys.add(
+                (params["energy_limit_left"], params["energy_limit_right"])
+            )
+        for key in piece_keys:
+            if key in seen:
+                lo, hi = key
+                raise ValueError(
+                    f"window ({lo}, {hi}) appears in more than one input "
+                    f"({seen[key]} and {label}); reassembly unions "
+                    f"complementary windows and refuses to merge identical "
+                    f"ones. To average independent runs of the same "
+                    f"windows, use 'mchammer-pt-stitch --multi-run' instead."
+                )
+            seen[key] = label
+
+
 def _union(
     pieces: list[Piece],
 ) -> tuple[
@@ -85,10 +173,8 @@ def _union(
     dict[WindowKey, list[BaseDataContainer]],
     dict[str, MetaValue],
 ]:
-    """Group containers by window across pieces and build the output meta.
-
-    (Guards are added in a later task.)
-    """
+    """Group containers by window across pieces and build the output meta."""
+    _validate_pieces(pieces)
     by_window: dict[WindowKey, list[BaseDataContainer]] = defaultdict(list)
     for label, _, containers in pieces:
         for dc in containers:
