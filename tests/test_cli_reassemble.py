@@ -163,8 +163,8 @@ def test_main_reports_ce_mismatch(tmp_path, monkeypatch, capsys):
     assert "cluster-expansion identity" in capsys.readouterr().err
 
 
-def _real_atoms(n_repeat=(2, 2, 2)):
-    return bulk("Au", "fcc", a=4.0, cubic=True).repeat(n_repeat)
+def _real_atoms():
+    return bulk("Au", "fcc", a=4.0, cubic=True).repeat((2, 2, 2))
 
 
 def _real_wl_container(atoms, lo, hi, spacing, entropy):
@@ -189,7 +189,10 @@ def _real_wl_container(atoms, lo, hi, spacing, entropy):
 
 def _four_windows(atoms, spacing=1.0):
     # Four windows on a unit grid, each overlapping its neighbour by one
-    # bin so stitch_entropy can align them with no gaps.
+    # bin (bins -1, 1, 3). The shared boundary-bin entropies are
+    # deliberately equal across the two windows that share them (e.g. bin
+    # -1 is 1.0 in both windows 0 and 1), so stitch aligns them with zero
+    # offset and no gaps.
     return [
         _real_wl_container(atoms, -3.5, -0.5, spacing,
                            {-3: 0.0, -2: 0.5, -1: 1.0}),
