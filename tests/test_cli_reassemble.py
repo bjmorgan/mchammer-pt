@@ -113,3 +113,55 @@ def test_reassemble_rejects_window_collision_with_multirun_hint():
     assert "appears in more than one input" in msg
     assert "A.h5" in msg and "B.h5" in msg
     assert "--multi-run" in msg
+
+
+from pathlib import Path
+
+from mchammer_pt.cli.reassemble import main
+
+
+def _patch_reads(monkeypatch, mapping):
+    monkeypatch.setattr(
+        "mchammer_pt.cli.reassemble.read_hdf5",
+        lambda p: (None, mapping[Path(p)][2], _meta_of(mapping[Path(p)])),
+    )
+
+
+def _meta_of(piece):
+    return piece[1]
+
+
+def test_main_requires_two_inputs(tmp_path, capsys):
+    rc = main(["only.h5", "-o", str(tmp_path / "out.h5")])
+    assert rc == 2
+    assert "at least two checkpoint pieces" in capsys.readouterr().err
+
+
+def test_main_propagates_read_error(tmp_path, monkeypatch, capsys):
+    def boom(_):
+        raise OSError("nope")
+
+    monkeypatch.setattr("mchammer_pt.cli.reassemble.read_hdf5", boom)
+    rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
+    assert rc == 2
+    assert "could not read checkpoint" in capsys.readouterr().err
+
+
+def test_main_reports_collision(tmp_path, monkeypatch, capsys):
+    a = _piece("a.h5", [_mock_dc(-1.0, 0.0)])
+    b = _piece("b.h5", [_mock_dc(-1.0, 0.0)])
+    _patch_reads(monkeypatch, {Path("a.h5"): a, Path("b.h5"): b})
+    rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "appears in more than one input" in err
+    assert "--multi-run" in err
+
+
+def test_main_reports_ce_mismatch(tmp_path, monkeypatch, capsys):
+    a = _piece("a.h5", [_mock_dc(-1.0, 0.0)], ce="aaaa")
+    b = _piece("b.h5", [_mock_dc(0.0, 1.0)], ce="bbbb")
+    _patch_reads(monkeypatch, {Path("a.h5"): a, Path("b.h5"): b})
+    rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
+    assert rc == 2
+    assert "cluster-expansion identity" in capsys.readouterr().err

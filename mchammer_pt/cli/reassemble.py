@@ -200,3 +200,90 @@ def _union(
         "reassembled": True,
     }
     return sorted_keys, by_window, out_meta
+
+
+def _load_piece(path: Path) -> tuple[Piece | None, str | None]:
+    """Read one checkpoint piece. Returns ``(piece, error_message)`` with
+    exactly one side non-``None``."""
+    try:
+        _, containers, meta = read_hdf5(path)
+    except (OSError, KeyError, ValueError, TypeError) as e:
+        return None, f"could not read checkpoint {path}: {e}"
+    if not containers:
+        return None, f"checkpoint {path} contains no replica data containers"
+    return (str(path), meta, containers), None
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="mchammer-pt-reassemble",
+        description=(
+            "Reassemble the complementary window-subset pieces of one "
+            "split REWL run (one seed) into a single stitch-ready, "
+            "analysis-only checkpoint that mchammer-pt-stitch reads "
+            "unchanged. Unions complementary windows and errors on a "
+            "window-key collision (use 'mchammer-pt-stitch --multi-run' "
+            "to average identical windows across seeds instead). The "
+            "output is not resumable."
+        ),
+    )
+    p.add_argument(
+        "inputs", type=Path, nargs="+",
+        help="The checkpoint pieces of one run (>= 2).",
+    )
+    p.add_argument(
+        "-o", "--output", type=Path, default=Path("reassembled.h5"),
+        help="Output HDF5 path. Default: reassembled.h5 (CWD).",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    if len(args.inputs) < 2:
+        print(
+            f"error: reassembly needs at least two checkpoint pieces; "
+            f"got {len(args.inputs)}",
+            file=sys.stderr,
+        )
+        return 2
+
+    pieces: list[Piece] = []
+    for path in args.inputs:
+        piece, err = _load_piece(path)
+        if err is not None:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        assert piece is not None  # err is None implies piece is set
+        pieces.append(piece)
+
+    try:
+        containers, meta = reassemble_pieces(pieces)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    history = ExchangeHistory.empty(n_cycles=0, n_replicas=len(containers))
+    try:
+        write_hdf5(
+            args.output,
+            history=history,
+            replica_containers=containers,
+            meta=meta,
+            orchestrator_state=None,
+        )
+    except OSError as e:
+        print(f"error: could not write {args.output}: {e}", file=sys.stderr)
+        return 2
+
+    n_windows = int(len(np.asarray(meta["walkers_per_window"])))
+    print(
+        f"wrote {args.output} (reassembled {len(pieces)} pieces into "
+        f"{n_windows} windows, {len(containers)} walkers)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
