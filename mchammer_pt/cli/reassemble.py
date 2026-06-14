@@ -5,9 +5,9 @@ contiguous, complementary subset of the windows (overlapping its
 neighbour at the boundary exactly as the windows of a single run do).
 ``reassemble`` takes the resulting checkpoint pieces of **one** run (one
 seed), unions their per-window Wang-Landau data containers by window, and
-writes a single stitch-ready artifact representing the complete run.
+writes a single stitch-ready artefact representing the complete run.
 
-The artifact is analysis-only: it carries the per-window containers plus
+The artefact is analysis-only: it carries the per-window containers plus
 identity and self-description metadata, but omits the run-execution
 metadata and the ``/orchestrator/`` + ``/sites_by_species/`` groups a
 resumable checkpoint has, so ``WangLandauParallelTempering.resume``

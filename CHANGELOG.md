@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ``mchammer-pt-reassemble`` CLI: unions the complementary window-subset
   pieces of one split REWL run (one seed) into a single stitch-ready,
-  analysis-only HDF5 artifact that ``mchammer-pt-stitch`` reads unchanged.
+  analysis-only HDF5 artefact that ``mchammer-pt-stitch`` reads unchanged.
   This lets a run whose coexistence band exceeds one node's walker capacity
   be split across jobs/nodes and recombined in post-processing. Reassembly
   unions complementary windows only and errors on a window-key collision
@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``mchammer-pt-stitch --multi-run`` for the distinct operation of averaging
   identical windows across seeds. It also verifies that all pieces share a
   cluster-expansion identity, a supercell size, and an energy spacing before
-  combining them. The artifact omits the orchestrator and per-walker resume
+  combining them. The artefact omits the orchestrator and per-walker resume
   state, so it is not resumable.
 
 ## [0.22.0] - 2026-06-11

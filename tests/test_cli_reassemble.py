@@ -247,7 +247,7 @@ def test_reassemble_then_stitch_matches_single_checkpoint(tmp_path):
     np.testing.assert_allclose(df_c["entropy"], df_r["entropy"], atol=1e-12)
 
 
-def test_main_writes_analysis_only_artifact(tmp_path):
+def test_main_writes_analysis_only_artefact(tmp_path):
     atoms = _real_atoms()
     windows = _four_windows(atoms)
     piece_a = tmp_path / "pieceA.h5"
@@ -266,7 +266,7 @@ def test_main_writes_analysis_only_artifact(tmp_path):
         assert "sites_by_species" not in f
 
 
-def test_resume_refuses_reassembled_artifact(tmp_path, toy_ce, toy_atoms):
+def test_resume_refuses_reassembled_artefact(tmp_path, toy_ce, toy_atoms):
     from mchammer_pt.checkpoint import _compute_ce_identity
     from mchammer_pt.wl import WangLandauParallelTempering
     from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
@@ -285,7 +285,7 @@ def test_resume_refuses_reassembled_artifact(tmp_path, toy_ce, toy_atoms):
     out = tmp_path / "reassembled.h5"
     assert main([str(piece_a), str(piece_b), "-o", str(out)]) == 0
 
-    # The artifact carries the real CE identity and ensemble FQN, so resume
+    # The artefact carries the real CE identity and ensemble FQN, so resume
     # passes the identity checks and fails specifically on the missing
     # run-execution metadata (block_size) -- it is not resumable.
     with pytest.raises(KeyError):
