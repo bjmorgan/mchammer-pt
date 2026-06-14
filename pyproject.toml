@@ -51,6 +51,7 @@ plot = ["matplotlib"]
 mchammer-pt-reweight = "mchammer_pt.cli.reweight:main"
 mchammer-pt-stitch = "mchammer_pt.cli.stitch:main"
 mchammer-pt-coexistence = "mchammer_pt.cli.coexistence:main"
+mchammer-pt-reassemble = "mchammer_pt.cli.reassemble:main"
 
 [tool.setuptools.packages.find]
 include = ["mchammer_pt*"]
