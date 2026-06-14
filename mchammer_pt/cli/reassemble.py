@@ -133,12 +133,15 @@ def _validate_pieces(pieces: list[Piece]) -> None:
         )
 
     # Identical energy spacing.
-    spacings = sorted({float(meta["energy_spacing"]) for _, meta, _ in pieces})
-    if len(spacings) > 1:
-        raise ValueError(
-            f"inputs disagree on energy_spacing: {spacings}; reassembly "
-            f"requires a common grid"
-        )
+    ref_spacing = float(ref_meta["energy_spacing"])
+    for label, meta, _ in pieces[1:]:
+        spacing = float(meta["energy_spacing"])
+        if spacing != ref_spacing:
+            raise ValueError(
+                f"inputs disagree on energy_spacing: {ref_label} has "
+                f"{ref_spacing}, {label} has {spacing}; reassembly requires "
+                f"a common grid"
+            )
 
     # No window-key collision across pieces. Within a piece, repeats of a
     # key are legitimate multi-walker data; the same key in two different
