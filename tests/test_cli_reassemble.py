@@ -74,6 +74,19 @@ def test_reassemble_output_meta_describes_the_union():
     )
 
 
+def test_reassemble_sorts_windows_ascending_regardless_of_input_order():
+    # Pieces supplied highest-window-first (e.g. a shell glob or manual arg
+    # order); the union must still come out energy-ascending.
+    hi = _piece("hi.h5", [_mock_dc(0.0, 1.0)])
+    lo = _piece("lo.h5", [_mock_dc(-1.0, 0.0)])
+    containers, meta = reassemble_pieces([hi, lo])
+    lefts = [c.ensemble_parameters["energy_limit_left"] for c in containers]
+    assert lefts == [-1.0, 0.0]
+    np.testing.assert_allclose(
+        np.asarray(meta["windows"]), np.array([[-1.0, 0.0], [0.0, 1.0]])
+    )
+
+
 def test_reassemble_rejects_fewer_than_two_pieces():
     a = _piece("A.h5", [_mock_dc(-1.0, 0.0)])
     with pytest.raises(ValueError, match="at least two checkpoint pieces"):
@@ -106,6 +119,17 @@ def test_reassemble_rejects_energy_spacing_mismatch():
     a = _piece("A.h5", [_mock_dc(-1.0, 0.0, energy_spacing=0.5)], spacing=0.5)
     b = _piece("B.h5", [_mock_dc(0.0, 1.0, energy_spacing=0.25)], spacing=0.25)
     with pytest.raises(ValueError, match="energy_spacing"):
+        reassemble_pieces([a, b])
+
+
+def test_reassemble_rejects_piece_missing_required_metadata():
+    # A readable file that passes read_hdf5's group-layout check but lacks a
+    # REWL meta key (here energy_spacing) must raise a clean ValueError
+    # naming the piece, not let a bare KeyError escape main's contract.
+    a = _piece("A.h5", [_mock_dc(-1.0, 0.0)])
+    b = ("B.h5", {"ensemble_cls_fqn": WL_FQN, "ce_identity": "ce-hash"},
+         [_mock_dc(0.0, 1.0)])
+    with pytest.raises(ValueError, match="missing required metadata"):
         reassemble_pieces([a, b])
 
 
@@ -161,6 +185,23 @@ def test_main_reports_ce_mismatch(tmp_path, monkeypatch, capsys):
     rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
     assert rc == 2
     assert "cluster-expansion identity" in capsys.readouterr().err
+
+
+def test_main_reports_write_error(tmp_path, monkeypatch, capsys):
+    # A common cluster failure: the union succeeds but the output cannot be
+    # written (unwritable -o directory, full disk). main must report it
+    # cleanly with rc 2, not let the OSError escape as a traceback.
+    a = _piece("a.h5", [_mock_dc(-1.0, 0.0)])
+    b = _piece("b.h5", [_mock_dc(0.0, 1.0)])
+    _patch_reads(monkeypatch, {Path("a.h5"): a, Path("b.h5"): b})
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("mchammer_pt.cli.reassemble.write_hdf5", boom)
+    rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
+    assert rc == 2
+    assert "could not write" in capsys.readouterr().err
 
 
 def _real_atoms():

@@ -7,11 +7,14 @@ neighbour at the boundary exactly as the windows of a single run do).
 seed), unions their per-window Wang-Landau data containers by window, and
 writes a single stitch-ready artefact representing the complete run.
 
-The artefact is analysis-only: it carries the per-window containers plus
-identity and self-description metadata, but omits the run-execution
-metadata and the ``/orchestrator/`` + ``/sites_by_species/`` groups a
-resumable checkpoint has, so ``WangLandauParallelTempering.resume``
-refuses it. The existing ``mchammer-pt-stitch`` reads it unchanged.
+The artefact is analysis-only and not resumable: it carries the per-window
+containers plus identity and self-description metadata, but omits the
+run-execution metadata a resumable checkpoint has.
+``WangLandauParallelTempering.resume`` reads one of those keys
+(``block_size``) early and raises ``KeyError`` before it ever reaches the
+``/orchestrator/`` and ``/sites_by_species/`` groups, which the artefact
+also omits as a further barrier. The existing ``mchammer-pt-stitch`` reads
+the artefact unchanged.
 
 Reassembly is per-seed and runs once per seed, before stitching and never
 inside a bootstrap loop. It unions *complementary* windows only and errors
@@ -94,9 +97,22 @@ def _validate_pieces(pieces: list[Piece]) -> None:
             f"got {len(pieces)}"
         )
 
+    # Required identity/grid metadata must be present before we inspect or
+    # compare it. read_hdf5 validates only the HDF5 group layout, not these
+    # REWL meta keys, so a readable-but-foreign file reaches here without
+    # them; name the offending piece rather than letting a bare KeyError
+    # escape main's error-handling contract.
+    for label, meta, _ in pieces:
+        for required in ("ensemble_cls_fqn", "ce_identity", "energy_spacing"):
+            if required not in meta:
+                raise ValueError(
+                    f"{label} is missing required metadata {required!r}; "
+                    f"is this an mchammer-pt REWL checkpoint?"
+                )
+
     # Every piece is a Wang-Landau checkpoint.
     for label, meta, _ in pieces:
-        fqn = str(meta.get("ensemble_cls_fqn", ""))
+        fqn = str(meta["ensemble_cls_fqn"])
         if "WangLandau" not in fqn:
             raise ValueError(
                 f"{label} is not a Wang-Landau checkpoint "
@@ -104,13 +120,14 @@ def _validate_pieces(pieces: list[Piece]) -> None:
                 f"REWL runs only"
             )
 
-    # Identical cluster-expansion identity. The CE identity hash covers
-    # only the primitive structure, so it is necessary but not sufficient;
-    # the system-size guard below catches a shared CE on different cells.
+    # Identical cluster-expansion identity. The CE identity hash covers the
+    # CE's primitive structure but not the supercell size, so it is
+    # necessary but not sufficient; the system-size guard below catches a
+    # shared CE on different cells.
     ref_label, ref_meta, _ = pieces[0]
-    ref_ce = str(ref_meta.get("ce_identity", ""))
+    ref_ce = str(ref_meta["ce_identity"])
     for label, meta, _ in pieces[1:]:
-        ce = str(meta.get("ce_identity", ""))
+        ce = str(meta["ce_identity"])
         if ce != ref_ce:
             raise ValueError(
                 f"inputs disagree on cluster-expansion identity: "
