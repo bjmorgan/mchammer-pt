@@ -4,13 +4,17 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import h5py
 import numpy as np
+import pandas as pd
 import pytest
+from ase.build import bulk
 from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
 
 from mchammer_pt.cli.reassemble import main, reassemble_pieces
+from mchammer_pt.history import ExchangeHistory, read_hdf5, write_hdf5
 
 WL_FQN = "mchammer.ensembles.wang_landau_ensemble.WangLandauEnsemble"
 
@@ -157,3 +161,129 @@ def test_main_reports_ce_mismatch(tmp_path, monkeypatch, capsys):
     rc = main(["a.h5", "b.h5", "-o", str(tmp_path / "out.h5")])
     assert rc == 2
     assert "cluster-expansion identity" in capsys.readouterr().err
+
+
+def _real_atoms(n_repeat=(2, 2, 2)):
+    return bulk("Au", "fcc", a=4.0, cubic=True).repeat(n_repeat)
+
+
+def _real_wl_container(atoms, lo, hi, spacing, entropy):
+    dc = WangLandauDataContainer(
+        structure=atoms.copy(),
+        ensemble_parameters={
+            "energy_spacing": spacing,
+            "energy_limit_left": lo,
+            "energy_limit_right": hi,
+            "trial_move": "swap",
+        },
+    )
+    dc._last_state = {
+        "entropy": dict(entropy),
+        "histogram": {k: 1 for k in entropy},
+        "fill_factor": 0.5,
+        "fill_factor_history": {},
+        "entropy_history": {},
+    }
+    return dc
+
+
+def _four_windows(atoms, spacing=1.0):
+    # Four windows on a unit grid, each overlapping its neighbour by one
+    # bin so stitch_entropy can align them with no gaps.
+    return [
+        _real_wl_container(atoms, -3.5, -0.5, spacing,
+                           {-3: 0.0, -2: 0.5, -1: 1.0}),
+        _real_wl_container(atoms, -1.5, 1.5, spacing,
+                           {-1: 1.0, 0: 1.5, 1: 2.0}),
+        _real_wl_container(atoms, 0.5, 3.5, spacing,
+                           {1: 2.0, 2: 2.5, 3: 3.0}),
+        _real_wl_container(atoms, 2.5, 5.5, spacing,
+                           {3: 3.0, 4: 3.5, 5: 4.0}),
+    ]
+
+
+def _write_checkpoint(path, containers, *, ce="ce-hash", spacing=1.0,
+                      fqn=WL_FQN):
+    write_hdf5(
+        path,
+        history=ExchangeHistory.empty(n_cycles=0, n_replicas=len(containers)),
+        replica_containers=containers,
+        meta={
+            "ensemble_cls_fqn": fqn,
+            "ce_identity": ce,
+            "energy_spacing": spacing,
+        },
+    )
+
+
+def test_reassemble_then_stitch_matches_single_checkpoint(tmp_path):
+    from mchammer_pt.cli.stitch import main as stitch_main
+
+    atoms = _real_atoms()
+    windows = _four_windows(atoms)
+
+    complete = tmp_path / "complete.h5"
+    _write_checkpoint(complete, windows)
+
+    piece_a = tmp_path / "pieceA.h5"
+    piece_b = tmp_path / "pieceB.h5"
+    _write_checkpoint(piece_a, windows[:2])
+    _write_checkpoint(piece_b, windows[2:])
+
+    reassembled = tmp_path / "reassembled.h5"
+    assert main([str(piece_a), str(piece_b), "-o", str(reassembled)]) == 0
+
+    dos_complete = tmp_path / "dos_complete.csv"
+    dos_reassembled = tmp_path / "dos_reassembled.csv"
+    assert stitch_main([str(complete), "-o", str(dos_complete)]) == 0
+    assert stitch_main([str(reassembled), "-o", str(dos_reassembled)]) == 0
+
+    df_c = pd.read_csv(dos_complete)
+    df_r = pd.read_csv(dos_reassembled)
+    np.testing.assert_allclose(df_c["energy"], df_r["energy"])
+    np.testing.assert_allclose(df_c["entropy"], df_r["entropy"], atol=1e-12)
+
+
+def test_main_writes_analysis_only_artifact(tmp_path):
+    atoms = _real_atoms()
+    windows = _four_windows(atoms)
+    piece_a = tmp_path / "pieceA.h5"
+    piece_b = tmp_path / "pieceB.h5"
+    _write_checkpoint(piece_a, windows[:2])
+    _write_checkpoint(piece_b, windows[2:])
+
+    out = tmp_path / "reassembled.h5"
+    assert main([str(piece_a), str(piece_b), "-o", str(out)]) == 0
+
+    _, containers, meta = read_hdf5(out)
+    assert len(containers) == 4
+    assert bool(meta["reassembled"]) is True
+    with h5py.File(out, "r") as f:
+        assert "orchestrator" not in f
+        assert "sites_by_species" not in f
+
+
+def test_resume_refuses_reassembled_artifact(tmp_path, toy_ce, toy_atoms):
+    from mchammer_pt.checkpoint import _compute_ce_identity
+    from mchammer_pt.wl import WangLandauParallelTempering
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce_hash = _compute_ce_identity(toy_ce)
+    fqn = (
+        f"{CoordinatedWangLandauEnsemble.__module__}."
+        f"{CoordinatedWangLandauEnsemble.__qualname__}"
+    )
+    windows = _four_windows(toy_atoms)
+    piece_a = tmp_path / "pieceA.h5"
+    piece_b = tmp_path / "pieceB.h5"
+    _write_checkpoint(piece_a, windows[:2], ce=ce_hash, fqn=fqn)
+    _write_checkpoint(piece_b, windows[2:], ce=ce_hash, fqn=fqn)
+
+    out = tmp_path / "reassembled.h5"
+    assert main([str(piece_a), str(piece_b), "-o", str(out)]) == 0
+
+    # The artifact carries the real CE identity and ensemble FQN, so resume
+    # passes the identity checks and fails specifically on the missing
+    # run-execution metadata (block_size) -- it is not resumable.
+    with pytest.raises(KeyError):
+        WangLandauParallelTempering.resume(out, cluster_expansion=toy_ce)
