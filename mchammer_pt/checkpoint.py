@@ -507,7 +507,12 @@ def completed_cycles(
     ``cycles_run * block_size``. Walkers that converge early stop
     advancing (icet's ``_terminate_sampling`` short-circuit) and freeze
     at a lower step, so the orchestrator's completed-cycle count is the
-    ``max`` across walkers, not any single walker's value.
+    ``max`` across walkers, not any single walker's value. A walker that
+    converges mid-block in the 1/t phase (when ``observer_interval <
+    block_size``) freezes at an ``observer_interval`` boundary that is
+    not a ``block_size`` boundary; floor division over the ``max``
+    tolerates this legitimate off-block frozen step without requiring
+    each walker's step to be an exact multiple.
 
     The step is read from each container's ``_last_state["last_step"]``
     -- the field ``WangLandauReplica`` restores on resume -- so the count
@@ -524,10 +529,7 @@ def completed_cycles(
         ``max(step) // block_size`` across all walkers.
 
     Raises:
-        ValueError: if ``block_size < 1``, ``containers`` is empty, or any
-            restored step is not a non-negative multiple of ``block_size``
-            (a corrupted checkpoint, or a block-size mismatch between the
-            run that wrote the checkpoint and the resume config).
+        ValueError: if ``block_size < 1`` or ``containers`` is empty.
     """
     block_size = int(block_size)
     if block_size < 1:
@@ -535,13 +537,6 @@ def completed_cycles(
     if not containers:
         raise ValueError("completed_cycles requires at least one container")
     steps = [int(c._last_state["last_step"]) for c in containers]
-    for step in steps:
-        if step < 0 or step % block_size != 0:
-            raise ValueError(
-                f"restored walker step {step} is not a non-negative "
-                f"multiple of block_size {block_size}; the checkpoint is "
-                f"corrupted or was written with a different block size."
-            )
     return max(steps) // block_size
 
 

@@ -747,7 +747,7 @@ def test_w1_only_checkpoint_omits_window_groups_subgroup(tmp_path):
 
 
 def _stub(last_step: int):
-    """SimpleNamespace standing in for a BaseDataContainer; only ``_last_state`` is read."""
+    """Stand-in for a data container; only ``_last_state`` is read."""
     return types.SimpleNamespace(_last_state={"last_step": last_step})
 
 
@@ -768,9 +768,18 @@ def test_completed_cycles_takes_max_over_frozen_laggards():
     assert completed_cycles(containers, block_size=10) == 5
 
 
-def test_completed_cycles_rejects_non_multiple_step():
-    with pytest.raises(ValueError, match="multiple of block_size"):
-        completed_cycles([_stub(55)], block_size=10)
+def test_completed_cycles_tolerates_off_block_laggard():
+    # A walker that converges mid-block (1/t phase) freezes off a block
+    # boundary; it is a laggard below the active walkers and must not abort
+    # the count.
+    containers = [_stub(45), _stub(100), _stub(100)]
+    assert completed_cycles(containers, block_size=10) == 10
+
+
+def test_completed_cycles_floor_divides_off_block_max():
+    # Full mid-block convergence can leave even the max step off-block;
+    # floor division yields the number of complete cycles.
+    assert completed_cycles([_stub(95)], block_size=10) == 9
 
 
 def test_completed_cycles_rejects_empty():
@@ -808,6 +817,69 @@ def test_completed_cycles_round_trips_a_real_checkpoint(tmp_path):
 
     _, containers, meta = read_hdf5(path)
     assert completed_cycles(containers, int(meta["block_size"])) == 4
+
+
+def test_completed_cycles_handles_real_off_block_freeze():
+    """A mid-block-converged walker freezes off a block boundary in icet's
+    chunked run loop; completed_cycles must return the floor count, not raise.
+
+    icet's ``BaseEnsemble.run(block)`` advances in ``observer_interval``
+    chunks and checks ``_terminate_sampling()`` at each boundary. When
+    ``observer_interval < block`` -- here 160 < 320, because the
+    trajectory-write interval (480) is not a multiple of the 320 block, so
+    ``observer_interval = gcd(320, 480) = 160`` -- a walker that converges
+    mid-block freezes at an observer boundary that is not a block multiple.
+    ``_terminate_sampling`` is forced here so the convergence point is
+    deterministic; the freeze location is real icet behaviour.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    block = 320
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=block,
+        random_seed=0,
+        ensemble_kwargs={
+            "ensemble_data_write_interval": block,
+            "trajectory_write_interval": 480,
+            "flatness_check_interval": block,
+            "fill_factor_limit": 1e-9,
+        },
+        data_container_file=None,
+    )
+    replica = pt._pool._replicas[0]
+    ensemble = replica._ensemble
+    assert ensemble.observer_interval == 160
+
+    replica.advance(block)
+    replica.advance(block)
+    assert ensemble.step == 2 * block  # two full cycles, on a block boundary
+
+    # Force convergence partway through the third block, at an observer
+    # boundary that is not a block multiple.
+    off_block_step = 2 * block + ensemble.observer_interval
+    ensemble._terminate_sampling = lambda: ensemble.step >= off_block_step
+    replica.advance(block)
+    assert ensemble.step == off_block_step
+    assert ensemble.step % block != 0  # genuinely off a block boundary
+
+    replica.refresh_last_state()
+    container = ensemble._data_container
+    # Floor of the off-block step, and crucially: no ValueError.
+    assert completed_cycles([container], block) == 2
 
 
 def test_checkpoint_trims_padded_history_to_cycles_in_segment(tmp_path):
