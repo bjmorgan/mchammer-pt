@@ -49,6 +49,7 @@ from typing import Any
 import h5py
 import numpy as np
 from icet import ClusterExpansion
+from mchammer.data_containers.base_data_container import BaseDataContainer
 
 from .history import ExchangeHistory, MetaValue
 
@@ -493,6 +494,55 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         replica_extra=replica_extra,
         window_groups=window_groups,
     )
+
+
+def completed_cycles(
+    containers: Sequence[BaseDataContainer],
+    block_size: int,
+) -> int:
+    """Completed REWL cycles inferred from the restored walker MC steps.
+
+    In REWL every active walker advances one block of ``block_size`` MC
+    trial steps per cycle, so a walker's restored ``step`` equals
+    ``cycles_run * block_size``. Walkers that converge early stop
+    advancing (icet's ``_terminate_sampling`` short-circuit) and freeze
+    at a lower step, so the orchestrator's completed-cycle count is the
+    ``max`` across walkers, not any single walker's value.
+
+    The step is read from each container's ``_last_state["last_step"]``
+    -- the field ``WangLandauReplica`` restores on resume -- so the count
+    is correct for padded legacy checkpoints and cumulative across
+    chained resumes, unlike the per-cycle history length.
+
+    Args:
+        containers: per-walker data containers, e.g. as returned by
+            :func:`mchammer_pt.read_hdf5`. Must be non-empty.
+        block_size: MC trial steps per walker per cycle (the checkpoint's
+            ``meta["block_size"]``).
+
+    Returns:
+        ``max(step) // block_size`` across all walkers.
+
+    Raises:
+        ValueError: if ``block_size < 1``, ``containers`` is empty, or any
+            restored step is not a non-negative multiple of ``block_size``
+            (a corrupted checkpoint, or a block-size mismatch between the
+            run that wrote the checkpoint and the resume config).
+    """
+    block_size = int(block_size)
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1; got {block_size}")
+    if not containers:
+        raise ValueError("completed_cycles requires at least one container")
+    steps = [int(c._last_state["last_step"]) for c in containers]
+    for step in steps:
+        if step < 0 or step % block_size != 0:
+            raise ValueError(
+                f"restored walker step {step} is not a non-negative "
+                f"multiple of block_size {block_size}; the checkpoint is "
+                f"corrupted or was written with a different block size."
+            )
+    return max(steps) // block_size
 
 
 class CheckpointWriter:

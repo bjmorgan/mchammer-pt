@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import random as stdlib_random
+import types
 
 import numpy as np
 import pytest
 from mchammer.data_containers.base_data_container import BaseDataContainer
 
+from mchammer_pt import completed_cycles
 from mchammer_pt.replica import Replica
 
 
@@ -742,3 +744,67 @@ def test_w1_only_checkpoint_omits_window_groups_subgroup(tmp_path):
         # entirely when every window has W=1 (not create-and-leave-empty).
         assert "window_groups" not in f["orchestrator"]
     assert _read_window_groups(path) == [None, None]
+
+
+def _stub(last_step: int):
+    """SimpleNamespace standing in for a BaseDataContainer; only ``_last_state`` is read."""
+    return types.SimpleNamespace(_last_state={"last_step": last_step})
+
+
+def test_completed_cycles_rejects_non_positive_block_size():
+    with pytest.raises(ValueError, match="block_size must be >= 1"):
+        completed_cycles([_stub(10)], block_size=0)
+
+
+def test_completed_cycles_all_equal_steps():
+    containers = [_stub(50), _stub(50), _stub(50)]
+    assert completed_cycles(containers, block_size=10) == 5
+
+
+def test_completed_cycles_takes_max_over_frozen_laggards():
+    # Converged walkers freeze at a lower step; the orchestrator's cycle
+    # count is the max across walkers, not walker[0].
+    containers = [_stub(20), _stub(50), _stub(30)]
+    assert completed_cycles(containers, block_size=10) == 5
+
+
+def test_completed_cycles_rejects_non_multiple_step():
+    with pytest.raises(ValueError, match="multiple of block_size"):
+        completed_cycles([_stub(55)], block_size=10)
+
+
+def test_completed_cycles_rejects_empty():
+    with pytest.raises(ValueError, match="at least one container"):
+        completed_cycles([], block_size=10)
+
+
+def test_completed_cycles_round_trips_a_real_checkpoint(tmp_path):
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering, read_hdf5
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=4)
+    # 4 fresh cycles of a 16-atom toy will not converge, so no walker freezes.
+    assert pt.cycles_in_segment == 4
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    _, containers, meta = read_hdf5(path)
+    assert completed_cycles(containers, int(meta["block_size"])) == 4

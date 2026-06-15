@@ -14,7 +14,7 @@ from .callbacks import (
     WangLandauProgressPrinter,
 )
 from .canonical import CanonicalParallelTempering
-from .checkpoint import CheckpointWriter
+from .checkpoint import CheckpointWriter, completed_cycles
 from .diagnostics import (
     energy_autocorrelation_time,
     round_trip_counts,
@@ -46,6 +46,7 @@ __all__ = [
     "CanonicalParallelTempering",
     "CanonicalPool",
     "CheckpointWriter",
+    "completed_cycles",
     "CycleCallback",
     "ExchangeCallback",
     "ExchangeHistory",
