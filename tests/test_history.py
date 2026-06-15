@@ -473,3 +473,28 @@ def test_write_hdf5_window_groups_without_orchestrator_state_raises(
                 {"rng_state": "{}", "phase": "halving"},
             ],
         )
+
+
+def test_truncated_to_trims_per_cycle_arrays_and_keeps_swaps():
+    h = ExchangeHistory.empty(n_cycles=5, n_replicas=3)
+    h.energies_per_cycle[:] = np.arange(h.energies_per_cycle.size).reshape(
+        h.energies_per_cycle.shape
+    )
+    h.swap_attempted[:] = [7, 8]
+
+    t = h.truncated_to(2)
+
+    assert t.energies_per_cycle.shape == (3, 3)  # 2 cycles + leading row
+    assert t.replica_labels_per_cycle.shape == (3, 3)
+    np.testing.assert_array_equal(t.energies_per_cycle, h.energies_per_cycle[:3])
+    np.testing.assert_array_equal(t.swap_attempted, h.swap_attempted)
+    np.testing.assert_array_equal(t.swap_accepted, h.swap_accepted)
+    # Source is not mutated.
+    assert h.energies_per_cycle.shape == (6, 3)
+
+
+def test_truncated_to_full_length_keeps_every_row():
+    h = ExchangeHistory.empty(n_cycles=4, n_replicas=2)
+    t = h.truncated_to(4)
+    assert t.energies_per_cycle.shape == (5, 2)
+    assert t.replica_labels_per_cycle.shape == (5, 2)
