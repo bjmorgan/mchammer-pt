@@ -579,9 +579,12 @@ class WangLandauParallelTempering(BaseParallelTempering):
             window_of_position=self._pool.window_of_position(),
         )
         self._history = history
+        # Reset the counter atomically with `_history` (before the row-0
+        # snapshot writes) so it is never stale relative to the history a
+        # checkpoint would serialise.
+        self.cycles_in_segment = 0
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
-        self.cycles_in_segment = 0
         try:
             for c in range(n_cycles):
                 self._pool.advance_all(self._block_size)

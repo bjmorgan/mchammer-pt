@@ -862,7 +862,11 @@ def test_completed_cycles_handles_real_off_block_freeze():
     )
     replica = pt._pool._replicas[0]
     ensemble = replica._ensemble
-    assert ensemble.observer_interval == 160
+    # The properties the test relies on, not the exact gcd value: the loop
+    # checks termination on a granularity finer than the block, and that
+    # granularity divides the block (so full cycles still land on it).
+    assert ensemble.observer_interval < block
+    assert block % ensemble.observer_interval == 0
 
     replica.advance(block)
     replica.advance(block)

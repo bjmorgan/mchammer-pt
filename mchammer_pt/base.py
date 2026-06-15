@@ -71,6 +71,10 @@ class BaseParallelTempering(ABC):
             ([0], np.cumsum(_counts))
         )[:-1].astype(np.int64)
         self._history: ExchangeHistory | None = None
+        # Cycles executed in the current (or most recent) `run()` segment.
+        # Both orchestrators' run loops maintain it; `_write_checkpoint`
+        # reads it to trim the pre-allocated per-cycle history to its true
+        # length so a checkpoint carries no zero-padded phantom cycles.
         self.cycles_in_segment = 0
         self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
 
@@ -207,9 +211,12 @@ class BaseParallelTempering(ABC):
         # orchestrator state via `self`, and so an exception inside the loop
         # leaves `self.history` pointing at the partially filled history.
         self._history = history
+        # Reset the counter atomically with `_history` (before the row-0
+        # snapshot writes) so it is never stale relative to the history a
+        # checkpoint would serialise.
+        self.cycles_in_segment = 0
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
-        self.cycles_in_segment = 0
         for c in range(n_cycles):
             self._pool.advance_all(self._block_size)
             self._exchange_phase(c, history)

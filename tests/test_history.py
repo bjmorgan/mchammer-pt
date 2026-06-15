@@ -498,3 +498,20 @@ def test_truncated_to_full_length_keeps_every_row():
     t = h.truncated_to(4)
     assert t.energies_per_cycle.shape == (5, 2)
     assert t.replica_labels_per_cycle.shape == (5, 2)
+
+
+def test_truncated_to_handles_distinct_carrier_and_replica_widths():
+    # Multi-walker REWL: replica_labels_per_cycle is n_carriers wide while
+    # energies_per_cycle is n_replicas wide. truncated_to must trim both on
+    # the cycle axis without conflating the two widths, and carry
+    # window_of_position through untrimmed.
+    h = ExchangeHistory.empty(
+        n_cycles=5,
+        n_replicas=2,
+        n_carriers=4,
+        window_of_position=[0, 0, 1, 1],
+    )
+    t = h.truncated_to(2)
+    assert t.energies_per_cycle.shape == (3, 2)  # n_replicas wide
+    assert t.replica_labels_per_cycle.shape == (3, 4)  # n_carriers wide
+    np.testing.assert_array_equal(t.window_of_position, h.window_of_position)
