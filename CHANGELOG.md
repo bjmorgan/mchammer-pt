@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-15
+
 ### Added
 
 - ``mchammer-pt-reassemble`` CLI: unions the complementary window-subset
