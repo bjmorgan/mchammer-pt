@@ -49,6 +49,7 @@ from typing import Any
 import h5py
 import numpy as np
 from icet import ClusterExpansion
+from mchammer.data_containers.base_data_container import BaseDataContainer
 
 from .history import ExchangeHistory, MetaValue
 
@@ -486,13 +487,57 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         window_groups = None
     write_hdf5(
         Path(path),
-        history=pt._history,  # type: ignore[attr-defined]
+        history=pt._history.truncated_to(pt.cycles_in_segment),  # type: ignore[attr-defined]
         replica_containers=pt._pool.data_containers(),  # type: ignore[attr-defined]
         meta=meta,
         orchestrator_state=orchestrator_state,
         replica_extra=replica_extra,
         window_groups=window_groups,
     )
+
+
+def completed_cycles(
+    containers: Sequence[BaseDataContainer],
+    block_size: int,
+) -> int:
+    """Completed REWL cycles inferred from the restored walker MC steps.
+
+    In REWL every active walker advances one block of ``block_size`` MC
+    trial steps per cycle, so a walker's restored ``step`` equals
+    ``cycles_run * block_size``. Walkers that converge early stop
+    advancing (icet's ``_terminate_sampling`` short-circuit) and freeze
+    at a lower step, so the orchestrator's completed-cycle count is the
+    ``max`` across walkers, not any single walker's value. A walker that
+    converges mid-block in the 1/t phase (when ``observer_interval <
+    block_size``) freezes at an ``observer_interval`` boundary that is
+    not a ``block_size`` boundary; floor division over the ``max``
+    tolerates this legitimate off-block frozen step without requiring
+    each walker's step to be an exact multiple.
+
+    The step is read from each container's ``_last_state["last_step"]``
+    -- the field ``WangLandauReplica`` restores on resume -- so the count
+    is correct for padded legacy checkpoints and cumulative across
+    chained resumes, unlike the per-cycle history length.
+
+    Args:
+        containers: per-walker data containers, e.g. as returned by
+            :func:`mchammer_pt.read_hdf5`. Must be non-empty.
+        block_size: MC trial steps per walker per cycle (the checkpoint's
+            ``meta["block_size"]``).
+
+    Returns:
+        ``max(step) // block_size`` across all walkers.
+
+    Raises:
+        ValueError: if ``block_size < 1`` or ``containers`` is empty.
+    """
+    block_size = int(block_size)
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1; got {block_size}")
+    if not containers:
+        raise ValueError("completed_cycles requires at least one container")
+    steps = [int(c._last_state["last_step"]) for c in containers]
+    return max(steps) // block_size
 
 
 class CheckpointWriter:

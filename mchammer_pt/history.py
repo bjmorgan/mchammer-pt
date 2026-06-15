@@ -215,6 +215,28 @@ class ExchangeHistory:
             window_of_position=histories[0].window_of_position,
         )
 
+    def truncated_to(self, n_cycles: int) -> ExchangeHistory:
+        """Return a copy with the per-cycle arrays trimmed to ``n_cycles``.
+
+        Keeps rows ``0 .. n_cycles`` of ``energies_per_cycle`` and
+        ``replica_labels_per_cycle`` (``n_cycles + 1`` rows, including the
+        leading pre-run snapshot row) and carries the per-pair swap counts
+        and ``window_of_position`` through unchanged. Used on checkpoint
+        write to drop the zero-padding left by pre-allocating the history
+        to the full target length when a run stops early. Does not mutate
+        ``self``; the returned arrays are views over the kept rows, which
+        the run never rewrites, so this is safe alongside a still-running
+        orchestrator.
+        """
+        rows = n_cycles + 1
+        return ExchangeHistory(
+            energies_per_cycle=self.energies_per_cycle[:rows],
+            replica_labels_per_cycle=self.replica_labels_per_cycle[:rows],
+            swap_attempted=self.swap_attempted,
+            swap_accepted=self.swap_accepted,
+            window_of_position=self.window_of_position,
+        )
+
 
 def write_hdf5(
     path: Path | str,

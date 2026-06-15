@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import random as stdlib_random
+import types
 
 import numpy as np
 import pytest
 from mchammer.data_containers.base_data_container import BaseDataContainer
 
+from mchammer_pt import completed_cycles
 from mchammer_pt.replica import Replica
 
 
@@ -742,3 +744,195 @@ def test_w1_only_checkpoint_omits_window_groups_subgroup(tmp_path):
         # entirely when every window has W=1 (not create-and-leave-empty).
         assert "window_groups" not in f["orchestrator"]
     assert _read_window_groups(path) == [None, None]
+
+
+def _stub(last_step: int):
+    """Stand-in for a data container; only ``_last_state`` is read."""
+    return types.SimpleNamespace(_last_state={"last_step": last_step})
+
+
+def test_completed_cycles_rejects_non_positive_block_size():
+    with pytest.raises(ValueError, match="block_size must be >= 1"):
+        completed_cycles([_stub(10)], block_size=0)
+
+
+def test_completed_cycles_all_equal_steps():
+    containers = [_stub(50), _stub(50), _stub(50)]
+    assert completed_cycles(containers, block_size=10) == 5
+
+
+def test_completed_cycles_takes_max_over_frozen_laggards():
+    # Converged walkers freeze at a lower step; the orchestrator's cycle
+    # count is the max across walkers, not walker[0].
+    containers = [_stub(20), _stub(50), _stub(30)]
+    assert completed_cycles(containers, block_size=10) == 5
+
+
+def test_completed_cycles_tolerates_off_block_laggard():
+    # A walker that converges mid-block (1/t phase) freezes off a block
+    # boundary; it is a laggard below the active walkers and must not abort
+    # the count.
+    containers = [_stub(45), _stub(100), _stub(100)]
+    assert completed_cycles(containers, block_size=10) == 10
+
+
+def test_completed_cycles_floor_divides_off_block_max():
+    # Full mid-block convergence can leave even the max step off-block;
+    # floor division yields the number of complete cycles.
+    assert completed_cycles([_stub(95)], block_size=10) == 9
+
+
+def test_completed_cycles_rejects_empty():
+    with pytest.raises(ValueError, match="at least one container"):
+        completed_cycles([], block_size=10)
+
+
+def test_completed_cycles_round_trips_a_real_checkpoint(tmp_path):
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering, read_hdf5
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=4)
+    # 4 fresh cycles of a 16-atom toy will not converge, so no walker freezes.
+    assert pt.cycles_in_segment == 4
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    _, containers, meta = read_hdf5(path)
+    assert completed_cycles(containers, int(meta["block_size"])) == 4
+
+
+def test_completed_cycles_handles_real_off_block_freeze():
+    """A mid-block-converged walker freezes off a block boundary in icet's
+    chunked run loop; completed_cycles must return the floor count, not raise.
+
+    icet's ``BaseEnsemble.run(block)`` advances in ``observer_interval``
+    chunks and checks ``_terminate_sampling()`` at each boundary. When
+    ``observer_interval < block`` -- here 160 < 320, because the
+    trajectory-write interval (480) is not a multiple of the 320 block, so
+    ``observer_interval = gcd(320, 480) = 160`` -- a walker that converges
+    mid-block freezes at an observer boundary that is not a block multiple.
+    ``_terminate_sampling`` is forced here so the convergence point is
+    deterministic; the freeze location is real icet behaviour.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    block = 320
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=block,
+        random_seed=0,
+        ensemble_kwargs={
+            "ensemble_data_write_interval": block,
+            "trajectory_write_interval": 480,
+            "flatness_check_interval": block,
+            "fill_factor_limit": 1e-9,
+        },
+        data_container_file=None,
+    )
+    replica = pt._pool._replicas[0]
+    ensemble = replica._ensemble
+    # The properties the test relies on, not the exact gcd value: the loop
+    # checks termination on a granularity finer than the block, and that
+    # granularity divides the block (so full cycles still land on it).
+    assert ensemble.observer_interval < block
+    assert block % ensemble.observer_interval == 0
+
+    replica.advance(block)
+    replica.advance(block)
+    assert ensemble.step == 2 * block  # two full cycles, on a block boundary
+
+    # Force convergence partway through the third block, at an observer
+    # boundary that is not a block multiple.
+    off_block_step = 2 * block + ensemble.observer_interval
+    ensemble._terminate_sampling = lambda: ensemble.step >= off_block_step
+    replica.advance(block)
+    assert ensemble.step == off_block_step
+    assert ensemble.step % block != 0  # genuinely off a block boundary
+
+    replica.refresh_last_state()
+    container = ensemble._data_container
+    # Floor of the off-block step, and crucially: no ValueError.
+    assert completed_cycles([container], block) == 2
+
+
+def test_checkpoint_trims_padded_history_to_cycles_in_segment(tmp_path):
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering, read_hdf5
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=5)  # history allocated to 6 rows
+    # Simulate a run that was killed after 2 cycles (walltime); the live
+    # history is still full-capacity but only 2 cycles are real.
+    pt.cycles_in_segment = 2
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    history, _, _ = read_hdf5(path)
+    assert history.energies_per_cycle.shape == (3, 2)  # 2 + leading row
+    assert history.replica_labels_per_cycle.shape[0] == 3
+
+
+def test_canonical_checkpoint_trims_padded_history_to_cycles_in_segment(
+    toy_ce, toy_atoms, tmp_path
+):
+    from mchammer_pt.history import read_hdf5
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=5)  # base run(): history allocated to 6 rows
+    # Simulate a run killed after 2 cycles; base run() tracks
+    # cycles_in_segment, so a real interrupt would leave it at 2.
+    pt.cycles_in_segment = 2
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    history, _, _ = read_hdf5(path)
+    assert history.energies_per_cycle.shape[0] == 3  # 2 cycles + leading row
+    assert history.replica_labels_per_cycle.shape[0] == 3

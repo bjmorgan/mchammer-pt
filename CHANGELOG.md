@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cluster-expansion identity, a supercell size, and an energy spacing before
   combining them. The artefact omits the orchestrator and per-walker resume
   state, so it is not resumable.
+- ``completed_cycles(containers, block_size)`` (exported at the package top
+  level): returns the number of completed REWL cycles inferred from the
+  restored per-walker MC steps (``max(step) // block_size``), the count
+  needed to resume an under-target checkpoint correctly. It is correct for
+  padded legacy checkpoints and cumulative across chained resumes, where
+  the per-cycle history length is not.
+
+### Fixed
+
+- Checkpoints no longer serialise the zero-padding left by pre-allocating
+  the per-cycle history to the full target length: the ``energies_per_cycle``
+  and ``replica_labels_per_cycle`` arrays are trimmed to the executed-cycle
+  count (``cycles_in_segment``) on write, so saved exchange-rate and
+  round-trip diagnostics carry no phantom zero-energy cycles. Applies to
+  both orchestrators; run-time pre-allocation is unchanged.
 
 ## [0.22.0] - 2026-06-11
 
