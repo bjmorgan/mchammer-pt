@@ -486,7 +486,6 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pool.ensemble_kwargs_hash
             or _compute_ensemble_kwargs_hash(ensemble_kwargs)
         )
-        self.cycles_in_segment = 0
 
     @property
     def windows(self) -> list[tuple[float | None, float | None]]:

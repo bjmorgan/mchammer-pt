@@ -71,6 +71,7 @@ class BaseParallelTempering(ABC):
             ([0], np.cumsum(_counts))
         )[:-1].astype(np.int64)
         self._history: ExchangeHistory | None = None
+        self.cycles_in_segment = 0
         self._template_atoms: Atoms = template_atoms.copy()  # type: ignore[no-untyped-call]
 
     # --- public API ----
@@ -208,11 +209,13 @@ class BaseParallelTempering(ABC):
         self._history = history
         history.energies_per_cycle[0] = self._pool.current_energies()
         history.replica_labels_per_cycle[0] = self._replica_labels
+        self.cycles_in_segment = 0
         for c in range(n_cycles):
             self._pool.advance_all(self._block_size)
             self._exchange_phase(c, history)
             history.energies_per_cycle[c + 1] = self._pool.current_energies()
             history.replica_labels_per_cycle[c + 1] = self._replica_labels
+            self.cycles_in_segment = c + 1
             for cb in self._cycle_callbacks:
                 cb.on_cycle_end(c, n_cycles, history)
         return history

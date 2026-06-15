@@ -808,3 +808,55 @@ def test_completed_cycles_round_trips_a_real_checkpoint(tmp_path):
 
     _, containers, meta = read_hdf5(path)
     assert completed_cycles(containers, int(meta["block_size"])) == 4
+
+
+def test_checkpoint_trims_padded_history_to_cycles_in_segment(tmp_path):
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt import WangLandauParallelTempering, read_hdf5
+    from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = float(
+        ClusterExpansionCalculator(atoms, ce).calculate_total(
+            occupations=atoms.numbers
+        )
+    )
+    lo, hi = e0 - 100.0, e0 + 100.0
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[atoms, atoms],
+        windows=[(lo, hi), (lo, hi)],
+        energy_spacing=0.1,
+        block_size=10,
+        random_seed=0,
+        data_container_file=None,
+    )
+    pt.run(n_cycles=5)  # history allocated to 6 rows
+    # Simulate a run that was killed after 2 cycles (walltime); the live
+    # history is still full-capacity but only 2 cycles are real.
+    pt.cycles_in_segment = 2
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    history, _, _ = read_hdf5(path)
+    assert history.energies_per_cycle.shape == (3, 2)  # 2 + leading row
+    assert history.replica_labels_per_cycle.shape[0] == 3
+
+
+def test_canonical_checkpoint_trims_padded_history_to_cycles_in_segment(
+    toy_ce, toy_atoms, tmp_path
+):
+    from mchammer_pt.history import read_hdf5
+
+    pt = _short_pt(toy_ce, toy_atoms)
+    pt.run(n_cycles=5)  # base run(): history allocated to 6 rows
+    # Simulate a run killed after 2 cycles; base run() tracks
+    # cycles_in_segment, so a real interrupt would leave it at 2.
+    pt.cycles_in_segment = 2
+    path = tmp_path / "ckpt.h5"
+    pt.save_checkpoint(path)
+
+    history, _, _ = read_hdf5(path)
+    assert history.energies_per_cycle.shape[0] == 3  # 2 cycles + leading row
+    assert history.replica_labels_per_cycle.shape[0] == 3

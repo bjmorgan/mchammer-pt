@@ -487,7 +487,7 @@ def _write_checkpoint(pt: object, path: Path | str) -> None:
         window_groups = None
     write_hdf5(
         Path(path),
-        history=pt._history,  # type: ignore[attr-defined]
+        history=pt._history.truncated_to(pt.cycles_in_segment),  # type: ignore[attr-defined]
         replica_containers=pt._pool.data_containers(),  # type: ignore[attr-defined]
         meta=meta,
         orchestrator_state=orchestrator_state,
