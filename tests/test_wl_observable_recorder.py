@@ -91,6 +91,27 @@ class _ThreeValueObserver(BaseObserver):
         return [1.0, 2.0, 3.0]
 
 
+class _NdarrayObserver(BaseObserver):
+    """Returns a numpy array with two values."""
+
+    def __init__(self, interval: int = 1, tag: str = "arrobs") -> None:
+        super().__init__(interval=interval, return_type=list, tag=tag)
+
+    def get_observable(self, structure: Any) -> np.ndarray:
+        total = float(np.sum(structure.numbers))
+        return np.array([total, total * 2.0])
+
+
+class _AltDictObserver(BaseObserver):
+    """Returns a dict with two scalar values under different keys to _DictObserver."""
+
+    def __init__(self) -> None:
+        super().__init__(interval=1, return_type=dict, tag="alt")
+
+    def get_observable(self, structure: Any) -> dict[str, float]:
+        return {"x_val": 1.0, "y_val": 2.0}
+
+
 # ---------------------------------------------------------------------------
 # Shared fixture: small ASE Atoms structure
 # ---------------------------------------------------------------------------
@@ -331,3 +352,48 @@ def test_tag_and_interval_properties() -> None:
     rec = EnergyBinnedObservableRecorder(obs)
     assert rec.tag == "myobs"
     assert rec.interval == 5
+
+
+# ---------------------------------------------------------------------------
+# numpy-array observer coercion
+# ---------------------------------------------------------------------------
+
+
+def test_coercion_ndarray_gives_s2_and_correct_moments(atoms: Atoms) -> None:
+    """An observer returning np.ndarray: S=2, names tag_0/tag_1, correct moments."""
+    obs = _NdarrayObserver(tag="arr")
+    rec = EnergyBinnedObservableRecorder(obs)
+    rec.record(atoms, bin_index=0)
+
+    s, names = rec.signature
+    assert s == 2
+    assert names == ("arr_0", "arr_1")
+
+    o0 = float(np.sum(atoms.numbers))
+    o1 = o0 * 2.0
+
+    state = rec.to_state()
+    idx = state["bins"].index(0)
+    assert state["count"][idx] == 1
+    assert state["sum"][idx] == pytest.approx([o0, o1])
+    assert state["sum2"][idx] == pytest.approx([o0**2, o1**2])
+    assert state["sum4"][idx] == pytest.approx([o0**4, o1**4])
+
+
+# ---------------------------------------------------------------------------
+# Signature validation — names mismatch (same size)
+# ---------------------------------------------------------------------------
+
+
+def test_from_state_names_mismatch_same_size_raises(atoms: Atoms) -> None:
+    """Restoring with a same-size but different-named observer raises ValueError."""
+    obs = _DictObserver()  # S=2, sorted keys: a_val, b_val
+    rec = EnergyBinnedObservableRecorder(obs)
+    rec.record(atoms, bin_index=0)
+
+    state = rec.to_state()
+
+    # _AltDictObserver has S=2 but keys x_val, y_val
+    restored = EnergyBinnedObservableRecorder.from_state(state, _AltDictObserver())
+    with pytest.raises(ValueError, match="signature"):
+        restored.record(atoms, bin_index=0)

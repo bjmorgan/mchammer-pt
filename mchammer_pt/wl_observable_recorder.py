@@ -43,6 +43,8 @@ def _coerce_scalars(value: Any) -> tuple[np.ndarray, list[str] | None]:
         return np.asarray([value[k] for k in names], float), [str(n) for n in names]
     if isinstance(value, (str, bytes)):
         raise TypeError("observer returned a string; expected scalar/sequence/mapping")
+    if isinstance(value, np.ndarray):
+        return value.ravel().astype(float), None
     if isinstance(value, Sequence):
         return np.asarray(value, float), None
     return np.asarray([value], float), None
