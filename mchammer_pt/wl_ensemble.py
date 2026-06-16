@@ -149,18 +149,18 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # policy, and walkers restored from checkpoints carrying no
         # origin) falls back to `_window_entry_step`.
         self._one_over_t_origin_step: int | None = None
-        # Tag-keyed energy-binned observable recorders. Driven by
-        # `_update_entropy` once the walker is in its energy window.
+        # Tag-keyed energy-binned observable recorders. Driven from the
+        # `_run` override after each trial step (post-`update_occupations`),
+        # gated on `_reached_energy_window` and each recorder's `interval`.
         self._recorders: dict[str, EnergyBinnedObservableRecorder] = {}
 
     def attach_observable_recorder(self, observer: BaseObserver) -> None:
         """Attach an observer whose scalar outputs are accumulated per energy bin.
 
         The observer is wrapped in an :class:`EnergyBinnedObservableRecorder`
-        and stored keyed by its tag. Recording begins once the walker
-        enters its energy window and fires every ``observer.interval`` MC
-        steps (gated by ``self._reached_energy_window`` inside
-        ``_update_entropy``).
+        and stored keyed by its tag. Recording is driven from the ``_run``
+        override after each trial step (post-``update_occupations``), gated
+        on ``self._reached_energy_window`` and ``observer.interval``.
 
         Args:
             observer: Any ``mchammer.BaseObserver`` subclass whose
@@ -187,11 +187,21 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         ``update_occupations``; rejected moves leave both unchanged.
 
         Recorders are driven inside ``_run`` rather than inside
-        ``_do_trial_step`` to preserve the ``_do_trial_step`` override
-        slot for third-party custom-move subclasses (e.g.
-        ``mchammer_moves.CustomWangLandauEnsemble``), whose MRO would
-        shadow this class's ``_do_trial_step`` if both defined it.
+        ``_do_trial_step`` because recording must happen after
+        ``update_occupations`` has committed the accepted move.
+        ``_update_entropy`` (which updates the energy and bin) runs inside
+        ``_acceptance_condition``, before ``update_occupations``: at that
+        point the bin is already updated but the structure is not, so
+        pairing them would record the new bin against the pre-move
+        structure. ``_run`` is the per-step seam where both are
+        guaranteed to be consistent. A cooperative ``_do_trial_step``
+        override would also be correct, but hooking in ``_run`` keeps the
+        ``_do_trial_step`` slot untouched and centralises recording in one
+        place.
         """
+        # Mirrors mchammer BaseEnsemble._run (loop + _step/_accepted_trials
+        # counters only); recording is inserted per-step here.
+        # Re-check this override if upstream _run gains other per-step work.
         for _ in range(number_of_trial_steps):
             # Capture the step value used inside this trial step BEFORE
             # the increment that `_run` is responsible for.
