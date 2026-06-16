@@ -79,6 +79,23 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     fill-factor rung ladder, leaving the halving history to the
     coordinator. ``dos_snapshot_ratio`` sets the ladder ratio (``None``
     disables); ``2.0`` snapshots each time ``f`` halves.
+
+    Args:
+        recency_visits_per_bin: EWMA recency window width in units of
+            visits-per-bin. The decay rate is ``1 / (N *
+            recency_visits_per_bin)`` where ``N`` is the current known
+            bin count, so the effective averaging window grows with the
+            number of discovered bins.
+        dos_snapshot_ratio: ratio of the fill-factor ladder used to
+            record 1/t-regime DOS snapshots. ``None`` disables
+            snapshotting; ``2.0`` (default) records a snapshot each
+            time ``f`` halves.
+        frozen_g: when ``True``, ``_update_entropy`` holds ``_entropy``
+            and ``_fill_factor`` fixed for the duration of the run. The
+            acceptance criterion still reads the frozen ``_entropy``, so
+            the walk remains flat-in-energy without further DOS
+            accumulation. Intended for observable-measurement passes
+            after WL convergence. Defaults to ``False``.
     """
 
     def __init__(
@@ -86,11 +103,17 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         *args: Any,
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        frozen_g: bool = False,
         **kwargs: Any,
     ) -> None:
         recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
         ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         super().__init__(*args, **kwargs)
+        # When True, ``_update_entropy`` skips all DOS-mutating writes so
+        # ``_entropy`` and ``_fill_factor`` are held fixed for the duration
+        # of the run.  The acceptance criterion still reads the frozen
+        # ``_entropy``, keeping the walk flat-in-energy.
+        self._frozen_g: bool = frozen_g
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on
         # `_reached_energy_window`).
@@ -134,29 +157,31 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             self._window_entry_step = self.step
             entry = self.step
 
-        if self._phase == "1_over_t":
-            origin = self._one_over_t_origin_step
-            if origin is None:
-                # Window-entry clock. By construction,
-                # ``_phase == '1_over_t'`` only after
-                # ``_window_entry_step`` has been set (the coordinator
-                # flips the phase post-entry). Narrow for the type
-                # checker.
-                origin = cast(int, entry)
-            t = self.step - origin + 1
-            self._fill_factor = 1.0 / t
+        if not self._frozen_g:
+            if self._phase == "1_over_t":
+                origin = self._one_over_t_origin_step
+                if origin is None:
+                    # Window-entry clock. By construction,
+                    # ``_phase == '1_over_t'`` only after
+                    # ``_window_entry_step`` has been set (the coordinator
+                    # flips the phase post-entry). Narrow for the type
+                    # checker.
+                    origin = cast(int, entry)
+                t = self.step - origin + 1
+                self._fill_factor = 1.0 / t
 
-        self._entropy[bin_cur] = (
-            self._entropy.get(bin_cur, 0) + self._fill_factor
-        )
-        self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
+            self._entropy[bin_cur] = (
+                self._entropy.get(bin_cur, 0) + self._fill_factor
+            )
+            self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
 
         if self._reached_energy_window:
             self._visited_bins.add(bin_cur)
             self._record_recency_visit(bin_cur, int(self.step))
 
         if (
-            self.step > 0
+            not self._frozen_g
+            and self.step > 0
             and self.step % self._flatness_check_interval == 0
             and self._reached_energy_window
         ):
@@ -165,7 +190,8 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
                 self._entropy[k] -= ref
 
         if (
-            self._phase == "1_over_t"
+            not self._frozen_g
+            and self._phase == "1_over_t"
             and self._dos_snapshot_ratio is not None
         ):
             rung = self._snapshot_rung(self._fill_factor)
