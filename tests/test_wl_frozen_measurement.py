@@ -9,30 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
-
-
-def _make_ensemble(**kwargs):
-    """Construct a CoordinatedWangLandauEnsemble on the toy CE fixture.
-
-    Reuses the same construction path as ``test_wl_ensemble.py`` so
-    there is one canonical fixture for the WL unit tests.
-    """
-    from mchammer.calculators import ClusterExpansionCalculator
-
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
-
-    ce, atoms = make_wl_ce(), make_wl_atoms()
-    kwargs.setdefault("random_seed", 0)
-    return CoordinatedWangLandauEnsemble(
-        structure=atoms,
-        calculator=ClusterExpansionCalculator(atoms, ce),
-        energy_spacing=0.1,
-        energy_limit_left=None,
-        energy_limit_right=None,
-        dc_filename=None,
-        **kwargs,
-    )
+from tests._wl_fixtures import make_wl_ensemble as _make_ensemble
 
 
 def test_frozen_g_accepted_as_kwarg():
@@ -96,24 +73,29 @@ def test_frozen_g_entropy_and_fill_factor_unchanged_after_run():
     )
 
 
-def test_frozen_g_walk_explores_multiple_bins():
-    """The walk still moves between energy bins in frozen_g mode.
+def _warm_up_entropy(random_seed: int) -> tuple[dict[int, float], float]:
+    """Run a short MC warm-up and return the resulting (entropy, fill_factor).
 
-    The acceptance criterion continues to use the frozen g, so the walk
-    remains flat-in-energy and is not stuck in one bin.  Collect all bins
-    visited via ``_visited_bins`` (which ``_update_entropy`` populates
-    from ``_reached_energy_window``); assert more than one distinct bin
-    was reached.
+    Uses a real :meth:`run` call so the populated bins are the physical
+    energy bins the toy CE visits, not synthetic indices. The returned
+    snapshot is a copy safe to plant into a second ensemble.
     """
-    # Warm up to get a populated g.
-    warm = _make_ensemble(flatness_check_interval=1_000_000, random_seed=3)
-    warm._reached_energy_window = True
-    for step in range(500):
-        warm._step = step
-        warm._update_entropy(step % 3)
+    warm = _make_ensemble(flatness_check_interval=1_000_000, random_seed=random_seed)
+    warm.run(500)
+    return dict(warm._entropy), warm._fill_factor
 
-    g0 = dict(warm._entropy)
-    f0 = warm._fill_factor
+
+def test_frozen_g_walk_explores_physical_bins():
+    """The frozen_g walk moves between physical energy bins using the planted g.
+
+    The acceptance criterion uses the frozen entropy seeded from a genuine
+    MC warm-up, so the bins visited during the frozen run are present in
+    ``g0``. If ``g0`` contained only synthetic bins absent from the live
+    CE's energy landscape, every acceptance log-ratio would be zero (free
+    random walk) and the test would not exercise the frozen-g path at all.
+    """
+    g0, f0 = _warm_up_entropy(random_seed=3)
+    assert len(g0) > 1, "warm-up must reach more than one physical bin"
 
     frozen = _make_ensemble(
         frozen_g=True,
@@ -128,6 +110,15 @@ def test_frozen_g_walk_explores_multiple_bins():
     frozen.run(2_000)
 
     assert len(frozen._visited_bins) > 1, (
-        "frozen_g walk must visit more than one energy bin "
+        "frozen_g walk must visit more than one physical energy bin "
         f"(visited: {frozen._visited_bins})"
+    )
+    # The walk must actually use the planted g: the bins visited during the
+    # frozen run must overlap with those in g0. If ``g0`` were empty or on
+    # synthetic bins absent from the CE's energy landscape, the acceptance
+    # log-ratio would be 0 for every move (free random walk) and this
+    # overlap would be absent.
+    assert frozen._visited_bins & set(g0), (
+        "frozen run visited no bins from the planted g; "
+        "acceptance criterion is not using the frozen entropy"
     )

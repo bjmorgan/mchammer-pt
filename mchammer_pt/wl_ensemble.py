@@ -90,12 +90,14 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             record 1/t-regime DOS snapshots. ``None`` disables
             snapshotting; ``2.0`` (default) records a snapshot each
             time ``f`` halves.
-        frozen_g: when ``True``, ``_update_entropy`` holds ``_entropy``
-            and ``_fill_factor`` fixed for the duration of the run. The
-            acceptance criterion still reads the frozen ``_entropy``, so
-            the walk remains flat-in-energy without further DOS
-            accumulation. Intended for observable-measurement passes
-            after WL convergence. Defaults to ``False``.
+        frozen_g: when ``True``, ``_update_entropy`` holds ``_entropy``,
+            ``_histogram``, and ``_fill_factor`` fixed for the duration
+            of the run. The converged density of states is the sampling
+            bias; nothing about it is mutated. The acceptance criterion
+            still reads the frozen ``_entropy``, so the walk remains
+            flat-in-energy without further DOS accumulation. Intended
+            for observable-measurement passes after WL convergence.
+            Defaults to ``False``.
     """
 
     def __init__(
@@ -110,9 +112,10 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         super().__init__(*args, **kwargs)
         # When True, ``_update_entropy`` skips all DOS-mutating writes so
-        # ``_entropy`` and ``_fill_factor`` are held fixed for the duration
-        # of the run.  The acceptance criterion still reads the frozen
-        # ``_entropy``, keeping the walk flat-in-energy.
+        # ``_entropy``, ``_histogram``, and ``_fill_factor`` are held
+        # fixed for the duration of the run.  The acceptance criterion
+        # still reads the frozen ``_entropy``, keeping the walk
+        # flat-in-energy.
         self._frozen_g: bool = frozen_g
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on

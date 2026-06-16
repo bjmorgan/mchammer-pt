@@ -9,11 +9,15 @@ deterministic.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
 from ase.build import bulk
 from icet import ClusterExpansion, ClusterSpace
+
+if TYPE_CHECKING:
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
 
 def make_wl_cluster_space() -> ClusterSpace:
@@ -46,6 +50,40 @@ def make_wl_atoms(n_au: int = 8) -> Atoms:
         symbols[i] = "Au"
     atoms.set_chemical_symbols(symbols)
     return atoms
+
+
+def make_wl_ensemble(**kwargs) -> CoordinatedWangLandauEnsemble:
+    """Construct a :class:`CoordinatedWangLandauEnsemble` on the toy CE fixture.
+
+    Provides a single shared construction path for all WL unit tests.
+    The default ``random_seed=0`` is set via ``setdefault`` so individual
+    callers can override it by passing their own seed.
+
+    Args:
+        **kwargs: forwarded to :class:`CoordinatedWangLandauEnsemble`.
+            Common overrides: ``random_seed``, ``flatness_check_interval``,
+            ``dos_snapshot_ratio``, ``schedule``, ``frozen_g``.
+
+    Returns:
+        A :class:`CoordinatedWangLandauEnsemble` on the toy cluster
+        expansion and 2x2x2 supercell, with ``energy_spacing=0.1``,
+        unbounded energy limits, and ``dc_filename=None``.
+    """
+    from mchammer.calculators import ClusterExpansionCalculator
+
+    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    kwargs.setdefault("random_seed", 0)
+    return CoordinatedWangLandauEnsemble(
+        structure=atoms,
+        calculator=ClusterExpansionCalculator(atoms, ce),
+        energy_spacing=0.1,
+        energy_limit_left=None,
+        energy_limit_right=None,
+        dc_filename=None,
+        **kwargs,
+    )
 
 
 def distinct_in_window_pair(
