@@ -482,7 +482,6 @@ class WangLandauWindowGroup:
             ValueError: if a recorder for this tag is already attached on
                 any walker, or if the restored state is incompatible.
         """
-        import pickle
         try:
             blob = pickle.dumps(observer)
         except Exception as exc:

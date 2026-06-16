@@ -820,9 +820,11 @@ class ProcessWangLandauPool:
         bp_stall_multiple: float = 4.0,
         one_over_t_entry: OneOverTEntry = "window_clock",
         frozen_measurement: bool = False,
+        frozen_g: bool = False,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
         self._frozen_measurement: bool = frozen_measurement
+        self._frozen_g: bool = frozen_g
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
@@ -931,6 +933,7 @@ class ProcessWangLandauPool:
                             recency_visits_per_bin=self._recency_visits_per_bin,
                             dos_snapshot_ratio=self._dos_snapshot_ratio,
                             one_over_t_entry=self._one_over_t_entry,
+                            frozen_g=frozen_g,
                         )
                         process = ctx.Process(
                             target=_wl_worker,
@@ -1084,8 +1087,11 @@ class ProcessWangLandauPool:
             ):
                 slot.walker_states[w] = payload
 
-            # Frozen mode: workers advance but the coordinator does not run.
-            # No halving, entropy-merge, or phase-switch; g(E) is untouched.
+            # Frozen mode: workers advance but the master coordinator does not
+            # run — no halving, entropy-merge, or phase-switch. g(E) is held
+            # fixed because worker ensembles are constructed with frozen_g=True
+            # (set via WLBuilder in measurement mode); frozen_measurement only
+            # gates the master-side decisions here.
             if self._frozen_measurement:
                 return
 

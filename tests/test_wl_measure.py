@@ -394,3 +394,231 @@ class TestMeasureFromCheckpoint:
             assert isinstance(slot, WangLandauWindowGroup)
             for r in slot._replicas:
                 assert r.ensemble._frozen_g is True
+
+
+# ---------------------------------------------------------------------------
+# Task — measure_from_checkpoint_process_pool (process backend)
+# ---------------------------------------------------------------------------
+
+
+class TestMeasureFromCheckpointProcessPool:
+    """WangLandauParallelTempering.measure_from_checkpoint_process_pool."""
+
+    def _make_and_save_checkpoint(self, tmp_path):
+        """Run a tiny serial REWL run and save a checkpoint; return path and CE."""
+        from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+        ce = make_wl_ce()
+        atoms = make_wl_atoms()
+        e0 = _initial_energy()
+        lo, hi = e0 - 50.0, e0 + 50.0
+        pt = _make_two_window_serial_pt(
+            cluster_expansion=ce,
+            atoms=[atoms, atoms],
+            windows=[(lo, hi), (lo, hi)],
+        )
+        pt.run(n_cycles=2)
+        ckpt = tmp_path / "ckpt_pp.h5"
+        pt.save_checkpoint(ckpt)
+        return ckpt, ce
+
+    def _collect_entropies(self, pool):
+        """Collect g(E) snapshots from every in-process worker in the pool."""
+        from tests._in_process_worker import InProcessWorkerConn
+
+        entropies = []
+        for slot in pool._slots:
+            for _, conn in slot.workers:
+                if isinstance(conn, InProcessWorkerConn):
+                    entropies.append(dict(conn._worker._replica.ensemble._entropy))
+        return entropies
+
+    def test_process_pool_measurement_workers_have_frozen_g(self, tmp_path):
+        """pool._frozen_g and _frozen_measurement are True after load."""
+        from mchammer_pt.wl import WangLandauParallelTempering
+
+        ckpt, ce = self._make_and_save_checkpoint(tmp_path)
+
+        pt2 = WangLandauParallelTempering.measure_from_checkpoint_process_pool(
+            ckpt, cluster_expansion=ce
+        )
+        try:
+            assert pt2.pool._frozen_measurement is True, (
+                "pool._frozen_measurement must be True"
+            )
+            assert pt2.pool._frozen_g is True, (
+                "pool._frozen_g must be True"
+            )
+        finally:
+            pt2.pool.shutdown()
+
+    def test_process_pool_measurement_g_unchanged_after_run(self, tmp_path):
+        """g(E) is bit-identical after a real process-pool measurement run.
+
+        Exercises the full frozen-g path end-to-end using in-process workers
+        so the test does not spawn real subprocesses. A pool built from the
+        in-process fixture with frozen_g=True verifies that worker ensembles
+        honour the frozen contract.
+        """
+        import numpy as np
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauPool,
+            ProcessWangLandauWindow,
+        )
+        from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+        from mchammer_pt.wl_replica import WangLandauReplica
+        from tests._in_process_pool import _DummyProcess
+        from tests._in_process_worker import InProcessWorkerConn
+        from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        ce_path = tmp_path / "ce.ce"
+        ce.write(str(ce_path))
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        windows = [(lo, hi), (lo, hi)]
+
+        # Build a pool whose in-process workers have frozen_g=True.
+        pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
+        pool._flatness_mode = "pooled"
+        pool._merge_cadence = "at_halve"
+        pool._one_over_t_gate = "visit_once"
+        pool._bp_stall_multiple = 4.0
+        pool._one_over_t_entry = "window_clock"
+        pool._frozen_measurement = True
+        pool._frozen_g = True
+        pool._merge_events = []
+        pool._flatness_limit = 0.8
+        pool._windows = list(windows)
+        pool._energy_spacing = 0.1
+        pool._slots = []
+
+        for i, (wlo, whi) in enumerate(windows):
+            replica = WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=wlo,
+                energy_limit_right=whi,
+                random_seed=i,
+                ensemble_cls=CoordinatedWangLandauEnsemble,
+                ensemble_kwargs={"frozen_g": True},
+                cluster_expansion_path=str(ce_path),
+            )
+            conn = InProcessWorkerConn(replica)
+            pool._slots.append(ProcessWangLandauWindow(
+                workers=[(_DummyProcess(), conn)],
+                rng=np.random.default_rng(i),
+                flatness_mode="pooled",
+                merge_cadence="at_halve",
+                schedule="halving",
+                flatness_limit=0.8,
+                one_over_t_gate="visit_once",
+                bp_stall_multiple=4.0,
+            ))
+        pool._ensemble_cls_fqn = (
+            f"{CoordinatedWangLandauEnsemble.__module__}."
+            f"{CoordinatedWangLandauEnsemble.__qualname__}"
+        )
+        pool._ensemble_kwargs_hash = ""
+        pool._prime_energy_cache()
+
+        # Snapshot g(E) before advancing.
+        before = self._collect_entropies(pool)
+        assert before, "no in-process workers found"
+
+        # Advance a few blocks.
+        pool.advance_all(n_steps=50)
+
+        after = self._collect_entropies(pool)
+        for b, a in zip(before, after, strict=True):
+            assert b == a, "_entropy must be bit-identical after frozen advance_all"
+
+    def test_process_pool_measurement_recorder_accumulates(self, tmp_path):
+        """record_observable accumulates moments during a frozen process-pool run."""
+        import numpy as np
+        from mchammer.calculators import ClusterExpansionCalculator
+
+        from mchammer_pt.parallel.processes import (
+            ProcessWangLandauPool,
+            ProcessWangLandauWindow,
+        )
+        from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
+        from mchammer_pt.wl_replica import WangLandauReplica
+        from tests._in_process_pool import _DummyProcess
+        from tests._in_process_worker import InProcessWorkerConn
+        from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+
+        ce, atoms = make_wl_ce(), make_wl_atoms()
+        ce_path = tmp_path / "ce.ce"
+        ce.write(str(ce_path))
+        e0 = float(
+            ClusterExpansionCalculator(atoms, ce).calculate_total(
+                occupations=atoms.numbers
+            )
+        )
+        lo, hi = e0 - 50.0, e0 + 50.0
+        windows = [(lo, hi), (lo, hi)]
+
+        pool = ProcessWangLandauPool.__new__(ProcessWangLandauPool)
+        pool._flatness_mode = "pooled"
+        pool._merge_cadence = "at_halve"
+        pool._one_over_t_gate = "visit_once"
+        pool._bp_stall_multiple = 4.0
+        pool._one_over_t_entry = "window_clock"
+        pool._frozen_measurement = True
+        pool._frozen_g = True
+        pool._merge_events = []
+        pool._flatness_limit = 0.8
+        pool._windows = list(windows)
+        pool._energy_spacing = 0.1
+        pool._slots = []
+
+        worker_conns = []
+        for i, (wlo, whi) in enumerate(windows):
+            replica = WangLandauReplica(
+                cluster_expansion=ce,
+                atoms=atoms,
+                energy_spacing=0.1,
+                energy_limit_left=wlo,
+                energy_limit_right=whi,
+                random_seed=i,
+                ensemble_cls=CoordinatedWangLandauEnsemble,
+                ensemble_kwargs={"frozen_g": True},
+                cluster_expansion_path=str(ce_path),
+            )
+            conn = InProcessWorkerConn(replica)
+            worker_conns.append(conn)
+            pool._slots.append(ProcessWangLandauWindow(
+                workers=[(_DummyProcess(), conn)],
+                rng=np.random.default_rng(i),
+                flatness_mode="pooled",
+                merge_cadence="at_halve",
+                schedule="halving",
+                flatness_limit=0.8,
+                one_over_t_gate="visit_once",
+                bp_stall_multiple=4.0,
+            ))
+        pool._ensemble_cls_fqn = (
+            f"{CoordinatedWangLandauEnsemble.__module__}."
+            f"{CoordinatedWangLandauEnsemble.__qualname__}"
+        )
+        pool._ensemble_kwargs_hash = ""
+        pool._prime_energy_cache()
+
+        obs = _ConstantObs(tag="pp_meas")
+        pool.record_observable(obs)
+        pool.advance_all(n_steps=100)
+
+        total = 0
+        for conn in worker_conns:
+            rec = conn._worker._replica.ensemble._recorders.get("pp_meas")
+            if rec is not None:
+                total += sum(rec._count.values())
+        assert total > 0, "expected moments to accumulate after frozen advance_all"

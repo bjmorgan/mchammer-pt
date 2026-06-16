@@ -764,7 +764,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
         window_groups = _read_window_groups(path, containers)
-        _warn_post_merge_resume_if_multi_walker(walkers_per_window, "resume")
+        if not _frozen:
+            _warn_post_merge_resume_if_multi_walker(walkers_per_window, "resume")
         flatness_mode: FlatnessMode = str(
             meta["flatness_mode"]
         )  # type: ignore[assignment]
@@ -960,6 +961,53 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
 
     @classmethod
+    def measure_from_checkpoint_process_pool(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Load a converged checkpoint in frozen-g measurement mode (process pool).
+
+        Returns a process-backed orchestrator in frozen-g measurement mode.
+
+        Every worker ensemble's g(E) is held fixed (``frozen_g=True``
+        in the worker's :class:`WangLandauReplica` construction) and the
+        pool coordinator is disabled (``frozen_measurement=True``): MC
+        steps proceed and exchanges are proposed, but halving, entropy
+        merging, and phase switching are all skipped.
+
+        Mirrors :meth:`measure_from_checkpoint` but uses a
+        :class:`ProcessWangLandauPool` instead of a
+        :class:`SerialWangLandauPool`.
+
+        Args:
+            path: path to a schema-5 checkpoint produced by a completed
+                REWL run.
+            cluster_expansion: icet ``ClusterExpansion`` used in the
+                original run.
+            ensemble_cls: WL ensemble class (default
+                ``CoordinatedWangLandauEnsemble``).
+            ensemble_kwargs: extra kwargs forwarded to ensemble construction.
+                Must match the checkpoint's hash.
+
+        Returns:
+            A `WangLandauParallelTempering` backed by a
+            `ProcessWangLandauPool` in frozen measurement mode.
+        """
+        return cls.resume_process_pool(
+            path,
+            cluster_expansion=cluster_expansion,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            _frozen=True,
+        )
+
+    @classmethod
     def resume_process_pool(
         cls,
         path: Path | str,
@@ -969,6 +1017,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        _frozen: bool = False,
     ) -> WangLandauParallelTempering:
         """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
 
@@ -984,6 +1033,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
         emitted for any window with ``walkers_per_window[g] > 1``.
 
         See `resume` for argument and error semantics.
+
+        ``_frozen`` is an internal flag used by
+        ``measure_from_checkpoint_process_pool`` to load the checkpoint
+        with ``frozen_g=True`` on every worker ensemble and disable the
+        master-side coordinator. Not part of the public API.
         """
         import json
 
@@ -1030,9 +1084,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
         window_groups = _read_window_groups(path, containers)
-        _warn_post_merge_resume_if_multi_walker(
-            walkers_per_window, "resume_process_pool"
-        )
+        if not _frozen:
+            _warn_post_merge_resume_if_multi_walker(
+                walkers_per_window,
+                "resume_process_pool",
+            )
         flatness_mode: FlatnessMode = str(
             meta["flatness_mode"]
         )  # type: ignore[assignment]
@@ -1079,6 +1135,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             one_over_t_gate=one_over_t_gate,
             bp_stall_multiple=bp_stall_multiple,
             one_over_t_entry=one_over_t_entry,
+            _frozen=_frozen,
         )
         try:
             pt._pool.restore_replica_state(  # type: ignore[attr-defined]
@@ -1228,6 +1285,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
         one_over_t_entry: OneOverTEntry = "window_clock",
+        _frozen: bool = False,
     ) -> WangLandauParallelTempering:
         """Construct a process-parallel REWL run in one call.
 
@@ -1242,6 +1300,11 @@ class WangLandauParallelTempering(BaseParallelTempering):
 
         ``atoms`` accepts the same broadcast-or-per-walker shape as
         :class:`WangLandauParallelTempering`.
+
+        ``_frozen`` is an internal flag used by ``resume_process_pool``
+        and ``measure_from_checkpoint_process_pool`` to build worker
+        ensembles with ``frozen_g=True`` and disable the master-side
+        coordinator. Not part of the public API.
         """
         seed_sequence = np.random.SeedSequence(int(random_seed))
         child_seeds = seed_sequence.spawn(len(windows) + 1)
@@ -1267,6 +1330,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 one_over_t_gate=one_over_t_gate,
                 bp_stall_multiple=bp_stall_multiple,
                 one_over_t_entry=one_over_t_entry,
+                frozen_measurement=_frozen,
+                frozen_g=_frozen,
             )
         except BaseException:
             tmpdir.cleanup()
