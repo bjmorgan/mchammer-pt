@@ -27,28 +27,19 @@ def test_frozen_g_defaults_to_false():
 def test_frozen_g_entropy_and_fill_factor_unchanged_after_run():
     """Core passivity contract: g and f are bit-identical after a frozen run.
 
-    1. Run a short halving-phase warm-up to populate ``_entropy`` and
-       ``_fill_factor`` (so the acceptance criterion has a non-trivial g
-       to use during the frozen run).
+    1. Run a real MC warm-up (via :func:`_warm_up_entropy`) to populate
+       ``_entropy`` and ``_fill_factor`` across multiple physical energy
+       bins (so the acceptance criterion has a non-trivial g to use during
+       the frozen run).
     2. Snapshot ``g0`` and ``f0``.
     3. Build a second ensemble with ``frozen_g=True`` carrying the same
        ``g0`` and ``f0``, then run 2 000 steps.
     4. Assert ``_entropy == g0`` (bit-identical dict) and
        ``_fill_factor == pytest.approx(f0)``.
     """
-    # --- warm-up run to populate g and f ---
-    warm = _make_ensemble(flatness_check_interval=1_000_000, random_seed=1)
-    warm._reached_energy_window = True
-    # Drive 200 direct _update_entropy calls so _entropy is well-populated
-    # without touching the acceptance machinery.
-    for step in range(200):
-        warm._step = step
-        warm._update_entropy(0)
-
-    # Snapshot: copy so the warm-up ensemble cannot alias our reference.
-    g0 = dict(warm._entropy)
-    f0 = warm._fill_factor
-    assert len(g0) >= 1, "warm-up must have at least one bin"
+    # --- real MC warm-up to populate g and f across physical bins ---
+    g0, f0 = _warm_up_entropy(random_seed=1)
+    assert len(g0) > 1, "warm-up must populate more than one physical bin"
 
     # --- frozen run ---
     frozen = _make_ensemble(
