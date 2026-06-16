@@ -7,7 +7,8 @@ Covers:
 4. Signature mismatch: restoring a 1-scalar store then attaching a different observer raises.
 5. New tag starts fresh: a new tag starts empty alongside a restorable old tag.
 6. Unbound preservation: unbound restored stores are preserved across refresh.
-7. Duplicate tag: attaching two observers with the same tag raises.
+7. Two-cycle unbound preservation: unbound stores survive two restore/refresh cycles.
+8. Duplicate tag: attaching two observers with the same tag raises.
 """
 
 from __future__ import annotations
@@ -238,9 +239,9 @@ def test_observable_accumulates_after_resume():
 def test_observable_signature_mismatch_raises_on_reattach():
     """Restoring a 1-scalar store then attaching a 2-scalar observer raises.
 
-    The mismatch is detected at the first record() call after re-attach,
-    or at from_state time if names are already known; either way a
-    ValueError matching 'signature' must surface.
+    restore_state with a non-empty stored state sets _names/_size from the
+    store but does NOT validate the live observer's signature until the first
+    record() call (driven by advance), where it raises ValueError.
     """
     one_scalar_obs = _ScalarObserver(tag="sig", interval=1)
 
@@ -252,12 +253,11 @@ def test_observable_signature_mismatch_raises_on_reattach():
     fresh = _make_frozen_replica(seed=20)
     fresh.restore_state(replica.data_container())
 
-    # Re-attach a 2-scalar observer under the same tag.
+    # Re-attach a 2-scalar observer under the same tag; mismatch is deferred
+    # to the first record() call triggered by advance.
     two_scalar_obs = _TwoScalarObserver(tag="sig", interval=1)
-    # The mismatch may fire at attach (from_state validation) or first record.
-    with pytest.raises((ValueError, RuntimeError), match="signature|mismatch|size"):
+    with pytest.raises(ValueError, match="observer signature mismatch"):
         fresh.record_observable(two_scalar_obs)
-        # Force a record call in case from_state deferred the check.
         fresh.advance(10)
 
 
@@ -329,7 +329,68 @@ def test_unbound_restored_store_preserved_through_refresh():
 
 
 # ---------------------------------------------------------------------------
-# Test 7: duplicate tag raises
+# Test 7: two-cycle unbound preservation
+# ---------------------------------------------------------------------------
+
+
+def test_unbound_store_preserved_across_two_checkpoint_cycles():
+    """Unbound stores survive two sequential restore→refresh cycles.
+
+    Pins the idempotency of the restore→refresh union loop against
+    future refactors: the observable_records written by refresh_last_state
+    must survive even when no observer is re-attached in either cycle.
+
+    Steps:
+      1. Build a frozen replica, attach observer, advance, refresh. Capture
+         the saved bins/count from observable_records.
+      2. Cycle 1: restore into fresh1, attach nothing, refresh. Assert the
+         unbound store is still in _last_state["observable_records"].
+      3. Cycle 2: take fresh1's container, restore into fresh2, attach
+         nothing, refresh. Assert the unbound store is STILL present and
+         has the same bins and counts as the original.
+    """
+    observer = _ScalarObserver(tag="passthru", interval=1)
+
+    replica = _make_frozen_replica(seed=50)
+    replica.record_observable(observer)
+    replica.advance(200)
+    replica.refresh_last_state()
+
+    obs_records = replica.ensemble._data_container._last_state["observable_records"]
+    orig = obs_records["passthru"]
+    assert orig["bins"], "first run must populate bins"
+    orig_bins = list(orig["bins"])
+    orig_count = list(orig["count"])
+
+    # --- Cycle 1 ---
+    fresh1 = _make_frozen_replica(seed=50)
+    fresh1.restore_state(replica.data_container())
+    # No observer attached.
+    fresh1.refresh_last_state()
+
+    cycle1 = fresh1.ensemble._data_container._last_state.get("observable_records")
+    assert cycle1 is not None, "observable_records absent after cycle 1 refresh"
+    assert "passthru" in cycle1, "unbound tag lost after cycle 1 refresh"
+
+    # --- Cycle 2 ---
+    fresh2 = _make_frozen_replica(seed=50)
+    fresh2.restore_state(fresh1.data_container())
+    # No observer attached.
+    fresh2.refresh_last_state()
+
+    cycle2 = fresh2.ensemble._data_container._last_state.get("observable_records")
+    assert cycle2 is not None, "observable_records absent after cycle 2 refresh"
+    assert "passthru" in cycle2, "unbound tag lost after cycle 2 refresh"
+    assert cycle2["passthru"]["bins"] == orig_bins, (
+        "bins changed across two cycles"
+    )
+    assert cycle2["passthru"]["count"] == orig_count, (
+        "counts changed across two cycles"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: duplicate tag raises
 # ---------------------------------------------------------------------------
 
 

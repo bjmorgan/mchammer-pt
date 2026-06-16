@@ -1029,7 +1029,7 @@ class WangLandauReplica:
             energy_limit_right=energy_limit_right,
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
-            ensemble_kwargs=merged_kwargs if merged_kwargs else None,
+            ensemble_kwargs=merged_kwargs,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
             one_over_t_entry=one_over_t_entry,
