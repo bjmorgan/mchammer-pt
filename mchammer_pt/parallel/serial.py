@@ -339,15 +339,6 @@ class SerialWangLandauPool:
                     "Checkpoint metadata records a single entry policy "
                     "for the run."
                 )
-        if frozen_measurement:
-            from ..wl_window_group import WangLandauWindowGroup
-
-            for slot in self._replicas:
-                if isinstance(slot, WangLandauWindowGroup):
-                    for walker in slot._replicas:
-                        walker.ensemble._frozen_g = True
-                else:
-                    slot.ensemble._frozen_g = True
 
     def __len__(self) -> int:
         return len(self._replicas)

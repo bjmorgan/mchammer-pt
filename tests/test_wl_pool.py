@@ -2165,16 +2165,24 @@ def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
 
 
 def test_serial_wl_pool_frozen_measurement_skips_coordinator():
-    """frozen_measurement=True advances walkers but leaves g(E) untouched.
+    """Measurement mode: coordinator skipped, entropy fixed, walkers advance.
 
-    The coordinator (halving, entropy-merge, phase-switch) must not fire
-    when the pool is frozen; walkers must still advance (MC step counter
-    increases) and no merge events must be recorded.
+    Exercises the composition of two orthogonal flags:
+    - ``frozen_g=True`` on each ensemble (set at the ensemble layer, mirroring
+      what ``measure_from_checkpoint`` does via ``restart_from(frozen_g=True)``)
+      prevents any g(E) update during MC steps.
+    - ``frozen_measurement=True`` on the pool (the pool flag's sole job) skips
+      the coordinator block so no halving, entropy-merge, or phase-switch fires.
+
+    The specific contract verified here:
+    - no merge events recorded (pool flag's contribution),
+    - walker entropy unchanged after advance (ensemble flag's contribution),
+    - walkers advanced (MC step counter increased).
     """
     from mchammer_pt.parallel.serial import SerialWangLandauPool
 
     pool = _make_serial_wl_pool(n_replicas=2)
-    # Prime each walker's entropy so there is something to check.
+    # Prime each walker's entropy so there is something non-trivial to check.
     pool.advance_all(20)
 
     entropy_before = [
@@ -2182,8 +2190,12 @@ def test_serial_wl_pool_frozen_measurement_skips_coordinator():
     ]
     steps_before = [r.walker_states[0].step for r in pool._replicas]
 
-    # Build a second frozen pool sharing the same replica objects
-    # (the fixture builds fresh replicas; reuse the primed ones).
+    # Freeze g at the ensemble layer, mirroring what measure_from_checkpoint
+    # will do via restart_from(frozen_g=True) at construction time.
+    for r in pool._replicas:
+        r.ensemble._frozen_g = True
+
+    # Build a frozen pool sharing the same (now frozen_g) replica objects.
     frozen_pool = SerialWangLandauPool(
         pool._replicas,
         energy_spacing=0.1,
@@ -2192,14 +2204,14 @@ def test_serial_wl_pool_frozen_measurement_skips_coordinator():
 
     frozen_pool.advance_all(20)
 
-    # Coordinator never fired: entropy dicts must be identical.
+    # Coordinator never fired: no merge events recorded (pool flag's job).
+    assert frozen_pool._merge_events == []
+
+    # Entropy is unchanged because frozen_g=True is set on the ensembles.
     for i, r in enumerate(frozen_pool._replicas):
         assert r.ensemble._entropy == entropy_before[i], (
-            f"replica {i} entropy changed under frozen_measurement"
+            f"replica {i} entropy changed under frozen_g"
         )
-
-    # No merge events were recorded.
-    assert frozen_pool._merge_events == []
 
     # Walkers DID advance: MC step counter must have increased.
     for i, r in enumerate(frozen_pool._replicas):
