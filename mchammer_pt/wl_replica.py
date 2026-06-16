@@ -720,6 +720,28 @@ class WangLandauReplica:
             )
         self.attach_mchammer_observer(observer)
 
+    def record_observable(self, observer: BaseObserver) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Forwards to :meth:`CoordinatedWangLandauEnsemble.attach_observable_recorder`,
+        which is restore-aware: if a prior checkpoint stored a state for
+        ``observer.tag``, the recorder is seeded from that state so
+        accumulation continues from the restored baseline rather than
+        resetting. A ``ValueError`` is raised if the observer's
+        signature disagrees with the restored state, or if the tag is
+        already attached.
+
+        Args:
+            observer: Any ``mchammer.BaseObserver`` subclass whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+
+        Raises:
+            ValueError: If an observer with the same tag is already
+                attached, or if the restored state has an incompatible
+                signature.
+        """
+        self._ensemble.attach_observable_recorder(observer)
+
     @property
     def cluster_expansion_path(self) -> str | None:
         return self._cluster_expansion_path
@@ -767,6 +789,17 @@ class WangLandauReplica:
         e._data_container._last_state["entropy_snapshots"] = dict(
             e._entropy_snapshots
         )
+        # Observable moment stores: union of live recorders and any
+        # still-pending unbound restored stores. Live recorders take
+        # precedence (attach pops from pending, so overlap should never
+        # occur; the union is defensive).
+        obs_records: dict[str, dict[str, Any]] = {
+            tag: rec.to_state() for tag, rec in e._recorders.items()
+        }
+        for tag, state in e._restored_observable_records.items():
+            if tag not in obs_records:
+                obs_records[tag] = state
+        e._data_container._last_state["observable_records"] = obs_records
 
     def finalise_for_reporting(self) -> None:
         """No-op for single-walker slots; the multi-walker counterpart on
@@ -926,6 +959,11 @@ class WangLandauReplica:
                 "so this signals a corrupted checkpoint."
             )
         e._rebuild_max_snapshot_rung()
+        # Observable moment stores: absent key (legacy checkpoint) yields
+        # an empty pending dict so subsequent attach calls start fresh.
+        e._restored_observable_records = copy.deepcopy(
+            last_state.get("observable_records", {})
+        )
         # Maintain the known-bin invariant (see class docstring).
         e._histogram.setdefault(new_bin, 0)
         if sites_by_species is not None:
@@ -951,8 +989,38 @@ class WangLandauReplica:
         one_over_t_entry: OneOverTEntry = "window_clock",
         cluster_expansion_path: str | os.PathLike[str] | None = None,
         sites_by_species: list[dict[int, list[int]]] | None = None,
+        frozen_g: bool = False,
     ) -> WangLandauReplica:
-        """Construct a replica whose ensemble has been restored from `container`."""
+        """Construct a replica whose ensemble has been restored from ``container``.
+
+        Args:
+            container: serialised checkpoint container (``BaseDataContainer``).
+            cluster_expansion: icet ``ClusterExpansion`` defining the energy.
+            atoms: starting structure (must lie inside the window).
+            energy_spacing: bin size of the WL energy grid.
+            energy_limit_left: lower window edge, or ``None`` for unbounded.
+            energy_limit_right: upper window edge, or ``None`` for unbounded.
+            random_seed: seed for the replica's MC random generator.
+            ensemble_cls: WL ensemble class; defaults to
+                ``CoordinatedWangLandauEnsemble``.
+            ensemble_kwargs: extra kwargs forwarded to ensemble construction.
+            recency_visits_per_bin: EWMA recency window for the ensemble.
+            dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot ladder.
+            one_over_t_entry: 1/t entry policy (``"window_clock"`` or
+                ``"f_continuous"``).
+            cluster_expansion_path: optional path to the cluster expansion
+                on disk.
+            sites_by_species: optional ``_sites_by_species`` configuration
+                state to restore after ``_restart_ensemble``.
+            frozen_g: when ``True``, the restored ensemble holds ``_entropy``,
+                ``_histogram``, and ``_fill_factor`` fixed for the duration
+                of the run. Intended for observable-measurement passes built
+                from a converged checkpoint. Merged into ``ensemble_kwargs``
+                (a copy is made to avoid mutating the caller's dict).
+        """
+        merged_kwargs: dict[str, Any] = dict(ensemble_kwargs) if ensemble_kwargs else {}
+        if frozen_g:
+            merged_kwargs["frozen_g"] = True
         replica = cls(
             cluster_expansion=cluster_expansion,
             atoms=atoms,
@@ -961,7 +1029,7 @@ class WangLandauReplica:
             energy_limit_right=energy_limit_right,
             random_seed=random_seed,
             ensemble_cls=ensemble_cls,
-            ensemble_kwargs=ensemble_kwargs,
+            ensemble_kwargs=merged_kwargs if merged_kwargs else None,
             recency_visits_per_bin=recency_visits_per_bin,
             dos_snapshot_ratio=dos_snapshot_ratio,
             one_over_t_entry=one_over_t_entry,

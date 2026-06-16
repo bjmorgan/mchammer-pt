@@ -153,6 +153,13 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # `_run` override after each trial step (post-`update_occupations`),
         # gated on `_reached_energy_window` and each recorder's `interval`.
         self._recorders: dict[str, EnergyBinnedObservableRecorder] = {}
+        # Stores restored from a checkpoint that have not yet been
+        # re-attached via `attach_observable_recorder`. Populated by
+        # `WangLandauReplica.restore_state`; entries are consumed (popped)
+        # when the matching observer is re-attached. Any entries still
+        # present at `refresh_last_state` time are written back into the
+        # checkpoint unchanged, so unbound stores are never dropped.
+        self._restored_observable_records: dict[str, dict[str, Any]] = {}
 
     def attach_observable_recorder(self, observer: BaseObserver) -> None:
         """Attach an observer whose scalar outputs are accumulated per energy bin.
@@ -162,12 +169,22 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         override after each trial step (post-``update_occupations``), gated
         on ``self._reached_energy_window`` and ``observer.interval``.
 
+        If a restored store for this tag exists in
+        ``_restored_observable_records`` (populated by
+        ``WangLandauReplica.restore_state``), the recorder is seeded from
+        that store via :meth:`EnergyBinnedObservableRecorder.from_state`,
+        which validates the observer's signature against the stored one and
+        raises ``ValueError`` on disagreement. The store entry is consumed
+        so it is not written back as unbound on the next checkpoint.
+
         Args:
             observer: Any ``mchammer.BaseObserver`` subclass whose
                 ``get_observable`` returns a scalar, sequence, or Mapping.
 
         Raises:
-            ValueError: If an observer with the same tag is already attached.
+            ValueError: If an observer with the same tag is already attached,
+                or if a restored store for the tag has an incompatible
+                signature.
         """
         tag = observer.tag
         if tag in self._recorders:
@@ -175,7 +192,12 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
                 f"an observable recorder with tag {tag!r} is already attached; "
                 "use a distinct tag for each observer"
             )
-        self._recorders[tag] = EnergyBinnedObservableRecorder(observer)
+        if tag in self._restored_observable_records:
+            self._recorders[tag] = EnergyBinnedObservableRecorder.from_state(
+                self._restored_observable_records.pop(tag), observer
+            )
+        else:
+            self._recorders[tag] = EnergyBinnedObservableRecorder(observer)
 
     def _run(self, number_of_trial_steps: int) -> None:
         """Run for ``number_of_trial_steps``, driving recorders after each step.
