@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
+from mchammer.observers.base_observer import BaseObserver
+
+from mchammer_pt.wl_observable_recorder import EnergyBinnedObservableRecorder
 
 
 def _validate_recency_visits_per_bin(value: object) -> int:
@@ -146,6 +149,70 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # policy, and walkers restored from checkpoints carrying no
         # origin) falls back to `_window_entry_step`.
         self._one_over_t_origin_step: int | None = None
+        # Tag-keyed energy-binned observable recorders. Driven by
+        # `_update_entropy` once the walker is in its energy window.
+        self._recorders: dict[str, EnergyBinnedObservableRecorder] = {}
+
+    def attach_observable_recorder(self, observer: BaseObserver) -> None:
+        """Attach an observer whose scalar outputs are accumulated per energy bin.
+
+        The observer is wrapped in an :class:`EnergyBinnedObservableRecorder`
+        and stored keyed by its tag. Recording begins once the walker
+        enters its energy window and fires every ``observer.interval`` MC
+        steps (gated by ``self._reached_energy_window`` inside
+        ``_update_entropy``).
+
+        Args:
+            observer: Any ``mchammer.BaseObserver`` subclass whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+
+        Raises:
+            ValueError: If an observer with the same tag is already attached.
+        """
+        tag = observer.tag
+        if tag in self._recorders:
+            raise ValueError(
+                f"an observable recorder with tag {tag!r} is already attached; "
+                "use a distinct tag for each observer"
+            )
+        self._recorders[tag] = EnergyBinnedObservableRecorder(observer)
+
+    def _run(self, number_of_trial_steps: int) -> None:
+        """Run for ``number_of_trial_steps``, driving recorders after each step.
+
+        Overrides the parent loop to fire per-bin observable recorders
+        immediately after ``_do_trial_step`` returns. At that point
+        ``configuration.structure`` is always consistent with
+        ``_potential``: accepted moves have already called
+        ``update_occupations``; rejected moves leave both unchanged.
+
+        Recorders are driven inside ``_run`` rather than inside
+        ``_do_trial_step`` to preserve the ``_do_trial_step`` override
+        slot for third-party custom-move subclasses (e.g.
+        ``mchammer_moves.CustomWangLandauEnsemble``), whose MRO would
+        shadow this class's ``_do_trial_step`` if both defined it.
+        """
+        for _ in range(number_of_trial_steps):
+            # Capture the step value used inside this trial step BEFORE
+            # the increment that `_run` is responsible for.
+            step_at_call = int(self._step)
+            accepted = self._do_trial_step()
+            self._step += 1
+            self._accepted_trials += accepted
+            # Drive recorders once the step is complete and the structure
+            # is consistent with ``_potential``. Recording is orthogonal to
+            # ``frozen_g`` and runs in both modes.
+            if self._reached_energy_window and self._recorders:
+                due = [
+                    rec
+                    for rec in self._recorders.values()
+                    if step_at_call % rec.interval == 0
+                ]
+                if due:
+                    bin_cur = self._get_bin_index(self._potential)
+                    structure = self.configuration.structure
+                    for rec in due:
+                        rec.record(structure, bin_cur)
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's
