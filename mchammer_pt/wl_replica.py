@@ -209,6 +209,7 @@ class WangLandauSlot(Protocol):
         self,
         factory: Callable[[WangLandauReplica], BaseObserver],
     ) -> None: ...
+    def record_observable(self, observer: BaseObserver) -> None: ...
 
 
 class WangLandauReplica:

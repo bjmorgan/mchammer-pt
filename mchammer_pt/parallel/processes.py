@@ -1697,6 +1697,49 @@ class ProcessWangLandauPool:
                 conn, "ATTACH_OBS_FACTORY", label, remaining
             )
 
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Mirrors ``attach_observer`` for the recorder path. Each selected
+        worker receives its own deserialised copy of ``observer`` via a
+        pickle round-trip; the worker installs it via
+        ``replica.record_observable`` so the recorder is restore-aware.
+        The parent eagerly validates picklability before contacting any
+        worker.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+            replicas: ``"all"`` or an explicit sequence of window indices.
+
+        Raises:
+            TypeError: if ``observer`` is not picklable.
+            RuntimeError: if the pool is shut down or a worker raises.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._slots))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc})"
+            ) from exc
+        targets: list[tuple[str, Connection]] = []
+        for i in target_indices:
+            for w, (_, conn) in enumerate(self._slots[i].workers):
+                conn.send(("ATTACH_RECORDER", blob))
+                targets.append((f"window {i} walker {w}", conn))
+        for offset, (label, conn) in enumerate(targets):
+            remaining = [c for _, c in targets[offset + 1:]]
+            self._recv_or_abort_attach(conn, "ATTACH_RECORDER", label, remaining)
+
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one REWL worker.
 

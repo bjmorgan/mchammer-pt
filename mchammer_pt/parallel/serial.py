@@ -666,6 +666,41 @@ class SerialWangLandauPool:
         for i in target_indices:
             self._replicas[i].attach_observer_factory(factory)
 
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Mirrors ``attach_observer``: each selected window receives its own
+        deserialised copy of ``observer`` via a pickle round-trip (for W>1
+        slots each walker gets its own independent copy). The observer is
+        installed via ``replica.record_observable``, which is restore-aware.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+            replicas: ``"all"`` or an explicit sequence of window indices.
+
+        Raises:
+            TypeError: if ``observer`` is not picklable.
+            ValueError: if a recorder for this tag is already attached, or
+                if a restored state for the tag has an incompatible signature.
+        """
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc})"
+            ) from exc
+        for i in target_indices:
+            self._replicas[i].record_observable(pickle.loads(blob))
+
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one WL replica.
 

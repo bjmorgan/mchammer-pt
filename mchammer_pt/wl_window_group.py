@@ -464,3 +464,31 @@ class WangLandauWindowGroup:
                     f"{type(observer).__name__}, not a BaseObserver"
                 )
             r.attach_mchammer_observer(observer)
+
+    def record_observable(self, observer: BaseObserver) -> None:
+        """Attach an observer for per-bin moment accumulation on every walker.
+
+        Each of the W walkers receives its own deserialised copy of
+        ``observer`` via a pickle round-trip, then calls
+        ``replica.record_observable`` so the recorder is restore-aware.
+        If ``observer`` is not picklable, raises ``TypeError`` immediately.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+
+        Raises:
+            TypeError: if ``observer`` is not picklable.
+            ValueError: if a recorder for this tag is already attached on
+                any walker, or if the restored state is incompatible.
+        """
+        import pickle
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc})"
+            ) from exc
+        for r in self._replicas:
+            r.record_observable(pickle.loads(blob))

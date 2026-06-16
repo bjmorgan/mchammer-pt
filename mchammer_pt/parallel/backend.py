@@ -412,7 +412,27 @@ class ObservablePool(CanonicalPool, _ObserverAttach, Protocol):
 
 
 @runtime_checkable
-class WangLandauObservablePool(WangLandauPool, _ObserverAttach, Protocol):
+class _RecorderAttach(Protocol):
+    """Pool-agnostic recorder-attach surface for REWL pools.
+
+    `WangLandauObservablePool` extends this. The orchestrator's
+    `record_observable` checks against this protocol so it can guard
+    that the pool supports per-bin moment recording.
+    """
+
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation."""
+        ...
+
+
+@runtime_checkable
+class WangLandauObservablePool(
+    WangLandauPool, _ObserverAttach, _RecorderAttach, Protocol
+):
     """A `WangLandauPool` that can have mchammer observers attached.
 
     Mirrors `ObservablePool` for REWL. Observers fire inside each

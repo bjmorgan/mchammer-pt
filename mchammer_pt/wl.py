@@ -14,11 +14,12 @@ import warnings
 import weakref
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from ase import Atoms
 from icet import ClusterExpansion
+from mchammer.observers.base_observer import BaseObserver
 
 from .base import BaseParallelTempering
 from .checkpoint import (
@@ -27,7 +28,7 @@ from .checkpoint import (
     _write_checkpoint,
 )
 from .history import ExchangeHistory, MetaValue
-from .parallel.backend import WangLandauPool
+from .parallel.backend import WangLandauPool, _RecorderAttach
 from .parallel.processes import ProcessWangLandauPool
 from .parallel.serial import SerialWangLandauPool
 from .wl_coordinator import (
@@ -562,6 +563,39 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ),
         }
 
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Requires the pool to satisfy `_RecorderAttach`, which
+        `SerialWangLandauPool` and `ProcessWangLandauPool` both implement.
+        Pools that do not expose recorder attach raise `TypeError`.
+
+        Each selected window's replica(s) receive their own deserialised
+        copy of ``observer`` via a pickle round-trip. Recorders are
+        restore-aware: if a prior checkpoint stored a state for
+        ``observer.tag``, the recorder seeds from it on resume.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+            replicas: ``"all"`` or an explicit sequence of window indices.
+
+        Raises:
+            TypeError: if the pool does not support recorder attach.
+            TypeError: if ``observer`` is not picklable.
+            ValueError: if a recorder for this tag is already attached.
+        """
+        if not isinstance(self._pool, _RecorderAttach):
+            raise TypeError(
+                f"record_observable requires a pool that supports recorder "
+                f"attach; {type(self._pool).__name__} does not."
+            )
+        self._pool.record_observable(observer, replicas)
+
     def run(self, n_cycles: int) -> ExchangeHistory:
         """Advance until `n_cycles` reached or every replica converged.
 
@@ -662,6 +696,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        _frozen: bool = False,
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
 
@@ -782,6 +817,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
                         recency_visits_per_bin=recency_visits_per_bin,
                         dos_snapshot_ratio=dos_snapshot_ratio,
                         one_over_t_entry=one_over_t_entry,
+                        frozen_g=_frozen,
                     )
                 )
                 flat_idx += 1
@@ -823,6 +859,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             merge_cadence=merge_cadence,
             one_over_t_gate=one_over_t_gate,
             bp_stall_multiple=bp_stall_multiple,
+            frozen_measurement=_frozen,
         )
 
         # Reconstruct per-slot stall state from the restored fill-factor
@@ -871,6 +908,56 @@ class WangLandauParallelTempering(BaseParallelTempering):
         assert isinstance(rng_state_raw, str)
         pt._rng.bit_generator.state = json.loads(rng_state_raw)
         return pt
+
+    @classmethod
+    def measure_from_checkpoint(
+        cls,
+        path: Path | str,
+        *,
+        cluster_expansion: ClusterExpansion,
+        ensemble_cls: type[CoordinatedWangLandauEnsemble] = (
+            CoordinatedWangLandauEnsemble
+        ),
+        ensemble_kwargs: Mapping[str, Any] | None = None,
+    ) -> WangLandauParallelTempering:
+        """Load a converged checkpoint in frozen measurement mode.
+
+        Every replica's g(E) is held fixed (``frozen_g=True``) and the pool
+        coordinator is disabled (``frozen_measurement=True``): MC steps proceed
+        and exchanges are proposed, but halving, entropy merging, and phase
+        switching are all skipped. The density of states is unchanged.
+
+        Each ``run(n_cycles)`` call starts a fresh cycle segment independent of
+        the DOS run's cycle accounting.
+
+        Typical usage::
+
+            pt = WangLandauParallelTempering.measure_from_checkpoint(
+                "run.h5", cluster_expansion=ce
+            )
+            pt.record_observable(my_observer)
+            pt.run(n_cycles=500)
+
+        Args:
+            path: path to a schema-5 checkpoint produced by a completed
+                REWL run.
+            cluster_expansion: icet ``ClusterExpansion`` used in the
+                original run.
+            ensemble_cls: WL ensemble class (default
+                ``CoordinatedWangLandauEnsemble``).
+            ensemble_kwargs: extra kwargs forwarded to ensemble construction.
+                Must match the checkpoint's hash.
+
+        Returns:
+            A `WangLandauParallelTempering` in frozen measurement mode.
+        """
+        return cls.resume(
+            path,
+            cluster_expansion=cluster_expansion,
+            ensemble_cls=ensemble_cls,
+            ensemble_kwargs=ensemble_kwargs,
+            _frozen=True,
+        )
 
     @classmethod
     def resume_process_pool(
