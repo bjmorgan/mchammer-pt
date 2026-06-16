@@ -2167,19 +2167,30 @@ def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
 def test_serial_wl_pool_frozen_measurement_skips_coordinator():
     """Measurement mode: coordinator skipped, entropy fixed, walkers advance.
 
-    Exercises the composition of two orthogonal flags:
-    - ``frozen_g=True`` on each ensemble (set at the ensemble layer, mirroring
-      what ``measure_from_checkpoint`` does via ``restart_from(frozen_g=True)``)
-      prevents any g(E) update during MC steps.
-    - ``frozen_measurement=True`` on the pool (the pool flag's sole job) skips
-      the coordinator block so no halving, entropy-merge, or phase-switch fires.
+    Exercises two orthogonal flags:
+    - ``frozen_g=True`` on each ensemble prevents g(E) updates during MC steps
+      (ensemble layer).
+    - ``frozen_measurement=True`` on the pool skips ``decide_block_actions``
+      entirely so no halving, entropy-merge, or phase-switch can fire (pool
+      layer).
 
-    The specific contract verified here:
-    - no merge events recorded (pool flag's contribution),
-    - walker entropy unchanged after advance (ensemble flag's contribution),
-    - walkers advanced (MC step counter increased).
+    The decisive witness is the spy on ``decide_block_actions``:
+    - Under ``frozen_measurement=True`` the spy call count must be 0 (pool flag
+      skipped the coordinator).
+    - Under ``frozen_measurement=False`` (positive control) the spy must be
+      called at least once, confirming the spy is wired correctly and that the
+      two cases genuinely differ.
+
+    Additional assertions:
+    - Entropy unchanged after advance — provided by ``frozen_g`` (ensemble
+      layer), not by ``frozen_measurement``.
+    - Walkers advanced — MC step counter increased regardless of freeze flags.
     """
+    from unittest.mock import patch
+
+    import mchammer_pt.parallel.serial as serial_mod
     from mchammer_pt.parallel.serial import SerialWangLandauPool
+    from mchammer_pt.wl_coordinator import decide_block_actions as _real_dba
 
     pool = _make_serial_wl_pool(n_replicas=2)
     # Prime each walker's entropy so there is something non-trivial to check.
@@ -2191,7 +2202,7 @@ def test_serial_wl_pool_frozen_measurement_skips_coordinator():
     steps_before = [r.walker_states[0].step for r in pool._replicas]
 
     # Freeze g at the ensemble layer, mirroring what measure_from_checkpoint
-    # will do via restart_from(frozen_g=True) at construction time.
+    # does via restart_from(frozen_g=True) at construction time.
     for r in pool._replicas:
         r.ensemble._frozen_g = True
 
@@ -2202,12 +2213,25 @@ def test_serial_wl_pool_frozen_measurement_skips_coordinator():
         frozen_measurement=True,
     )
 
-    frozen_pool.advance_all(20)
+    # DECISIVE WITNESS: spy on the coordinator decision function as used by
+    # the serial module. Under frozen_measurement=True, advance_all must
+    # return before reaching the decide_block_actions call.
+    call_log: list[int] = []
 
-    # Coordinator never fired: no merge events recorded (pool flag's job).
-    assert frozen_pool._merge_events == []
+    def _spy(*args, **kwargs):
+        call_log.append(1)
+        return _real_dba(*args, **kwargs)
 
-    # Entropy is unchanged because frozen_g=True is set on the ensembles.
+    with patch.object(serial_mod, "decide_block_actions", _spy):
+        frozen_pool.advance_all(20)
+
+    assert call_log == [], (
+        "decide_block_actions was called under frozen_measurement=True; "
+        "the coordinator-skip early-return appears to be missing"
+    )
+
+    # Entropy is unchanged because frozen_g=True is set on the ensembles
+    # (ensemble-layer guarantee, independent of frozen_measurement).
     for i, r in enumerate(frozen_pool._replicas):
         assert r.ensemble._entropy == entropy_before[i], (
             f"replica {i} entropy changed under frozen_g"
@@ -2218,6 +2242,28 @@ def test_serial_wl_pool_frozen_measurement_skips_coordinator():
         assert r.walker_states[0].step > steps_before[i], (
             f"replica {i} did not advance under frozen_measurement"
         )
+
+    # POSITIVE CONTROL: same replicas, frozen_measurement=False.  The spy
+    # must be called, proving it is wired to the right binding and that the
+    # frozen / non-frozen contrast is real.
+    live_pool = SerialWangLandauPool(
+        pool._replicas,
+        energy_spacing=0.1,
+        frozen_measurement=False,
+    )
+    live_call_log: list[int] = []
+
+    def _spy2(*args, **kwargs):
+        live_call_log.append(1)
+        return _real_dba(*args, **kwargs)
+
+    with patch.object(serial_mod, "decide_block_actions", _spy2):
+        live_pool.advance_all(20)
+
+    assert len(live_call_log) > 0, (
+        "decide_block_actions was NOT called under frozen_measurement=False; "
+        "the spy is not wired to the binding that advance_all actually uses"
+    )
 
 
 def test_wl_worker_force_halve_then_set_phase_uses_post_halve_origin():
