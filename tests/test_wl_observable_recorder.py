@@ -262,7 +262,7 @@ def test_round_trip_identity(atoms: Atoms) -> None:
 
 
 def test_from_state_mismatched_signature_raises(atoms: Atoms) -> None:
-    """from_state with wrong-size observer raises ValueError mentioning 'signature'."""
+    """Restoring with a wrong-size observer raises ValueError on first record()."""
     obs1 = _SumObserver()  # S=1
     rec = EnergyBinnedObservableRecorder(obs1)
     rec.record(atoms, bin_index=0)
@@ -270,8 +270,9 @@ def test_from_state_mismatched_signature_raises(atoms: Atoms) -> None:
     state = rec.to_state()
 
     obs3 = _ThreeValueObserver()  # S=3
+    restored = EnergyBinnedObservableRecorder.from_state(state, obs3)
     with pytest.raises(ValueError, match="signature"):
-        EnergyBinnedObservableRecorder.from_state(state, obs3)
+        restored.record(atoms, bin_index=0)
 
 
 # ---------------------------------------------------------------------------

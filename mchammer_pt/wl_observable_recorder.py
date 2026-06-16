@@ -7,12 +7,11 @@ Signature discovery
 -------------------
 ``BaseObserver`` does not declare S (the number of scalars returned)
 in its interface -- S is only known after ``get_observable`` is first
-called. The recorder therefore sets ``_names`` on the first observation
-(or on restore via ``from_state``). A mismatch between the stored names
-and a freshly probed observer is detected by making a probe call inside
-``from_state``; if the probe raises or the observer is not yet callable
-without a structure, the check is deferred to the first post-restore
-``record`` call, which will raise ``ValueError`` on size/name disagreement.
+called. The recorder sets ``_names`` on the first ``record`` call. On
+restore via ``from_state``, ``_names`` and ``_size`` are set from the
+stored state; the attached observer's actual signature is validated on
+the first post-restore ``record`` call, which raises ``ValueError`` on
+size or name disagreement.
 """
 
 from __future__ import annotations
@@ -211,73 +210,35 @@ class EnergyBinnedObservableRecorder:
         """Restore a recorder from a serialised state dict.
 
         After restoration, subsequent ``record`` calls ADD to the restored
-        accumulators rather than resetting them.
-
-        The observer's signature is validated against the stored state by
-        making a structural probe: we check the stored ``names`` list size
-        against what the observer would produce. Because ``BaseObserver``
-        does not declare S in its interface, the definitive check happens by
-        comparing the stored names directly. If S can be determined up-front
-        (e.g. for a dict observer whose output keys are fixed at
-        construction, or for a sequence observer with a known length), the
-        mismatch surfaces here. For all other observers the mismatch
-        surfaces on the first post-restore ``record`` call.
+        accumulators rather than resetting them. The observer's signature
+        (size and names) is set from the stored state and validated against
+        the attached observer on the first post-restore ``record`` call,
+        which raises ``ValueError`` on size or name disagreement.
 
         Args:
             state: A dict as produced by ``to_state``.
-            observer: The observer to attach. Its tag and stored names
-                must be compatible with the stored state.
+            observer: The observer to attach.
 
         Returns:
             A new ``EnergyBinnedObservableRecorder`` seeded with the
             restored data.
 
         Raises:
-            ValueError: If the observer's tag or the stored signature size
-                disagrees with the restored state (signature mismatch).
+            ValueError: If the stored state is internally inconsistent
+                (bins and count lengths disagree).
         """
         stored_names = tuple(state["names"])
         stored_size = len(stored_names)
 
         if stored_size == 0:
-            # No observations were ever recorded; nothing to validate.
+            # No observations were ever recorded; nothing to seed.
             rec = cls(observer)
             rec._skipped = dict(state.get("skipped", {}))
             return rec
 
-        # Validate by probing: for dict/sequence observers, the tag-based
-        # default names let us check S up-front by examining what the stored
-        # names imply vs what the observer's tag would produce.
-        # Specifically: if stored_names are all tag-prefixed (e.g. "sum_0")
-        # and observer.tag differs, the mismatch will surface on first record.
-        # A definitive check for size-mismatch uses the stored size directly.
-        #
-        # We CANNOT call get_observable without a structure, so we compare
-        # the stored names against what the observer *would* produce for
-        # size=1 (bare scalar) and size=stored_size (sequence default).
-        # If none of these match, we raise immediately; otherwise we seed
-        # the recorder and let the first record() confirm.
-        #
-        # The firm rule: if stored S != stored S implied by names, raise.
-        # If the observer's own tag would produce different names for the
-        # same S, that is a mismatch -- but we cannot know without a call.
-        # We therefore defer to first record() for tag-name disagreements,
-        # but raise HERE for explicit size mismatches by checking whether
-        # the observer declares a contradictory S via return_type==dict and
-        # a fixed key set -- which we cannot know without calling it.
-        #
-        # Practical rule applied: raise if stored_size is inconsistent with
-        # the stored names list length (self-consistency check), and also
-        # raise if the observer's tag-based default for stored_size would
-        # produce names that are entirely disjoint from the stored names
-        # (clear signature mismatch). The latter catches the common case:
-        # restoring a size-1 scalar store with a 3-element observer.
-
-        # Self-consistency check.
         if len(state["bins"]) != len(state["count"]):
             raise ValueError("corrupt state: bins and count lengths disagree")
 
-        # Build the recorder and seed it from state.
         rec = cls(observer)
         rec._names = stored_names
         rec._size = stored_size
@@ -295,35 +256,5 @@ class EnergyBinnedObservableRecorder:
             rec._sum4[b] = np.array(s4, float)
 
         rec._skipped = {int(k): int(v) for k, v in state.get("skipped", {}).items()}
-
-        # Probe the observer to catch size mismatches up-front where possible.
-        # We use a minimal stub structure (one atom, Z=1) so that observers
-        # that only call np.sum(structure.numbers) work without icet.
-        try:
-            from ase import Atoms as _Atoms
-
-            _tag = observer.tag
-            probe_structure = _Atoms("H", positions=[[0, 0, 0]])
-            probe_raw = observer.get_observable(probe_structure)
-            probe_vals, probe_names_from_obs = _coerce_scalars(probe_raw)
-
-            if probe_names_from_obs is not None:
-                probe_resolved = tuple(probe_names_from_obs)
-            elif len(probe_vals) == 1:
-                probe_resolved = (_tag,)
-            else:
-                probe_resolved = tuple(f"{_tag}_{i}" for i in range(len(probe_vals)))
-
-            if len(probe_vals) != stored_size or probe_resolved != stored_names:
-                raise ValueError(
-                    f"observer signature {probe_resolved!r} does not match "
-                    f"restored store signature {stored_names!r}"
-                )
-        except (ImportError, Exception) as exc:
-            # If the probe fails for any reason other than a signature mismatch
-            # (e.g. the observer requires a real icet structure), defer.
-            # Re-raise only genuine ValueError signature mismatches.
-            if isinstance(exc, ValueError) and "signature" in str(exc):
-                raise
 
         return rec
