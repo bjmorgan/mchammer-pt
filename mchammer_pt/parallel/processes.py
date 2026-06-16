@@ -790,6 +790,13 @@ class ProcessWangLandauPool:
             replica (see WangLandauParallelTempering). Selecting
             ``"f_continuous"`` without
             ``ensemble_kwargs={"schedule": "1_over_t"}`` raises.
+        frozen_measurement: if ``True``, ``advance_all`` fans out
+            ``ADVANCE`` to all workers as normal (so walkers accumulate
+            MC steps and observables) but the master-side coordinator
+            decisions (halving, entropy-merge, phase-switch) are skipped.
+            Every walker's g(E) is left untouched. Intended for
+            post-convergence measurement passes where the density of
+            states must not change. Default ``False``.
     """
 
     def __init__(
@@ -812,8 +819,10 @@ class ProcessWangLandauPool:
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
         one_over_t_entry: OneOverTEntry = "window_clock",
+        frozen_measurement: bool = False,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
+        self._frozen_measurement: bool = frozen_measurement
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
@@ -1074,6 +1083,11 @@ class ProcessWangLandauPool:
                 walker_addrs, payloads, strict=True
             ):
                 slot.walker_states[w] = payload
+
+            # Frozen mode: workers advance but the coordinator does not run.
+            # No halving, entropy-merge, or phase-switch; g(E) is untouched.
+            if self._frozen_measurement:
+                return
 
             # DECIDE: per-slot coordinator decisions; no IPC.
             views = [_view_of(slot) for slot in self._slots]

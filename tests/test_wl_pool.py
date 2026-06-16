@@ -2164,6 +2164,50 @@ def test_process_wl_pool_stores_one_over_t_entry(tmp_path):
         assert pool.one_over_t_entry == "f_continuous"
 
 
+def test_serial_wl_pool_frozen_measurement_skips_coordinator():
+    """frozen_measurement=True advances walkers but leaves g(E) untouched.
+
+    The coordinator (halving, entropy-merge, phase-switch) must not fire
+    when the pool is frozen; walkers must still advance (MC step counter
+    increases) and no merge events must be recorded.
+    """
+    from mchammer_pt.parallel.serial import SerialWangLandauPool
+
+    pool = _make_serial_wl_pool(n_replicas=2)
+    # Prime each walker's entropy so there is something to check.
+    pool.advance_all(20)
+
+    entropy_before = [
+        dict(r.ensemble._entropy) for r in pool._replicas
+    ]
+    steps_before = [r.walker_states[0].step for r in pool._replicas]
+
+    # Build a second frozen pool sharing the same replica objects
+    # (the fixture builds fresh replicas; reuse the primed ones).
+    frozen_pool = SerialWangLandauPool(
+        pool._replicas,
+        energy_spacing=0.1,
+        frozen_measurement=True,
+    )
+
+    frozen_pool.advance_all(20)
+
+    # Coordinator never fired: entropy dicts must be identical.
+    for i, r in enumerate(frozen_pool._replicas):
+        assert r.ensemble._entropy == entropy_before[i], (
+            f"replica {i} entropy changed under frozen_measurement"
+        )
+
+    # No merge events were recorded.
+    assert frozen_pool._merge_events == []
+
+    # Walkers DID advance: MC step counter must have increased.
+    for i, r in enumerate(frozen_pool._replicas):
+        assert r.walker_states[0].step > steps_before[i], (
+            f"replica {i} did not advance under frozen_measurement"
+        )
+
+
 def test_wl_worker_force_halve_then_set_phase_uses_post_halve_origin():
     """FORCE_HALVE then SET_PHASE (the coordinator's EXECUTE order for
     a coupled halve+switch plan) records the origin from the

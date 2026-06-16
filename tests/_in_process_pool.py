@@ -136,6 +136,7 @@ def make_in_process_wl_pool(
     pool._one_over_t_gate = one_over_t_gate  # type: ignore[assignment]
     pool._bp_stall_multiple = bp_stall_multiple
     pool._one_over_t_entry = one_over_t_entry  # type: ignore[assignment]
+    pool._frozen_measurement = False
     pool._merge_events = []
     pool._flatness_limit = flatness_limit
     pool._windows = list(windows)

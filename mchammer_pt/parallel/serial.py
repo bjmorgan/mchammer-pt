@@ -280,6 +280,19 @@ class SerialWangLandauPool:
     `SerialPool` (`attach_observer`, `attach_observer_class`,
     `attach_observer_factory`, `get_observers`) is exposed so users
     can record per-step observables during a REWL run.
+
+    Args:
+        replicas: the per-window Wang-Landau slot instances.
+        energy_spacing: bin width shared across all replicas.
+        flatness_mode: ``"pooled"`` or ``"per_walker"`` halving gate.
+        merge_cadence: ``"at_halve"`` or ``"never"`` entropy-merge cadence.
+        one_over_t_gate: gate controlling entry into the 1/t phase.
+        bp_stall_multiple: stall-escape multiple for the BP switch.
+        frozen_measurement: if ``True``, ``advance_all`` advances all
+            walkers as normal but skips the coordinator (no halving,
+            no entropy-merge, no phase-switch). Every walker's g(E)
+            is left untouched. Intended for post-convergence measurement
+            passes. Default ``False``.
     """
 
     def __init__(
@@ -291,9 +304,11 @@ class SerialWangLandauPool:
         merge_cadence: MergeCadence = "at_halve",
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        frozen_measurement: bool = False,
     ) -> None:
         self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
+        self._frozen_measurement: bool = frozen_measurement
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
@@ -324,6 +339,15 @@ class SerialWangLandauPool:
                     "Checkpoint metadata records a single entry policy "
                     "for the run."
                 )
+        if frozen_measurement:
+            from ..wl_window_group import WangLandauWindowGroup
+
+            for slot in self._replicas:
+                if isinstance(slot, WangLandauWindowGroup):
+                    for walker in slot._replicas:
+                        walker.ensemble._frozen_g = True
+                else:
+                    slot.ensemble._frozen_g = True
 
     def __len__(self) -> int:
         return len(self._replicas)
@@ -431,6 +455,11 @@ class SerialWangLandauPool:
         # its walker_states from live ensemble state.
         for slot in self._replicas:
             slot.advance(n_steps)
+
+        # Frozen mode: walkers advance but the coordinator does not run.
+        # No halving, entropy-merge, or phase-switch; g(E) is untouched.
+        if self._frozen_measurement:
+            return
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
         views = [
