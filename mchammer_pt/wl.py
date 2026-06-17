@@ -935,6 +935,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
     ) -> WangLandauParallelTempering:
         """Load a converged checkpoint in frozen measurement mode.
 
@@ -963,6 +964,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 ``CoordinatedWangLandauEnsemble``).
             ensemble_kwargs: extra kwargs forwarded to ensemble construction.
                 Must match the checkpoint's hash.
+            allow_kwargs_mismatch: when True, an ``ensemble_kwargs`` hash
+                mismatch is downgraded from a hard error to a `UserWarning`.
+                Only the kwargs-identity check is relaxed; CE identity and
+                ``ensemble_cls`` remain enforced. Use when measuring across
+                software environments where the pickle of identical move
+                objects differs; bit-identical continuation is not
+                guaranteed.
 
         Returns:
             A `WangLandauParallelTempering` in frozen measurement mode.
@@ -972,6 +980,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             cluster_expansion=cluster_expansion,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            allow_kwargs_mismatch=allow_kwargs_mismatch,
             _frozen=True,
         )
 
@@ -985,6 +994,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
     ) -> WangLandauParallelTempering:
         """Load a converged checkpoint in frozen-g measurement mode (process pool).
 
@@ -1009,6 +1019,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
                 ``CoordinatedWangLandauEnsemble``).
             ensemble_kwargs: extra kwargs forwarded to ensemble construction.
                 Must match the checkpoint's hash.
+            allow_kwargs_mismatch: when True, an ``ensemble_kwargs`` hash
+                mismatch is downgraded from a hard error to a `UserWarning`.
+                Only the kwargs-identity check is relaxed; CE identity and
+                ``ensemble_cls`` remain enforced. Use when measuring across
+                software environments where the pickle of identical move
+                objects differs; bit-identical continuation is not
+                guaranteed.
 
         Returns:
             A `WangLandauParallelTempering` backed by a
@@ -1019,6 +1036,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             cluster_expansion=cluster_expansion,
             ensemble_cls=ensemble_cls,
             ensemble_kwargs=ensemble_kwargs,
+            allow_kwargs_mismatch=allow_kwargs_mismatch,
             _frozen=True,
         )
 

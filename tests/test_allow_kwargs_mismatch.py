@@ -1,9 +1,9 @@
 """Behavioural tests for the allow_kwargs_mismatch opt-in on the
-Wang-Landau resume entry points.
+Wang-Landau resume and measure entry points.
 
 allow_kwargs_mismatch relaxes ONLY the ensemble-kwargs hash guard: a real
 hash mismatch (both sides hash cleanly and differ) becomes a UserWarning
-instead of a ValueError, so a run can be resumed across software
+instead of a ValueError, so a run can be resumed or measured across software
 environments where the pickle of identical move objects differs. CE
 identity and ensemble_cls stay strict. Default False preserves the hard
 error.
@@ -125,3 +125,61 @@ def test_wl_resume_ce_identity_still_guarded_under_allow(tmp_path):
         WangLandauParallelTempering.resume(
             path, cluster_expansion=ce, allow_kwargs_mismatch=True
         )
+
+
+# Reuses _make_wl_checkpoint / _tamper_kwargs_hash (defined above in this
+# file). measure_from_checkpoint* delegate to resume*/resume_process_pool
+# with _frozen=True, forwarding allow_kwargs_mismatch.
+def _wl_measure_cases():
+    from mchammer_pt.wl import WangLandauParallelTempering as W
+
+    return [
+        (
+            "measure_from_checkpoint",
+            lambda p, ce, **kw: W.measure_from_checkpoint(
+                p, cluster_expansion=ce, **kw
+            ),
+            False,
+        ),
+        (
+            "measure_from_checkpoint_process_pool",
+            lambda p, ce, **kw: W.measure_from_checkpoint_process_pool(
+                p, cluster_expansion=ce, **kw
+            ),
+            True,
+        ),
+    ]
+
+
+_WL_MEASURE = _wl_measure_cases()
+_WL_MEASURE_IDS = [c[0] for c in _WL_MEASURE]
+
+
+@pytest.mark.parametrize("label,call,is_pp", _WL_MEASURE, ids=_WL_MEASURE_IDS)
+def test_wl_measure_default_raises_on_kwargs_hash_mismatch(
+    label, call, is_pp, tmp_path
+):
+    """measure_from_checkpoint* hard-error on a kwargs-hash mismatch by
+    default (they delegate to resume*/resume_process_pool)."""
+    path, ce = _make_wl_checkpoint(tmp_path)
+    _tamper_kwargs_hash(path)
+    with pytest.raises(ValueError, match="ensemble_kwargs hash mismatch"):
+        call(path, ce)
+
+
+@pytest.mark.parametrize("label,call,is_pp", _WL_MEASURE, ids=_WL_MEASURE_IDS)
+def test_wl_measure_allow_kwargs_mismatch_warns_and_loads(
+    label, call, is_pp, tmp_path
+):
+    """measure_from_checkpoint* forward allow_kwargs_mismatch into the
+    resume call: the mismatch warns and a frozen-measurement orchestrator
+    is returned."""
+    path, ce = _make_wl_checkpoint(tmp_path)
+    _tamper_kwargs_hash(path)
+    with pytest.warns(UserWarning, match="allow_kwargs_mismatch"):
+        pt = call(path, ce, allow_kwargs_mismatch=True)
+    try:
+        assert len(pt.windows) == 2
+    finally:
+        if is_pp:
+            pt.pool.shutdown()
