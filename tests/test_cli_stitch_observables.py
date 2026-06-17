@@ -1,11 +1,9 @@
 """Tests for mchammer_pt.cli.stitch_observables."""
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
-import pytest
 from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
@@ -239,7 +237,7 @@ def test_main_no_observable_records_exits_2(tmp_path, monkeypatch, capsys):
 
 
 def test_main_missing_observable_records_key_exits_2(tmp_path, monkeypatch, capsys):
-    """A container without the observable_records key at all (pre-measurement checkpoint)."""
+    """A container lacking the observable_records key (pre-measurement checkpoint)."""
     dc = MagicMock(spec=WangLandauDataContainer)
     dc._last_state = {"entropy": {}}
     dc.ensemble_parameters = {

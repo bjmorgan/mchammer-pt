@@ -1,9 +1,10 @@
 """Tests for mchammer_pt.analysis.observables."""
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
-from unittest.mock import MagicMock
 from mchammer.data_containers.wang_landau_data_container import (
     WangLandauDataContainer,
 )
@@ -77,7 +78,7 @@ ENERGY_SPACING = 1.0
 
 
 def _make_walker0a() -> dict:
-    """Walker 0a: in window 0, tag 'energy', S=1, bins 0..4 + one out-of-window bin 5."""
+    """Walker 0a: window 0, tag 'energy', S=1, bins 0-4 plus out-of-window bin 5."""
     return _make_record(
         tag="energy",
         names=["energy"],
@@ -155,7 +156,9 @@ class TestStitchObservableMoments:
         containers = _make_containers_single_tag()
         result = stitch_observable_moments(containers, ENERGY_SPACING)
         df = result["energy"]
-        assert list(df.columns) == ["energy", "count", "energy_sum", "energy_sum2", "energy_sum4"]
+        assert list(df.columns) == [
+            "energy", "count", "energy_sum", "energy_sum2", "energy_sum4",
+        ]
 
     def test_energy_column_is_bin_times_spacing(self):
         containers = _make_containers_single_tag()
@@ -332,13 +335,16 @@ class TestMultiScalarObserver:
     def test_s2_columns_present(self):
         result = stitch_observable_moments(self._make_s2_containers(), ENERGY_SPACING)
         df = result["vec"]
-        expected_cols = ["energy", "count", "a_sum", "a_sum2", "a_sum4", "b_sum", "b_sum2", "b_sum4"]
+        expected_cols = [
+            "energy", "count",
+            "a_sum", "a_sum2", "a_sum4", "b_sum", "b_sum2", "b_sum4",
+        ]
         assert list(df.columns) == expected_cols
 
     def test_s2_sum_values_correct(self):
         result = stitch_observable_moments(self._make_s2_containers(), ENERGY_SPACING)
         df = result["vec"].set_index("energy")
-        # Bin 1: r0 count=10 sum=[3.0,4.0]; r1 count=5 sum=[0.5,1.0] => a_sum=3.5, b_sum=5.0
+        # Bin 1: r0 count=10 sum=[3,4]; r1 count=5 sum=[0.5,1] -> a_sum=3.5, b_sum=5.0
         assert df.loc[1.0, "a_sum"] == pytest.approx(3.5)
         assert df.loc[1.0, "b_sum"] == pytest.approx(5.0)
 
@@ -406,7 +412,7 @@ class TestContainersWithNoRecords:
     """Containers without observable_records contribute nothing."""
 
     def test_container_with_no_observable_records_key(self):
-        """Container whose _last_state lacks 'observable_records' is silently skipped."""
+        """Container whose _last_state lacks 'observable_records' is skipped."""
         dc_no_records = MagicMock(spec=WangLandauDataContainer)
         dc_no_records._last_state = {"entropy": {}}
         dc_no_records.ensemble_parameters = {
