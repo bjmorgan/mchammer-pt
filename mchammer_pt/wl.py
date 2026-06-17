@@ -963,7 +963,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ensemble_cls: WL ensemble class (default
                 ``CoordinatedWangLandauEnsemble``).
             ensemble_kwargs: extra kwargs forwarded to ensemble construction.
-                Must match the checkpoint's hash.
+                Validated against the checkpoint's hash unless
+                ``allow_kwargs_mismatch=True``.
             allow_kwargs_mismatch: when True, an ``ensemble_kwargs`` hash
                 mismatch is downgraded from a hard error to a `UserWarning`.
                 Only the kwargs-identity check is relaxed; CE identity and
@@ -1018,7 +1019,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             ensemble_cls: WL ensemble class (default
                 ``CoordinatedWangLandauEnsemble``).
             ensemble_kwargs: extra kwargs forwarded to ensemble construction.
-                Must match the checkpoint's hash.
+                Validated against the checkpoint's hash unless
+                ``allow_kwargs_mismatch=True``.
             allow_kwargs_mismatch: when True, an ``ensemble_kwargs`` hash
                 mismatch is downgraded from a hard error to a `UserWarning`.
                 Only the kwargs-identity check is relaxed; CE identity and
