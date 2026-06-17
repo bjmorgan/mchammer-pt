@@ -49,6 +49,7 @@ plot = ["matplotlib"]
 
 [project.scripts]
 mchammer-pt-reweight = "mchammer_pt.cli.reweight:main"
+mchammer-pt-reweight-observables = "mchammer_pt.cli.reweight_observables:main"
 mchammer-pt-stitch = "mchammer_pt.cli.stitch:main"
 mchammer-pt-stitch-observables = "mchammer_pt.cli.stitch_observables:main"
 mchammer-pt-coexistence = "mchammer_pt.cli.coexistence:main"
