@@ -101,7 +101,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    frames = stitch_observable_moments(containers, energy_spacing)
+    try:
+        frames = stitch_observable_moments(containers, energy_spacing)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if not frames:
         print(
             "error: no observable records found in the checkpoint; attach "

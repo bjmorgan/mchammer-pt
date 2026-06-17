@@ -268,6 +268,22 @@ def test_main_empty_containers_list_exits_2(tmp_path, monkeypatch, capsys):
     assert "error:" in err
 
 
+def test_main_missing_energy_spacing_exits_2(tmp_path, monkeypatch, capsys):
+    """A checkpoint recording no energy_spacing (meta and params) exits 2."""
+    dc = MagicMock(spec=WangLandauDataContainer)
+    dc._last_state = {"observable_records": {}}
+    dc.ensemble_parameters = {}  # no energy_spacing recorded
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch_observables.read_hdf5",
+        lambda _: (None, [dc], {}),  # meta also lacks energy_spacing
+    )
+    rc = main([str(tmp_path / "run.h5"), "-o", str(tmp_path / "out")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "spacing" in err.lower()
+
+
 def test_main_csv_columns_correct_for_s2_observer(tmp_path, monkeypatch):
     """S=2 observer ('a', 'b') produces correctly named columns in output CSV."""
     r = _make_record(
