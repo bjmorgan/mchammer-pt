@@ -1,5 +1,5 @@
 """Behavioural tests for the allow_kwargs_mismatch opt-in on the
-Wang-Landau resume and measure entry points.
+Wang-Landau and canonical resume/measure entry points.
 
 allow_kwargs_mismatch relaxes ONLY the ensemble-kwargs hash guard: a real
 hash mismatch (both sides hash cleanly and differ) becomes a UserWarning
@@ -183,3 +183,97 @@ def test_wl_measure_allow_kwargs_mismatch_warns_and_loads(
     finally:
         if is_pp:
             pt.pool.shutdown()
+
+
+# Canonical PT shares the _validate_kwargs_hash guard, so it gets the same
+# flag. Reuses _tamper_kwargs_hash / _tamper_ce_identity (defined above).
+def _make_canonical_checkpoint(tmp_path, toy_ce, toy_atoms):
+    """Tiny canonical PT run, saved to disk. Returns the checkpoint path.
+
+    Built with default ensemble_kwargs (None), so the on-disk kwargs hash
+    is the clean empty-dict hash.
+    """
+    from mchammer_pt import CanonicalParallelTempering
+
+    pt = CanonicalParallelTempering(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 400.0, 500.0],
+        block_size=10,
+        random_seed=42,
+    )
+    pt.run(n_cycles=3)
+    path = tmp_path / "canonical_ckpt.h5"
+    pt.save_checkpoint(path)
+    return path
+
+
+def _canonical_resume_cases():
+    from mchammer_pt import CanonicalParallelTempering as C
+
+    return [
+        (
+            "resume",
+            lambda p, ce, **kw: C.resume(p, cluster_expansion=ce, **kw),
+            False,
+        ),
+        (
+            "resume_process_pool",
+            lambda p, ce, **kw: C.resume_process_pool(
+                p, cluster_expansion=ce, **kw
+            ),
+            True,
+        ),
+    ]
+
+
+_CANON_RESUME = _canonical_resume_cases()
+_CANON_RESUME_IDS = [c[0] for c in _CANON_RESUME]
+
+
+@pytest.mark.parametrize(
+    "label,call,is_pp", _CANON_RESUME, ids=_CANON_RESUME_IDS
+)
+def test_canonical_resume_default_raises_on_kwargs_hash_mismatch(
+    label, call, is_pp, toy_ce, toy_atoms, tmp_path
+):
+    """Canonical resume*/resume_process_pool hard-error on a kwargs-hash
+    mismatch by default."""
+    path = _make_canonical_checkpoint(tmp_path, toy_ce, toy_atoms)
+    _tamper_kwargs_hash(path)
+    with pytest.raises(ValueError, match="ensemble_kwargs hash mismatch"):
+        call(path, toy_ce)
+
+
+@pytest.mark.parametrize(
+    "label,call,is_pp", _CANON_RESUME, ids=_CANON_RESUME_IDS
+)
+def test_canonical_resume_allow_kwargs_mismatch_warns_and_loads(
+    label, call, is_pp, toy_ce, toy_atoms, tmp_path
+):
+    """allow_kwargs_mismatch=True downgrades the canonical mismatch to a
+    warning and reconstructs the orchestrator."""
+    path = _make_canonical_checkpoint(tmp_path, toy_ce, toy_atoms)
+    _tamper_kwargs_hash(path)
+    with pytest.warns(UserWarning, match="allow_kwargs_mismatch"):
+        pt = call(path, toy_ce, allow_kwargs_mismatch=True)
+    try:
+        assert len(pt.temperatures) == 3
+    finally:
+        if is_pp:
+            pt.pool.shutdown()
+
+
+def test_canonical_resume_ce_identity_still_guarded_under_allow(
+    toy_ce, toy_atoms, tmp_path
+):
+    """allow_kwargs_mismatch must NOT bypass the CE-identity guard on
+    canonical resume."""
+    from mchammer_pt import CanonicalParallelTempering
+
+    path = _make_canonical_checkpoint(tmp_path, toy_ce, toy_atoms)
+    _tamper_ce_identity(path)
+    with pytest.raises(ValueError, match="CE identity mismatch"):
+        CanonicalParallelTempering.resume(
+            path, cluster_expansion=toy_ce, allow_kwargs_mismatch=True
+        )

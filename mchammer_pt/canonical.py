@@ -263,6 +263,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         cluster_expansion: ClusterExpansion,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
     ) -> CanonicalParallelTempering:
         """Resume a previously-checkpointed canonical PT run.
 
@@ -298,6 +299,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 construction. Where representable, the kwargs hash
                 is validated; non-representable kwargs (e.g. those
                 containing icet `ClusterSpace`) skip the check.
+            allow_kwargs_mismatch: when True, an ``ensemble_kwargs`` hash
+                mismatch is downgraded from a hard error to a `UserWarning`.
+                Only the kwargs-identity check is relaxed; CE identity and
+                ``ensemble_cls`` remain enforced. Use when resuming across
+                software environments where the pickle of identical move
+                objects differs; bit-identical continuation is not
+                guaranteed.
 
         Raises:
             FileNotFoundError: ``path`` does not exist.
@@ -339,7 +347,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 f"{meta['ensemble_cls_fqn']!r}; resume was called "
                 f"with {expected_ensemble_fqn!r}."
             )
-        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
+        _validate_kwargs_hash(
+            path,
+            meta,
+            ensemble_kwargs,
+            "resume",
+            allow_mismatch=allow_kwargs_mismatch,
+        )
 
         orchestrator_state = _read_orchestrator_state(path)
         replica_extras = _read_replica_extra(path)
@@ -416,6 +430,7 @@ class CanonicalParallelTempering(BaseParallelTempering):
         cluster_expansion: ClusterExpansion,
         ensemble_cls: type[CanonicalEnsemble] = CanonicalEnsemble,
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
     ) -> CanonicalParallelTempering:
         """Resume a checkpointed canonical PT run into a `ProcessPool`.
 
@@ -430,6 +445,13 @@ class CanonicalParallelTempering(BaseParallelTempering):
         only.
 
         See `resume` for argument and error semantics.
+
+        Set ``allow_kwargs_mismatch=True`` to downgrade an
+        ``ensemble_kwargs`` hash mismatch from a hard error to a
+        `UserWarning`; only the kwargs-identity check is relaxed (CE
+        identity and ``ensemble_cls`` stay enforced). For resuming across
+        software environments where the pickle of identical move objects
+        differs; bit-identical continuation is not guaranteed.
         """
         import json
 
@@ -466,7 +488,11 @@ class CanonicalParallelTempering(BaseParallelTempering):
                 f"was called with {expected_ensemble_fqn!r}."
             )
         _validate_kwargs_hash(
-            path, meta, ensemble_kwargs, "resume_process_pool"
+            path,
+            meta,
+            ensemble_kwargs,
+            "resume_process_pool",
+            allow_mismatch=allow_kwargs_mismatch,
         )
 
         orchestrator_state = _read_orchestrator_state(path)
