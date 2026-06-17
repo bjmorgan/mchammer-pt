@@ -134,6 +134,7 @@ def _validate_kwargs_hash(
     meta: dict[str, MetaValue],
     ensemble_kwargs: Mapping[str, Any] | None,
     caller: str,
+    allow_mismatch: bool = False,
 ) -> None:
     """Resume-side guard for the ensemble-kwargs hash.
 
@@ -143,16 +144,36 @@ def _validate_kwargs_hash(
     cannot enforce identity — emit a `UserWarning` rather than
     silently skipping, so a user resuming with materially different
     kwargs sees a signal that bit-identical resume isn't guaranteed.
+
+    When ``allow_mismatch`` is True, a real mismatch is downgraded from a
+    hard error to a `UserWarning` and execution proceeds; the sentinel
+    (unhashable) case is unchanged. This backs the ``allow_kwargs_mismatch``
+    flag on the resume/measure entry points, for continuing a run across
+    software environments where the pickle of identical move objects
+    differs.
     """
     expected = _compute_ensemble_kwargs_hash(ensemble_kwargs)
     saved = meta.get("ensemble_kwargs_hash", "")
     if expected and saved and expected != saved:
-        raise ValueError(
-            f"{path}: ensemble_kwargs hash mismatch. {caller} was "
-            f"called with kwargs that hash differently from the "
-            f"checkpoint."
+        if not allow_mismatch:
+            raise ValueError(
+                f"{path}: ensemble_kwargs hash mismatch. {caller} was "
+                f"called with kwargs that hash differently from the "
+                f"checkpoint."
+            )
+        warnings.warn(
+            f"{path}: ensemble_kwargs hash mismatch, but {caller} was "
+            f"called with allow_kwargs_mismatch=True, so the "
+            f"kwargs-identity guard is bypassed. Only this check is "
+            f"relaxed; CE identity and ensemble_cls are still enforced. "
+            f"This is intended for resuming across software environments "
+            f"(differing Python, numpy, or platform) where the pickle of "
+            f"identical move objects differs. Bit-identical continuation "
+            f"is not guaranteed.",
+            UserWarning,
+            stacklevel=3,
         )
-    if not expected or not saved:
+    elif not expected or not saved:
         side = "the supplied" if not expected else "the checkpoint's"
         warnings.warn(
             f"{path}: {side} ensemble_kwargs are not stably "
