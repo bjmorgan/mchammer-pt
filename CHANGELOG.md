@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Frozen-g observable measurement for Wang-Landau parallel tempering: a
+  production pass that holds a converged density of states fixed and records
+  the microcanonical average <O>(E) of forwarded observers per energy bin,
+  then reweights it to canonical <O>(T), <O^2>(T), and the Binder cumulant
+  U(T). Because the phase weights come from g(E) (barrier-free), <O>(T) is
+  unbiased by any inter-phase barrier.
+  - ``WangLandauParallelTempering.measure_from_checkpoint`` and
+    ``measure_from_checkpoint_process_pool`` load a converged checkpoint and
+    return an orchestrator in frozen-g measurement mode (g held fixed, the
+    coordinator off, exchanges on) for the serial and multiprocessing
+    backends respectively. The freeze is implemented by ``frozen_g`` on the
+    ensemble (no density-of-states updates) and ``frozen_measurement`` on the
+    pool (no halving, entropy-merge, or 1/t switch).
+  - ``record_observable(observer)`` attaches an ``mchammer.BaseObserver``
+    whose scalar outputs are accumulated into per-energy-bin moment stores
+    (count, sum, sum^2, sum^4) every ``observer.interval`` steps; several
+    observers can be recorded in one run. The moments round-trip through the
+    replica checkpoints and accumulate across resumes, so a measurement can
+    chain across many jobs. Recording is passive: it does not perturb the
+    Wang-Landau dynamics or g(E).
+  - ``mchammer-pt-stitch-observables``: merges the per-walker moment stores
+    from a measurement checkpoint into one microcanonical-moments CSV per
+    observer tag, summed bin-wise (in-window) onto the g(E) energy grid.
+  - ``mchammer-pt-reweight-observables``: reweights those moments against a
+    stitched g(E) into canonical <O>(T), <O^2>(T), and the Binder cumulant
+    U(T), with a coverage diagnostic that warns when unsampled high-weight
+    energy bins would bias the result.
+
 ## [0.23.0] - 2026-06-15
 
 ### Added
