@@ -39,6 +39,7 @@ REWL-only opcodes (``WangLandauWorker``):
 - ``("FORCE_HALVE",)`` -> ``Reply("OK", ..., None)``
 - ``("SET_PHASE", phase)`` -> ``Reply("OK", ..., None)``
 - ``("FINALISE_MERGE", merged_entropy)`` -> ``Reply("OK", ..., None)``
+- ``("ATTACH_RECORDER", blob)`` -> ``Reply("OK", ..., None)``
 
 Every reply is a ``Reply(status, op, payload)`` named tuple.
 ``status`` is ``"OK"``, ``"ERR_PICKLE"`` (unpicklable reply;
@@ -260,6 +261,7 @@ class WangLandauWorker(BaseWorker):
             "FORCE_HALVE": self._handle_force_halve,
             "SET_PHASE": self._handle_set_phase,
             "FINALISE_MERGE": self._handle_finalise_merge,
+            "ATTACH_RECORDER": self._handle_attach_recorder,
         })
 
     @classmethod
@@ -352,6 +354,17 @@ class WangLandauWorker(BaseWorker):
         merged = cmd[1]
         self._replica.ensemble._entropy = dict(merged)
         self._replica.refresh_last_state()
+        self._reply(None)
+
+    def _handle_attach_recorder(self, cmd: tuple[Any, ...]) -> None:
+        """Deserialise an observer blob and install it as a per-bin recorder.
+
+        Calls ``replica.record_observable`` on the deserialised copy so
+        the recorder is restore-aware: if a prior checkpoint stored a
+        state for this observer's tag, the recorder seeds from it.
+        """
+        observer = pickle.loads(cmd[1])
+        self._replica.record_observable(observer)
         self._reply(None)
 
 

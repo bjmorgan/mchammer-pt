@@ -122,6 +122,7 @@ class WLBuilder:
     recency_visits_per_bin: int
     dos_snapshot_ratio: float | None
     one_over_t_entry: OneOverTEntry = "window_clock"
+    frozen_g: bool = False
 
     def build(self) -> WangLandauReplica:
         """Construct the replica from the configured inputs.
@@ -131,6 +132,9 @@ class WLBuilder:
         :class:`WangLandauReplica` constructor.
         """
         ce = ClusterExpansion.read(self.ce_path)
+        ensemble_kwargs = dict(self.ensemble_kwargs)
+        if self.frozen_g:
+            ensemble_kwargs["frozen_g"] = True
         return WangLandauReplica(
             cluster_expansion=ce,
             atoms=self.atoms.to_atoms(),
@@ -139,7 +143,7 @@ class WLBuilder:
             energy_limit_right=self.energy_limit_right,
             random_seed=self.seed,
             ensemble_cls=self.ensemble_cls,
-            ensemble_kwargs=self.ensemble_kwargs,
+            ensemble_kwargs=ensemble_kwargs,
             recency_visits_per_bin=self.recency_visits_per_bin,
             dos_snapshot_ratio=self.dos_snapshot_ratio,
             one_over_t_entry=self.one_over_t_entry,

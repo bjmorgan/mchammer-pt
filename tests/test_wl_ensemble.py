@@ -5,26 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
-
-
-def _make_ensemble(**kwargs):
-    """Construct a CoordinatedWangLandauEnsemble on the toy CE fixture."""
-    from mchammer.calculators import ClusterExpansionCalculator
-
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
-
-    ce, atoms = make_wl_ce(), make_wl_atoms()
-    return CoordinatedWangLandauEnsemble(
-        structure=atoms,
-        calculator=ClusterExpansionCalculator(atoms, ce),
-        energy_spacing=0.1,
-        energy_limit_left=None,
-        energy_limit_right=None,
-        random_seed=0,
-        dc_filename=None,
-        **kwargs,
-    )
+from tests._wl_fixtures import make_wl_ensemble as _make_ensemble
 
 
 def test_update_entropy_does_not_halve_on_synthetic_flat_histogram():

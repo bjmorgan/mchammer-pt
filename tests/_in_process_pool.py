@@ -105,6 +105,8 @@ def make_in_process_wl_pool(
     one_over_t_gate: str = "visit_once",
     bp_stall_multiple: float = 4.0,
     one_over_t_entry: str = "window_clock",
+    frozen_g: bool = False,
+    frozen_measurement: bool = False,
 ) -> ProcessWangLandauPool:
     """Build a :class:`ProcessWangLandauPool` whose workers are in-process conns.
 
@@ -136,6 +138,8 @@ def make_in_process_wl_pool(
     pool._one_over_t_gate = one_over_t_gate  # type: ignore[assignment]
     pool._bp_stall_multiple = bp_stall_multiple
     pool._one_over_t_entry = one_over_t_entry  # type: ignore[assignment]
+    pool._frozen_measurement = frozen_measurement
+    pool._frozen_g = frozen_g
     pool._merge_events = []
     pool._flatness_limit = flatness_limit
     pool._windows = list(windows)
@@ -156,6 +160,9 @@ def make_in_process_wl_pool(
             ]
             rng_seed = int(children[W_w].generate_state(1)[0])
         workers: list[Any] = []
+        replica_kwargs = dict(extra_kwargs)
+        if frozen_g:
+            replica_kwargs["frozen_g"] = True
         for w_seed in walker_seeds:
             replica = WangLandauReplica(
                 cluster_expansion=ce,
@@ -165,7 +172,7 @@ def make_in_process_wl_pool(
                 energy_limit_right=hi,
                 random_seed=int(w_seed),
                 ensemble_cls=CoordinatedWangLandauEnsemble,
-                ensemble_kwargs=extra_kwargs,
+                ensemble_kwargs=replica_kwargs,
                 cluster_expansion_path=str(ce_path),
             )
             conn = InProcessWorkerConn(replica)

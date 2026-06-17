@@ -790,6 +790,13 @@ class ProcessWangLandauPool:
             replica (see WangLandauParallelTempering). Selecting
             ``"f_continuous"`` without
             ``ensemble_kwargs={"schedule": "1_over_t"}`` raises.
+        frozen_measurement: if ``True``, ``advance_all`` fans out
+            ``ADVANCE`` to all workers as normal (so walkers accumulate
+            MC steps and observables) but the master-side coordinator
+            decisions (halving, entropy-merge, phase-switch) are skipped.
+            Every walker's g(E) is left untouched. Intended for
+            post-convergence measurement passes where the density of
+            states must not change. Default ``False``.
     """
 
     def __init__(
@@ -812,8 +819,12 @@ class ProcessWangLandauPool:
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
         one_over_t_entry: OneOverTEntry = "window_clock",
+        frozen_measurement: bool = False,
+        frozen_g: bool = False,
     ) -> None:
         _check_importable(ensemble_cls, kind="ensemble_cls")
+        self._frozen_measurement: bool = frozen_measurement
+        self._frozen_g: bool = frozen_g
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
@@ -922,6 +933,7 @@ class ProcessWangLandauPool:
                             recency_visits_per_bin=self._recency_visits_per_bin,
                             dos_snapshot_ratio=self._dos_snapshot_ratio,
                             one_over_t_entry=self._one_over_t_entry,
+                            frozen_g=frozen_g,
                         )
                         process = ctx.Process(
                             target=_wl_worker,
@@ -1074,6 +1086,14 @@ class ProcessWangLandauPool:
                 walker_addrs, payloads, strict=True
             ):
                 slot.walker_states[w] = payload
+
+            # Frozen mode: workers advance but the master coordinator does not
+            # run — no halving, entropy-merge, or phase-switch. g(E) is held
+            # fixed because worker ensembles are constructed with frozen_g=True
+            # (set via WLBuilder in measurement mode); frozen_measurement only
+            # gates the master-side decisions here.
+            if self._frozen_measurement:
+                return
 
             # DECIDE: per-slot coordinator decisions; no IPC.
             views = [_view_of(slot) for slot in self._slots]
@@ -1682,6 +1702,54 @@ class ProcessWangLandauPool:
             self._recv_or_abort_attach(
                 conn, "ATTACH_OBS_FACTORY", label, remaining
             )
+
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Mirrors ``attach_observer`` for the recorder path. Each selected
+        worker receives its own deserialised copy of ``observer`` via a
+        pickle round-trip; the worker installs it via
+        ``replica.record_observable`` so the recorder is restore-aware.
+        The parent eagerly validates picklability before contacting any
+        worker.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+            replicas: ``"all"`` or an explicit sequence of window indices.
+
+        Raises:
+            TypeError: if ``observer`` is not picklable.
+            RuntimeError: if the pool is shut down, or a worker raises while
+                attaching. This includes the duplicate-tag/signature-mismatch
+                ``ValueError`` that the serial pool raises directly: the
+                attach runs in the worker process, so that error is
+                re-surfaced here as a ``RuntimeError`` carrying the worker
+                traceback.
+        """
+        self._check_open()
+        target_indices = _resolve_replicas(replicas, len(self._slots))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc})"
+            ) from exc
+        targets: list[tuple[str, Connection]] = []
+        for i in target_indices:
+            for w, (_, conn) in enumerate(self._slots[i].workers):
+                conn.send(("ATTACH_RECORDER", blob))
+                targets.append((f"window {i} walker {w}", conn))
+        for offset, (label, conn) in enumerate(targets):
+            remaining = [c for _, c in targets[offset + 1:]]
+            self._recv_or_abort_attach(conn, "ATTACH_RECORDER", label, remaining)
 
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one REWL worker.

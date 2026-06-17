@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
+from mchammer.observers.base_observer import BaseObserver
+
+from mchammer_pt.wl_observable_recorder import EnergyBinnedObservableRecorder
 
 
 def _validate_recency_visits_per_bin(value: object) -> int:
@@ -79,6 +82,25 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     fill-factor rung ladder, leaving the halving history to the
     coordinator. ``dos_snapshot_ratio`` sets the ladder ratio (``None``
     disables); ``2.0`` snapshots each time ``f`` halves.
+
+    Args:
+        recency_visits_per_bin: EWMA recency window width in units of
+            visits-per-bin. The decay rate is ``1 / (N *
+            recency_visits_per_bin)`` where ``N`` is the current known
+            bin count, so the effective averaging window grows with the
+            number of discovered bins.
+        dos_snapshot_ratio: ratio of the fill-factor ladder used to
+            record 1/t-regime DOS snapshots. ``None`` disables
+            snapshotting; ``2.0`` (default) records a snapshot each
+            time ``f`` halves.
+        frozen_g: when ``True``, ``_update_entropy`` holds ``_entropy``,
+            ``_histogram``, and ``_fill_factor`` fixed for the duration
+            of the run. The converged density of states is the sampling
+            bias; nothing about it is mutated. The acceptance criterion
+            still reads the frozen ``_entropy``, so the walk remains
+            flat-in-energy without further DOS accumulation. Intended
+            for observable-measurement passes after WL convergence.
+            Defaults to ``False``.
     """
 
     def __init__(
@@ -86,11 +108,18 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         *args: Any,
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
+        frozen_g: bool = False,
         **kwargs: Any,
     ) -> None:
         recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
         ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
         super().__init__(*args, **kwargs)
+        # When True, ``_update_entropy`` skips all DOS-mutating writes so
+        # ``_entropy``, ``_histogram``, and ``_fill_factor`` are held
+        # fixed for the duration of the run.  The acceptance criterion
+        # still reads the frozen ``_entropy``, keeping the walk
+        # flat-in-energy.
+        self._frozen_g: bool = frozen_g
         # Bins the walker has reached via `_update_entropy` since
         # window entry. Populated only by that method (guarded on
         # `_reached_energy_window`).
@@ -120,6 +149,109 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         # policy, and walkers restored from checkpoints carrying no
         # origin) falls back to `_window_entry_step`.
         self._one_over_t_origin_step: int | None = None
+        # Tag-keyed energy-binned observable recorders. Driven from the
+        # `_run` override after each trial step (post-`update_occupations`),
+        # gated on `_reached_energy_window` and each recorder's `interval`.
+        self._recorders: dict[str, EnergyBinnedObservableRecorder] = {}
+        # Stores restored from a checkpoint that have not yet been
+        # re-attached via `attach_observable_recorder`. Populated by
+        # `WangLandauReplica.restore_state`; entries are consumed (popped)
+        # when the matching observer is re-attached. Any entries still
+        # present at `refresh_last_state` time are written back into the
+        # checkpoint unchanged, so unbound stores are never dropped.
+        self._restored_observable_records: dict[str, dict[str, Any]] = {}
+
+    def attach_observable_recorder(self, observer: BaseObserver) -> None:
+        """Attach an observer whose scalar outputs are accumulated per energy bin.
+
+        The observer is wrapped in an :class:`EnergyBinnedObservableRecorder`
+        and stored keyed by its tag. Recording is driven from the ``_run``
+        override after each trial step (post-``update_occupations``), gated
+        on ``self._reached_energy_window`` and ``observer.interval``.
+
+        If a restored store for this tag exists in
+        ``_restored_observable_records`` (populated by
+        ``WangLandauReplica.restore_state``), the recorder is seeded from
+        that store via :meth:`EnergyBinnedObservableRecorder.from_state`,
+        which validates the observer's signature against the stored one and
+        raises ``ValueError`` on disagreement. The store entry is consumed
+        so it is not written back as unbound on the next checkpoint.
+
+        Args:
+            observer: Any ``mchammer.BaseObserver`` subclass whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+
+        Raises:
+            ValueError: if ``observer.interval`` is ``None``; if an observer
+                with the same tag is already attached; or if a restored store
+                for the tag has an incompatible signature.
+        """
+        if observer.interval is None:
+            raise ValueError(
+                f"observer {observer.tag!r} has interval=None; set a concrete "
+                "interval (in MC trial steps) for measurement recording. "
+                "mchammer's attach_observer resolves None to len(structure), "
+                "but the energy-binned recorder needs an explicit cadence."
+            )
+        tag = observer.tag
+        if tag in self._recorders:
+            raise ValueError(
+                f"an observable recorder with tag {tag!r} is already attached; "
+                "use a distinct tag for each observer"
+            )
+        if tag in self._restored_observable_records:
+            self._recorders[tag] = EnergyBinnedObservableRecorder.from_state(
+                self._restored_observable_records.pop(tag), observer
+            )
+        else:
+            self._recorders[tag] = EnergyBinnedObservableRecorder(observer)
+
+    def _run(self, number_of_trial_steps: int) -> None:
+        """Run for ``number_of_trial_steps``, driving recorders after each step.
+
+        Overrides the parent loop to fire per-bin observable recorders
+        immediately after ``_do_trial_step`` returns. At that point
+        ``configuration.structure`` is always consistent with
+        ``_potential``: accepted moves have already called
+        ``update_occupations``; rejected moves leave both unchanged.
+
+        Recorders are driven inside ``_run`` rather than inside
+        ``_do_trial_step`` because recording must happen after
+        ``update_occupations`` has committed the accepted move.
+        ``_update_entropy`` (which updates the energy and bin) runs inside
+        ``_acceptance_condition``, before ``update_occupations``: at that
+        point the bin is already updated but the structure is not, so
+        pairing them would record the new bin against the pre-move
+        structure. ``_run`` is the per-step seam where both are
+        guaranteed to be consistent. A cooperative ``_do_trial_step``
+        override would also be correct, but hooking in ``_run`` keeps the
+        ``_do_trial_step`` slot untouched and centralises recording in one
+        place.
+        """
+        # Mirrors mchammer BaseEnsemble._run (loop + _step/_accepted_trials
+        # counters only); recording is inserted per-step here.
+        # Re-check this override if upstream _run gains other per-step work.
+        for _ in range(number_of_trial_steps):
+            # Capture the step value used inside this trial step BEFORE
+            # the increment that `_run` is responsible for.
+            step_at_call = int(self._step)
+            accepted = self._do_trial_step()
+            self._step += 1
+            self._accepted_trials += accepted
+            # Drive recorders once the step is complete and the structure
+            # is consistent with ``_potential``. Recording is orthogonal to
+            # ``frozen_g`` and runs in both modes.
+            if self._reached_energy_window and self._recorders:
+                due = [
+                    rec
+                    for rec in self._recorders.values()
+                    if step_at_call % rec.interval == 0
+                ]
+                if due:
+                    bin_cur = self._get_bin_index(self._potential)
+                    structure = self.configuration.structure
+                    for rec in due:
+                        rec.record(structure, bin_cur)
 
     def _update_entropy(self, bin_cur: int) -> None:
         # ``_window_entry_step`` is inherited from upstream's
@@ -134,29 +266,31 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             self._window_entry_step = self.step
             entry = self.step
 
-        if self._phase == "1_over_t":
-            origin = self._one_over_t_origin_step
-            if origin is None:
-                # Window-entry clock. By construction,
-                # ``_phase == '1_over_t'`` only after
-                # ``_window_entry_step`` has been set (the coordinator
-                # flips the phase post-entry). Narrow for the type
-                # checker.
-                origin = cast(int, entry)
-            t = self.step - origin + 1
-            self._fill_factor = 1.0 / t
+        if not self._frozen_g:
+            if self._phase == "1_over_t":
+                origin = self._one_over_t_origin_step
+                if origin is None:
+                    # Window-entry clock. By construction,
+                    # ``_phase == '1_over_t'`` only after
+                    # ``_window_entry_step`` has been set (the coordinator
+                    # flips the phase post-entry). Narrow for the type
+                    # checker.
+                    origin = cast(int, entry)
+                t = self.step - origin + 1
+                self._fill_factor = 1.0 / t
 
-        self._entropy[bin_cur] = (
-            self._entropy.get(bin_cur, 0) + self._fill_factor
-        )
-        self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
+            self._entropy[bin_cur] = (
+                self._entropy.get(bin_cur, 0) + self._fill_factor
+            )
+            self._histogram[bin_cur] = self._histogram.get(bin_cur, 0) + 1
 
         if self._reached_energy_window:
             self._visited_bins.add(bin_cur)
             self._record_recency_visit(bin_cur, int(self.step))
 
         if (
-            self.step > 0
+            not self._frozen_g
+            and self.step > 0
             and self.step % self._flatness_check_interval == 0
             and self._reached_energy_window
         ):
@@ -165,7 +299,8 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
                 self._entropy[k] -= ref
 
         if (
-            self._phase == "1_over_t"
+            not self._frozen_g
+            and self._phase == "1_over_t"
             and self._dos_snapshot_ratio is not None
         ):
             rung = self._snapshot_rung(self._fill_factor)

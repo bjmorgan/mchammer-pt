@@ -280,6 +280,19 @@ class SerialWangLandauPool:
     `SerialPool` (`attach_observer`, `attach_observer_class`,
     `attach_observer_factory`, `get_observers`) is exposed so users
     can record per-step observables during a REWL run.
+
+    Args:
+        replicas: the per-window Wang-Landau slot instances.
+        energy_spacing: bin width shared across all replicas.
+        flatness_mode: ``"pooled"`` or ``"per_walker"`` halving gate.
+        merge_cadence: ``"at_halve"`` or ``"never"`` entropy-merge cadence.
+        one_over_t_gate: gate controlling entry into the 1/t phase.
+        bp_stall_multiple: stall-escape multiple for the BP switch.
+        frozen_measurement: if ``True``, ``advance_all`` advances all
+            walkers as normal but skips the coordinator (no halving,
+            no entropy-merge, no phase-switch). Every walker's g(E)
+            is left untouched. Intended for post-convergence measurement
+            passes. Default ``False``.
     """
 
     def __init__(
@@ -291,9 +304,11 @@ class SerialWangLandauPool:
         merge_cadence: MergeCadence = "at_halve",
         one_over_t_gate: OneOverTGate = "visit_once",
         bp_stall_multiple: float = 4.0,
+        frozen_measurement: bool = False,
     ) -> None:
         self._replicas: list[WangLandauSlot] = list(replicas)
         self._energy_spacing = float(energy_spacing)
+        self._frozen_measurement: bool = frozen_measurement
         _validate_flatness_mode(flatness_mode)
         _validate_merge_cadence(merge_cadence)
         _validate_one_over_t_gate(one_over_t_gate)
@@ -431,6 +446,11 @@ class SerialWangLandauPool:
         # its walker_states from live ensemble state.
         for slot in self._replicas:
             slot.advance(n_steps)
+
+        # Frozen mode: walkers advance but the coordinator does not run.
+        # No halving, entropy-merge, or phase-switch; g(E) is untouched.
+        if self._frozen_measurement:
+            return
 
         # DECIDE: per-slot coordinator decisions; pure-Python, no IPC.
         views = [
@@ -645,6 +665,41 @@ class SerialWangLandauPool:
             return
         for i in target_indices:
             self._replicas[i].attach_observer_factory(factory)
+
+    def record_observable(
+        self,
+        observer: BaseObserver,
+        replicas: Sequence[int] | Literal["all"] = "all",
+    ) -> None:
+        """Attach an observer for per-bin microcanonical moment accumulation.
+
+        Mirrors ``attach_observer``: each selected window receives its own
+        deserialised copy of ``observer`` via a pickle round-trip (for W>1
+        slots each walker gets its own independent copy). The observer is
+        installed via ``replica.record_observable``, which is restore-aware.
+
+        Args:
+            observer: any ``mchammer.BaseObserver`` whose
+                ``get_observable`` returns a scalar, sequence, or Mapping.
+            replicas: ``"all"`` or an explicit sequence of window indices.
+
+        Raises:
+            TypeError: if ``observer`` is not picklable.
+            ValueError: if a recorder for this tag is already attached, or
+                if a restored state for the tag has an incompatible signature.
+        """
+        target_indices = _resolve_replicas(replicas, len(self._replicas))
+        if not target_indices:
+            return
+        try:
+            blob = pickle.dumps(observer)
+        except Exception as exc:
+            raise TypeError(
+                f"observer of type {type(observer).__name__} is not "
+                f"picklable ({exc})"
+            ) from exc
+        for i in target_indices:
+            self._replicas[i].record_observable(pickle.loads(blob))
 
     def get_observers(self, replica_index: int) -> dict[str, BaseObserver]:
         """Return a snapshot of the observers attached to one WL replica.
