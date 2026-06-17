@@ -141,14 +141,13 @@ def _collect_moments_from_checkpoint(
 ) -> list[dict[str, Any]]:
     """Read ``observable_records[tag]`` from each replica in a checkpoint.
 
-    After ``save_checkpoint``, each replica's ``_last_state`` carries
-    ``observable_records`` written by ``refresh_last_state``. This
-    helper reads those dicts by loading the checkpoint, restoring
-    replicas, and reading ``_restored_observable_records`` (populated
-    by ``restore_state`` before any observer is re-attached).
+    Calls ``read_hdf5`` to deserialise the checkpoint, then extracts the
+    ``observable_records`` dict from each returned container's
+    ``_last_state``. No replicas are restored; the data are read
+    directly from the serialised container state.
 
     Args:
-        ckpt: path to a checkpoint file.
+        ckpt: Path to a checkpoint file.
         tag: The recorder tag to retrieve.
 
     Returns:
@@ -305,8 +304,9 @@ class TestMultipleRecorders:
         so the per-bin mean is exact. The count ratio fast/slow converges
         to ``INTERVAL_SLOW / INTERVAL_FAST = 4`` because the fast recorder
         fires 4x as often as the slow one within any given sequence of
-        steps. A ±50 % tolerance accommodates integer rounding and
-        in-window gating.
+        steps. The ±2x band is intentionally wide: it rules out the
+        degenerate case where intervals are ignored (ratio ≈ 1) while
+        tolerating small-sample variance in a short run.
         """
         converged, ce = _make_converged_checkpoint(tmp_path, seed=2)
 
@@ -325,16 +325,18 @@ class TestMultipleRecorders:
         slow_total = sum(sum(m.get("count", [])) for m in slow_moments)
 
         assert fast_total > 0, "fast recorder must accumulate at least one observation"
+        assert slow_total > 0, "slow recorder must accumulate at least one observation"
 
-        # If slow_total is zero (slow interval wider than any bin's visit count
-        # in this tiny run), the ratio test is vacuous; skip it.
-        if slow_total > 0:
-            ratio = fast_total / slow_total
-            expected = self._INTERVAL_SLOW / self._INTERVAL_FAST
-            assert expected * 0.5 <= ratio <= expected * 2.0, (
-                f"fast/slow count ratio {ratio:.2f} not in [0.5x, 2x] of "
-                f"expected {expected}; intervals may not be respected"
-            )
+        # The ±2x band is intentionally wide: it rules out the degenerate
+        # case where intervals are ignored (ratio ≈ 1) while tolerating
+        # small-sample variance in a short run.
+        ratio = fast_total / slow_total
+        expected = self._INTERVAL_SLOW / self._INTERVAL_FAST
+        assert expected * 0.5 <= ratio <= expected * 2.0, (
+            f"fast/slow count ratio {ratio:.2f} outside [0.5x, 2x] of expected "
+            f"{expected}: a near-1 ratio would mean the per-observer intervals "
+            f"are being ignored"
+        )
 
     def test_per_bin_mean_matches_analytic_value(
         self, tmp_path: Path
@@ -357,13 +359,18 @@ class TestMultipleRecorders:
         pt.record_observable(slow)
         pt.run(n_cycles=self._N_CYCLES)
 
+        fast_bins_total = sum(
+            len(m.get("bins", [])) for m in _collect_moments(pt, "fast")
+        )
+        assert fast_bins_total > 0, "fast recorder must populate at least one bin"
+
         for tag, expected_value in [("fast", value_fast), ("slow", value_slow)]:
             moments = _collect_moments(pt, tag)
             for replica_idx, m in enumerate(moments):
                 bins = m.get("bins", [])
                 counts = m.get("count", [])
                 sums = m.get("sum", [])
-                for b, cnt, s in zip(bins, counts, sums, strict=False):
+                for b, cnt, s in zip(bins, counts, sums, strict=True):
                     if cnt == 0:
                         continue
                     # sum stores a 1-element list (scalar observer)
