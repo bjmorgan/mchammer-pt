@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-06-17
+
 ### Added
 
 - Frozen-g observable measurement for Wang-Landau parallel tempering: a
@@ -31,11 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Wang-Landau dynamics or g(E).
   - ``mchammer-pt-stitch-observables``: merges the per-walker moment stores
     from a measurement checkpoint into one microcanonical-moments CSV per
-    observer tag, summed bin-wise (in-window) onto the g(E) energy grid.
+    observer tag, summed bin-wise (in-window) onto the g(E) energy grid, and
+    warns when an observable dropped non-finite observations during recording.
   - ``mchammer-pt-reweight-observables``: reweights those moments against a
     stitched g(E) into canonical <O>(T), <O^2>(T), and the Binder cumulant
     U(T), with a coverage diagnostic that warns when unsampled high-weight
-    energy bins would bias the result.
+    energy bins would bias the result, and a warning when the Binder cumulant
+    is undefined (<O^2>(T) = 0).
 
 ## [0.23.0] - 2026-06-15
 
