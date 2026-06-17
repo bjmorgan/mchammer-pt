@@ -110,8 +110,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     assert ts is not None  # a grid is always returned when err is None
 
-
-
     try:
         dos = pd.read_csv(args.dos_csv)
     except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:

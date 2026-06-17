@@ -51,6 +51,10 @@ def test_frozen_g_entropy_and_fill_factor_unchanged_after_run():
     # something non-trivial to accept/reject against.
     frozen._entropy = dict(g0)
     frozen._fill_factor = f0
+    # Plant a non-trivial histogram too: frozen_g must leave it untouched
+    # (the per-step histogram increment is inside the frozen_g guard).
+    frozen._histogram = {b: 5 for b in g0}
+    histogram_before = dict(frozen._histogram)
 
     frozen.run(2_000)
 
@@ -61,6 +65,10 @@ def test_frozen_g_entropy_and_fill_factor_unchanged_after_run():
     # f must be unchanged (no 1/t recompute, no halving).
     assert frozen._fill_factor == pytest.approx(f0), (
         "frozen_g=True must not mutate _fill_factor during run"
+    )
+    # the histogram must be unchanged (its increment is frozen too).
+    assert frozen._histogram == histogram_before, (
+        "frozen_g=True must not mutate _histogram during run"
     )
 
 

@@ -940,8 +940,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
             pt.run(n_cycles=500)
 
         Args:
-            path: path to a schema-5 checkpoint produced by a completed
-                REWL run.
+            path: path to a checkpoint produced by a completed REWL run
+                (any schema version ``resume`` accepts).
             cluster_expansion: icet ``ClusterExpansion`` used in the
                 original run.
             ensemble_cls: WL ensemble class (default
@@ -986,8 +986,8 @@ class WangLandauParallelTempering(BaseParallelTempering):
         :class:`SerialWangLandauPool`.
 
         Args:
-            path: path to a schema-5 checkpoint produced by a completed
-                REWL run.
+            path: path to a checkpoint produced by a completed REWL run
+                (any schema version ``resume_process_pool`` accepts).
             cluster_expansion: icet ``ClusterExpansion`` used in the
                 original run.
             ensemble_cls: WL ensemble class (default

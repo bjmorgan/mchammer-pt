@@ -96,9 +96,8 @@ class EnergyBinnedObservableRecorder:
         """Current ``(S, names)`` signature.
 
         Returns:
-            A tuple of ``(S, names)`` where S is the number of scalars
-            and ``names`` is a tuple of string labels. Raises
-            ``RuntimeError`` if no observation has been recorded yet.
+            ``(S, names)`` where ``S`` is the number of scalars and
+            ``names`` is a tuple of string labels.
 
         Raises:
             RuntimeError: If the signature has not been determined yet
@@ -129,11 +128,17 @@ class EnergyBinnedObservableRecorder:
                 currently occupies.
 
         Raises:
-            ValueError: If the observation's size or names disagree with
-                the previously established signature.
+            ValueError: If the observation is empty (no scalars), or if its
+                size or names disagree with the previously established
+                signature.
         """
         raw = self._observer.get_observable(structure)
         vals, names_from_obs = _coerce_scalars(raw)
+        if vals.size == 0:
+            raise ValueError(
+                f"observer {self.tag!r} returned no scalars (empty output); an "
+                "energy-binned observable must yield at least one scalar."
+            )
 
         # Determine names: Mapping provides them; otherwise use tag-based defaults.
         if names_from_obs is not None:
@@ -233,9 +238,13 @@ class EnergyBinnedObservableRecorder:
         stored_size = len(stored_names)
 
         if stored_size == 0:
-            # No observations were ever recorded; nothing to seed.
+            # No observations were ever recorded; nothing to seed. Coerce
+            # skipped keys to int identically to the populated branch below
+            # (JSON round-trips integer dict keys to strings).
             rec = cls(observer)
-            rec._skipped = dict(state.get("skipped", {}))
+            rec._skipped = {
+                int(k): int(v) for k, v in state.get("skipped", {}).items()
+            }
             return rec
 
         if len(state["bins"]) != len(state["count"]):

@@ -581,3 +581,39 @@ def test_recorder_rejects_none_interval() -> None:
     ens = make_wl_ensemble()
     with pytest.raises(ValueError, match="interval"):
         ens.attach_observable_recorder(_NoIntervalObserver())
+
+
+class _TwoScalarObs(BaseObserver):
+    """Returns two scalars (S=2), for signature-mismatch testing."""
+
+    def __init__(self, tag: str) -> None:
+        super().__init__(interval=1, return_type=list, tag=tag)
+
+    def get_observable(self, structure: Any) -> list[float]:
+        return [1.0, 2.0]
+
+
+def test_signature_mismatch_through_measure_from_checkpoint(tmp_path: Path) -> None:
+    """Re-attaching a different-signature observer for a tag raises during the run.
+
+    Pins the validation end-to-end through measure_from_checkpoint ->
+    record_observable -> restore: segment 1 records a 1-scalar observer under
+    tag 'obs'; segment 2 re-attaches a 2-scalar observer under the same tag,
+    and the mismatch surfaces at the first record() during the run.
+    """
+    converged, ce = _make_converged_checkpoint(tmp_path, seed=0)
+
+    m1 = WangLandauParallelTempering.measure_from_checkpoint(
+        converged, cluster_expansion=ce
+    )
+    m1.record_observable(_ConstantObs(value=1.0, interval=1, tag="obs"))  # S=1
+    m1.run(n_cycles=2)
+    ckpt = tmp_path / "m1.h5"
+    m1.save_checkpoint(ckpt)
+
+    m2 = WangLandauParallelTempering.measure_from_checkpoint(
+        ckpt, cluster_expansion=ce
+    )
+    m2.record_observable(_TwoScalarObs(tag="obs"))  # S=2, same tag
+    with pytest.raises(ValueError, match="signature"):
+        m2.run(n_cycles=2)

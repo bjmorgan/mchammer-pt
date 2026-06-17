@@ -63,9 +63,11 @@ _RESERVED_ENSEMBLE_KWARGS: frozenset[str] = frozenset(
 # coerce these to strings; the conversion has to be reversed before
 # mchammer's `_restart_ensemble` reads them. Outer keys are bin indices
 # for `histogram`/`entropy` and MC-step indices for the `*_history` /
-# `*_snapshots` maps (whose nested entropy values are bin-indexed too).
-# The history fields mirror what `WangLandauDataContainer.read` coerces
-# upstream; the snapshot fields follow the same convention.
+# `*_snapshots` maps. Only `entropy_history`/`entropy_snapshots` nest a
+# further bin-indexed dict per step; the `fill_factor_*` maps hold one
+# scalar per step. The history fields mirror what
+# `WangLandauDataContainer.read` coerces upstream; the snapshot fields
+# follow the same convention.
 _WL_INT_KEY_FIELDS: frozenset[str] = frozenset(
     {
         "histogram",

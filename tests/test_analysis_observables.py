@@ -500,3 +500,47 @@ class TestSignatureMismatch:
         )
         with pytest.raises(ValueError, match="inconsistent"):
             stitch_observable_moments([dc0, dc1], ENERGY_SPACING)
+
+
+def test_skipped_total_surfaced_in_dataframe_attrs():
+    """Dropped non-finite observations are summed per tag into df.attrs['skipped']."""
+    record = _make_record(
+        tag="obs", names=["obs"],
+        bins=[1, 2], counts=[10, 10],
+        sums=[[1.0], [2.0]], sum2s=[[1.0], [4.0]], sum4s=[[1.0], [16.0]],
+    )
+    record["skipped"] = {0: 3, 1: 2}  # five dropped observations in total
+    dc = _mock_wl_dc(
+        observable_records={"obs": record},
+        energy_spacing=1.0,
+        energy_limit_left=None,
+        energy_limit_right=None,
+    )
+    frames = stitch_observable_moments([dc], 1.0)
+    assert frames["obs"].attrs["skipped"] == 5
+
+
+def test_in_window_filter_is_round_based_at_fractional_edge():
+    """A fractional window edge uses round(hi/spacing), matching the recorder.
+
+    With hi=2.6 and spacing=1.0, round(2.6)=3, so bin 3 (energy 3.0) is
+    in-window even though 3.0 > 2.6; bin 4 is excluded. A raw energy<=hi
+    filter would wrongly drop bin 3 -- a bin the recorder counted.
+    """
+    record = _make_record(
+        tag="obs", names=["obs"],
+        bins=[0, 1, 2, 3, 4], counts=[10, 10, 10, 10, 10],
+        sums=[[0.0], [1.0], [2.0], [3.0], [4.0]],
+        sum2s=[[0.0], [1.0], [4.0], [9.0], [16.0]],
+        sum4s=[[0.0], [1.0], [16.0], [81.0], [256.0]],
+    )
+    dc = _mock_wl_dc(
+        observable_records={"obs": record},
+        energy_spacing=1.0,
+        energy_limit_left=None,
+        energy_limit_right=2.6,
+    )
+    df = stitch_observable_moments([dc], 1.0)["obs"]
+    energies = df["energy"].tolist()
+    assert 3.0 in energies  # round(2.6)=3 -> bin 3 kept (round-based)
+    assert 4.0 not in energies  # bin 4 > round(2.6)=3 -> excluded

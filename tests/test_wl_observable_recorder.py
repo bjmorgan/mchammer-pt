@@ -397,3 +397,56 @@ def test_from_state_names_mismatch_same_size_raises(atoms: Atoms) -> None:
     restored = EnergyBinnedObservableRecorder.from_state(state, _AltDictObserver())
     with pytest.raises(ValueError, match="signature"):
         restored.record(atoms, bin_index=0)
+
+
+class _EmptyObserver(BaseObserver):
+    """Returns an empty sequence -- a degenerate, no-scalar observable."""
+
+    def __init__(self, tag: str = "empty") -> None:
+        super().__init__(interval=1, return_type=list, tag=tag)
+
+    def get_observable(self, structure: Any) -> list[float]:
+        return []
+
+
+def test_record_empty_observation_raises(atoms: Atoms) -> None:
+    """An observer yielding no scalars is rejected, not silently dropped."""
+    rec = EnergyBinnedObservableRecorder(_EmptyObserver())
+    with pytest.raises(ValueError, match="no scalars"):
+        rec.record(atoms, bin_index=0)
+
+
+def test_from_state_corrupt_bins_count_mismatch_raises() -> None:
+    """from_state rejects a state whose bins and count lengths disagree."""
+    corrupt = {
+        "tag": "sumobs",
+        "names": ["sumobs"],
+        "interval": 1,
+        "bins": [0, 1],
+        "count": [3],  # length 1, but two bins
+        "sum": [[1.0], [2.0]],
+        "sum2": [[1.0], [4.0]],
+        "sum4": [[1.0], [16.0]],
+        "skipped": {},
+    }
+    with pytest.raises(ValueError, match="corrupt"):
+        EnergyBinnedObservableRecorder.from_state(corrupt, _SumObserver())
+
+
+def test_from_state_empty_store_round_trips_and_coerces_skipped() -> None:
+    """A never-recorded store (S=0) restores cleanly; skipped keys coerce to int."""
+    empty_state = {
+        "tag": "empty",
+        "names": [],
+        "interval": 1,
+        "bins": [],
+        "count": [],
+        "sum": [],
+        "sum2": [],
+        "sum4": [],
+        "skipped": {"7": 2},  # str key, as JSON round-trips integer keys
+    }
+    rec = EnergyBinnedObservableRecorder.from_state(empty_state, _EmptyObserver())
+    state = rec.to_state()
+    assert state["bins"] == []
+    assert state["skipped"] == {7: 2}  # coerced to int, matching the populated branch

@@ -1724,7 +1724,12 @@ class ProcessWangLandauPool:
 
         Raises:
             TypeError: if ``observer`` is not picklable.
-            RuntimeError: if the pool is shut down or a worker raises.
+            RuntimeError: if the pool is shut down, or a worker raises while
+                attaching. This includes the duplicate-tag/signature-mismatch
+                ``ValueError`` that the serial pool raises directly: the
+                attach runs in the worker process, so that error is
+                re-surfaced here as a ``RuntimeError`` carrying the worker
+                traceback.
         """
         self._check_open()
         target_indices = _resolve_replicas(replicas, len(self._slots))

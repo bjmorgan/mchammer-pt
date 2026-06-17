@@ -313,3 +313,27 @@ def test_main_csv_columns_correct_for_s2_observer(tmp_path, monkeypatch):
     assert "b_sum" in df.columns
     assert "b_sum2" in df.columns
     assert "b_sum4" in df.columns
+
+
+def test_main_warns_on_skipped_observations(tmp_path, monkeypatch, capsys):
+    """The CLI warns to stderr when an observable dropped non-finite samples."""
+    record = _make_record(
+        tag="energy", names=["energy"],
+        bins=[0, 1], counts=[5, 5],
+        sums=[[1.0], [2.0]], sum2s=[[1.0], [4.0]], sum4s=[[1.0], [16.0]],
+    )
+    record["skipped"] = {0: 4}  # four dropped non-finite observations
+    dc = _mock_wl_dc(
+        observable_records={"energy": record},
+        energy_spacing=1.0,
+        energy_limit_left=None,
+        energy_limit_right=None,
+    )
+    monkeypatch.setattr(
+        "mchammer_pt.cli.stitch_observables.read_hdf5",
+        lambda _: (None, [dc], {"energy_spacing": 1.0}),
+    )
+    rc = main([str(tmp_path / "run.h5"), "-o", str(tmp_path / "skip_out")])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "dropped 4" in err

@@ -159,3 +159,26 @@ def test_no_overlapping_bins_raises():
     mom = _moments([5.0], [10], 1.0, 1.0, 1.0)  # bin 5 absent from the DOS
     with pytest.raises(ValueError, match="no overlapping"):
         reweight_observables(mom, dos, T)
+
+
+def test_no_coverage_warning_when_fully_covered(recwarn):
+    """With every finite-g bin sampled, the coverage warning does not fire."""
+    energies = [0.0, 1.0, 2.0]
+    dos = pd.DataFrame({"energy": energies, "entropy": [0.0, 0.0, 0.0]})
+    mom = _moments(energies, [10, 10, 10], mean=1.0, sq_mean=1.0, quartic_mean=1.0)
+
+    out = reweight_observables(mom, dos, T)
+
+    assert np.allclose(out["coverage"], 1.0)
+    assert not [w for w in recwarn if "coverage" in str(w.message)]
+
+
+def test_binder_nan_warns_on_zero_variance():
+    """An identically-zero observable yields a NaN Binder and a warning."""
+    energies = [0.0, 1.0]
+    dos = pd.DataFrame({"energy": energies, "entropy": [0.0, 0.0]})
+    mom = _moments(energies, [10, 10], mean=0.0, sq_mean=0.0, quartic_mean=0.0)
+
+    with pytest.warns(UserWarning, match="Binder"):
+        out = reweight_observables(mom, dos, T)
+    assert np.isnan(out["m_binder"]).all()

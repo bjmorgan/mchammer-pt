@@ -134,12 +134,17 @@ def _merge_tag(
     total_sum2: dict[int, np.ndarray] = defaultdict(lambda: np.zeros(s))
     total_sum4: dict[int, np.ndarray] = defaultdict(lambda: np.zeros(s))
 
+    total_skipped = 0
     for state, (lo, hi) in walker_stores:
         bins: list[int] = list(state.get("bins", []))
         counts: list[int] = list(state.get("count", []))
         sums: list[list[float]] = list(state.get("sum", []))
         sum2s: list[list[float]] = list(state.get("sum2", []))
         sum4s: list[list[float]] = list(state.get("sum4", []))
+        # Non-finite observations the recorder dropped (in-window by
+        # construction). Surfaced via the DataFrame's ``skipped`` attr so a
+        # flaky observer does not silently bias <O>(E) without a trace.
+        total_skipped += sum(int(v) for v in state.get("skipped", {}).values())
 
         # Window membership by bin index (round-based), matching icet's
         # `_inside_energy_window` and hence the bins the recorder actually
@@ -174,7 +179,9 @@ def _merge_tag(
         rows[f"{name}_sum2"] = [float(total_sum2[b][i]) for b in populated_bins]
         rows[f"{name}_sum4"] = [float(total_sum4[b][i]) for b in populated_bins]
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df.attrs["skipped"] = total_skipped
+    return df
 
 
 def _infer_spacing(energies: np.ndarray) -> float:
@@ -300,6 +307,15 @@ def reweight_observables(
             o2_t = (w_cov * o2[:, None]).sum(axis=0) / Z_cov
             o4_t = (w_cov * o4[:, None]).sum(axis=0) / Z_cov
             binder = 1.0 - o4_t / (3.0 * o2_t**2)
+            zero_var = o2_t == 0.0
+            if zero_var.any():
+                warnings.warn(
+                    f"Binder cumulant for {name!r} is undefined (NaN) at "
+                    f"temperature(s) {T_arr[zero_var].tolist()} K, where "
+                    f"<O^2>(T) = 0 (the observable has no fluctuations over "
+                    f"the sampled energy range).",
+                    stacklevel=2,
+                )
             out[f"{name}_mean"] = o1_t
             out[f"{name}_sq_mean"] = o2_t
             out[f"{name}_binder"] = binder

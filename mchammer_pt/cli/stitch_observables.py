@@ -121,6 +121,14 @@ def main(argv: list[str] | None = None) -> int:
         path = outdir / f"{tag}.csv"
         df.to_csv(path, index=False)
         print(f"wrote {path} ({len(df)} rows) for observable {tag!r}")
+        skipped = int(df.attrs.get("skipped", 0))
+        if skipped:
+            print(
+                f"warning: observable {tag!r} dropped {skipped} non-finite "
+                f"observation(s) during recording; they are excluded from "
+                f"<O>(E)",
+                file=sys.stderr,
+            )
 
     return 0
 
