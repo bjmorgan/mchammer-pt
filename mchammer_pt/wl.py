@@ -696,6 +696,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
         _frozen: bool = False,
     ) -> WangLandauParallelTempering:
         """Resume a previously-checkpointed REWL run.
@@ -717,6 +718,14 @@ class WangLandauParallelTempering(BaseParallelTempering):
         A `UserWarning` is emitted at resume time naming the affected
         windows. The relaxation does not apply to all-W=1
         checkpoints, which retain the bit-identical contract.
+
+        Set ``allow_kwargs_mismatch=True`` to downgrade an
+        ``ensemble_kwargs`` hash mismatch from a hard error to a
+        `UserWarning`. Only the kwargs-identity check is relaxed; CE
+        identity and ``ensemble_cls`` are still enforced. Use it to
+        resume across software environments (differing Python, numpy, or
+        platform) where the pickle of identical move objects differs;
+        bit-identical continuation is not guaranteed.
         """
         import json
 
@@ -740,7 +749,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
         if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
-        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume")
+        _validate_kwargs_hash(
+            path,
+            meta,
+            ensemble_kwargs,
+            "resume",
+            allow_mismatch=allow_kwargs_mismatch,
+        )
 
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
@@ -1017,6 +1032,7 @@ class WangLandauParallelTempering(BaseParallelTempering):
             CoordinatedWangLandauEnsemble
         ),
         ensemble_kwargs: Mapping[str, Any] | None = None,
+        allow_kwargs_mismatch: bool = False,
         _frozen: bool = False,
     ) -> WangLandauParallelTempering:
         """Resume a checkpointed REWL run into a `ProcessWangLandauPool`.
@@ -1038,6 +1054,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         ``measure_from_checkpoint_process_pool`` to load the checkpoint
         with ``frozen_g=True`` on every worker ensemble and disable the
         master-side coordinator. Not part of the public API.
+
+        Set ``allow_kwargs_mismatch=True`` to downgrade an
+        ``ensemble_kwargs`` hash mismatch from a hard error to a
+        `UserWarning`; only the kwargs-identity check is relaxed (CE
+        identity and ``ensemble_cls`` stay enforced). For resuming across
+        software environments where the pickle of identical move objects
+        differs; bit-identical continuation is not guaranteed.
         """
         import json
 
@@ -1060,7 +1083,13 @@ class WangLandauParallelTempering(BaseParallelTempering):
         )
         if meta["ensemble_cls_fqn"] != expected_ensemble_fqn:
             raise ValueError(f"{path}: ensemble_cls FQN mismatch.")
-        _validate_kwargs_hash(path, meta, ensemble_kwargs, "resume_process_pool")
+        _validate_kwargs_hash(
+            path,
+            meta,
+            ensemble_kwargs,
+            "resume_process_pool",
+            allow_mismatch=allow_kwargs_mismatch,
+        )
 
         windows = _array_to_windows(np.asarray(meta["windows"]))
         energy_spacing = float(meta["energy_spacing"])
