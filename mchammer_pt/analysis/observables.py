@@ -12,12 +12,15 @@ with columns ``energy``, ``count``, and per-scalar ``{name}_sum``,
 """
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from mchammer.data_containers.base_data_container import BaseDataContainer
+
+from mchammer_pt.analysis.dos import _canonical_log_weights
 
 # One walker's serialised store paired with its (lo, hi) energy window.
 _WalkerStore = tuple[dict[str, Any], tuple[float | None, float | None]]
@@ -168,3 +171,143 @@ def _merge_tag(
         rows[f"{name}_sum4"] = [float(total_sum4[b][i]) for b in populated_bins]
 
     return pd.DataFrame(rows)
+
+
+def _infer_spacing(energies: np.ndarray) -> float:
+    """Infer the uniform bin spacing from an energy grid.
+
+    Args:
+        energies: bin-centre energies (need not be sorted or unique).
+
+    Returns:
+        The smallest gap between distinct energies, which equals the
+        ``energy_spacing`` for a grid of integer multiples of it.
+
+    Raises:
+        ValueError: if fewer than two distinct energies are supplied.
+    """
+    uniq = np.unique(np.asarray(energies, dtype=float))
+    if uniq.size < 2:
+        raise ValueError("cannot infer energy spacing from fewer than two bins")
+    return float(np.min(np.diff(uniq)))
+
+
+def reweight_observables(
+    moments: pd.DataFrame,
+    dos: pd.DataFrame,
+    temperatures: np.ndarray,
+    *,
+    coverage_threshold: float = 0.99,
+) -> pd.DataFrame:
+    """Reweight microcanonical observable moments to canonical averages.
+
+    For each scalar observable in ``moments``, computes ``<O>(T)``,
+    ``<O^2>(T)`` and the Binder cumulant
+    ``U(T) = 1 - <O^4>(T) / (3 <O^2>(T)^2)``. The microcanonical average
+    per bin is ``<O^n>(E) = sum_n(E) / count(E)``; reweighting uses the
+    shared Boltzmann weights ``w(E, T) = g(E) e^{-E/kT}``. Sums run over
+    the bins that carry BOTH a finite ``ln g`` and at least one observable
+    sample (``count > 0``), normalised by the partition sum over those same
+    bins (so the result is the canonical average conditional on the sampled
+    energy range).
+
+    A coverage diagnostic reports the fraction of the full canonical weight
+    captured by the sampled bins; a warning is emitted if it falls below
+    ``coverage_threshold`` at any temperature, since unsampled high-weight
+    bins would bias ``<O>(T)``.
+
+    Args:
+        moments: per-tag microcanonical moments with columns ``energy``,
+            ``count`` and, per scalar name ``n``, ``{n}_sum``, ``{n}_sum2``,
+            ``{n}_sum4`` (as written by :func:`stitch_observable_moments`).
+        dos: stitched density of states with ``energy`` and ``entropy``
+            (``ln g``) columns.
+        temperatures: strictly-positive temperatures (K).
+        coverage_threshold: warn if the sampled-bin weight fraction drops
+            below this at any temperature. Defaults to 0.99.
+
+    Returns:
+        DataFrame with one row per temperature: ``T_K``, ``coverage``, and
+        per scalar name ``n``: ``{n}_mean``, ``{n}_sq_mean``, ``{n}_binder``.
+
+    Raises:
+        ValueError: if ``temperatures`` has a non-positive element; if
+            ``moments`` or ``dos`` is empty; if ``moments`` has no
+            ``{name}_sum`` columns; or if no bin carries both a finite
+            ``ln g`` and an observable sample.
+    """
+    if moments.empty:
+        raise ValueError("moments has no rows")
+    if dos.empty:
+        raise ValueError("dos has no rows; need at least one energy bin")
+    T_arr = np.asarray(temperatures, dtype=float)
+    if np.any(T_arr <= 0.0):
+        raise ValueError(
+            f"temperatures must be strictly positive (K); "
+            f"got min={float(T_arr.min())}"
+        )
+
+    names = [c[:-4] for c in moments.columns if c.endswith("_sum")]
+    if not names:
+        raise ValueError("moments has no '<name>_sum' columns")
+
+    spacing = _infer_spacing(dos["energy"].to_numpy())
+    dos_bin = np.rint(dos["energy"].to_numpy() / spacing).astype(int)
+    mom_bin = np.rint(moments["energy"].to_numpy() / spacing).astype(int)
+
+    # Full partition-function support: bins with finite ln g.
+    log_g_full = dos["entropy"].to_numpy()
+    finite = np.isfinite(log_g_full)
+    E_all = dos["energy"].to_numpy()[finite]
+    log_g_all = log_g_full[finite]
+    bin_all = dos_bin[finite]
+
+    w_all, _ = _canonical_log_weights(E_all, log_g_all, T_arr)   # (n_all, n_T)
+    Z_all = w_all.sum(axis=0)
+
+    # Map each sampled bin (count > 0) to its moments-row index.
+    counts = moments["count"].to_numpy()
+    sampled: dict[int, int] = {
+        int(b): i for i, (b, c) in enumerate(zip(mom_bin, counts, strict=True))
+        if c > 0
+    }
+
+    covered_mask = np.array([int(b) in sampled for b in bin_all], dtype=bool)
+    if not covered_mask.any():
+        raise ValueError(
+            "no overlapping bins with both a finite ln g and an observable "
+            "sample; cannot reweight"
+        )
+
+    w_cov = w_all[covered_mask]                 # (n_cov, n_T)
+    Z_cov = w_cov.sum(axis=0)                    # (n_T,)
+    coverage = Z_cov / Z_all                     # (n_T,)
+
+    cov_rows = [sampled[int(b)] for b in bin_all[covered_mask]]
+    cov_counts = counts[cov_rows].astype(float)  # (n_cov,)
+
+    out: dict[str, np.ndarray] = {"T_K": T_arr, "coverage": coverage}
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for name in names:
+            o1 = moments[f"{name}_sum"].to_numpy()[cov_rows] / cov_counts
+            o2 = moments[f"{name}_sum2"].to_numpy()[cov_rows] / cov_counts
+            o4 = moments[f"{name}_sum4"].to_numpy()[cov_rows] / cov_counts
+            o1_t = (w_cov * o1[:, None]).sum(axis=0) / Z_cov
+            o2_t = (w_cov * o2[:, None]).sum(axis=0) / Z_cov
+            o4_t = (w_cov * o4[:, None]).sum(axis=0) / Z_cov
+            binder = 1.0 - o4_t / (3.0 * o2_t**2)
+            out[f"{name}_mean"] = o1_t
+            out[f"{name}_sq_mean"] = o2_t
+            out[f"{name}_binder"] = binder
+
+    if float(coverage.min()) < coverage_threshold:
+        warnings.warn(
+            f"observable reweighting coverage drops to "
+            f"{float(coverage.min()):.3f} (< {coverage_threshold}) at some "
+            f"temperature: energy bins with finite g but no observable "
+            f"samples carry significant canonical weight and will bias "
+            f"<O>(T). Run the measurement longer to populate those bins.",
+            stacklevel=2,
+        )
+
+    return pd.DataFrame(out)
