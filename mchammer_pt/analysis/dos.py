@@ -149,6 +149,35 @@ def stitch_entropy(
     return stitched, errors
 
 
+def _canonical_log_weights(
+    energies: np.ndarray,
+    log_g: np.ndarray,
+    temperatures: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Boltzmann weights ``w(E, T)`` and partition sums ``Z(T)`` in log space.
+
+    Forms ``log_w = ln g - E / (kB T)``, max-shifted per temperature so a
+    large entropy range does not underflow ``float64``. ``-inf`` entries in
+    ``log_g`` (forbidden bins, ``g = 0``) contribute zero weight.
+
+    Args:
+        energies: bin energies (eV), shape ``(n_E,)``.
+        log_g: ``ln g(E)`` per bin, shape ``(n_E,)``.
+        temperatures: strictly-positive temperatures (K), shape ``(n_T,)``.
+
+    Returns:
+        ``(w, Z)`` with ``w`` of shape ``(n_E, n_T)`` and ``Z`` of shape
+        ``(n_T,)``. The per-temperature max-shift leaves ``w`` and ``Z``
+        sharing an unknown positive constant that cancels in any ratio
+        ``sum(w * f) / Z``.
+    """
+    beta = 1.0 / (kB * temperatures)                                # (n_T,)
+    log_w = log_g[:, None] - beta[None, :] * energies[:, None]      # (n_E, n_T)
+    log_w -= log_w.max(axis=0, keepdims=True)
+    w = np.exp(log_w)
+    return w, w.sum(axis=0)
+
+
 def reweight_canonical_from_dos(
     dos: pd.DataFrame,
     temperatures: np.ndarray,
@@ -183,11 +212,7 @@ def reweight_canonical_from_dos(
         )
     E = dos["energy"].to_numpy()
     log_g = dos["entropy"].to_numpy()
-    beta = 1.0 / (kB * T_arr)                             # (n_T,)
-    log_w = log_g[:, None] - beta[None, :] * E[:, None]   # (n_E, n_T)
-    log_w -= log_w.max(axis=0, keepdims=True)
-    w = np.exp(log_w)
-    Z = w.sum(axis=0)
+    w, Z = _canonical_log_weights(E, log_g, T_arr)
     E_mean = (w * E[:, None]).sum(axis=0) / Z
     E2_mean = (w * (E[:, None] ** 2)).sum(axis=0) / Z
     var_E = E2_mean - E_mean ** 2
