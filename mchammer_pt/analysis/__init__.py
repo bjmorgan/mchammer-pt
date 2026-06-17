@@ -11,6 +11,7 @@ from mchammer_pt.analysis.dos import (
     reweight_canonical_from_dos,
     stitch_entropy,
 )
+from mchammer_pt.analysis.observables import stitch_observable_moments
 
 __all__ = [
     "CoexistencePoint",
@@ -21,4 +22,5 @@ __all__ = [
     "find_phase_split",
     "reweight_canonical_from_dos",
     "stitch_entropy",
+    "stitch_observable_moments",
 ]
