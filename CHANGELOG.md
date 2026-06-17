@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-06-17
+
+### Added
+
+- ``allow_kwargs_mismatch`` opt-in on the Wang-Landau and canonical
+  resume/measure entry points (``WangLandauParallelTempering.resume``,
+  ``resume_process_pool``, ``measure_from_checkpoint``,
+  ``measure_from_checkpoint_process_pool``;
+  ``CanonicalParallelTempering.resume``, ``resume_process_pool``). When set,
+  a checkpoint whose ensemble-kwargs hash differs from the supplied kwargs
+  is loaded with a ``UserWarning`` instead of a hard error, so a run can be
+  resumed or measured across software environments (differing Python, numpy,
+  or platform) where the pickle of identical move objects differs. Only the
+  kwargs-identity check is relaxed; CE identity and ``ensemble_cls`` are
+  still enforced, and bit-identical continuation is not guaranteed. Defaults
+  to ``False`` (the strict behaviour is unchanged).
+
 ## [0.24.0] - 2026-06-17
 
 ### Added
