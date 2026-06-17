@@ -920,6 +920,14 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
+        # A frozen-g measurement pass has no DOS-convergence target. Clear the
+        # restored converged flag so the run actually samples: icet's
+        # WangLandauEnsemble.run() returns immediately when ``self.converged``,
+        # which would otherwise make a measurement from a converged checkpoint
+        # a silent no-op (and the orchestrator's per-cycle converged gate would
+        # exit after the first cycle).
+        if e._frozen_g:
+            e._converged = None
         # Older checkpoints may not carry `visited_bins`; treat as empty.
         saved_visited = last_state.get("visited_bins")
         if saved_visited is not None:

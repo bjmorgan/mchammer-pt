@@ -141,12 +141,16 @@ def _merge_tag(
         sum2s: list[list[float]] = list(state.get("sum2", []))
         sum4s: list[list[float]] = list(state.get("sum4", []))
 
+        # Window membership by bin index (round-based), matching icet's
+        # `_inside_energy_window` and hence the bins the recorder actually
+        # logged. A raw `energy <= hi` test could drop an edge bin that the
+        # recorder counted as in-window. `None` bounds are unbounded.
+        lo_bin = None if lo is None else round(lo / energy_spacing)
+        hi_bin = None if hi is None else round(hi / energy_spacing)
         for b, cnt, sv, sv2, sv4 in zip(bins, counts, sums, sum2s, sum4s, strict=True):
-            energy = b * energy_spacing
-            # Apply window filter: both bounds are inclusive.
-            if lo is not None and energy < lo:
+            if lo_bin is not None and b < lo_bin:
                 continue
-            if hi is not None and energy > hi:
+            if hi_bin is not None and b > hi_bin:
                 continue
             if cnt == 0:
                 continue

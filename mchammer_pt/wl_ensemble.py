@@ -182,10 +182,17 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
                 ``get_observable`` returns a scalar, sequence, or Mapping.
 
         Raises:
-            ValueError: If an observer with the same tag is already attached,
-                or if a restored store for the tag has an incompatible
-                signature.
+            ValueError: if ``observer.interval`` is ``None``; if an observer
+                with the same tag is already attached; or if a restored store
+                for the tag has an incompatible signature.
         """
+        if observer.interval is None:
+            raise ValueError(
+                f"observer {observer.tag!r} has interval=None; set a concrete "
+                "interval (in MC trial steps) for measurement recording. "
+                "mchammer's attach_observer resolves None to len(structure), "
+                "but the energy-binned recorder needs an explicit cadence."
+            )
         tag = observer.tag
         if tag in self._recorders:
             raise ValueError(

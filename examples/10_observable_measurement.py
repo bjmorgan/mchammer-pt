@@ -111,7 +111,8 @@ def main() -> None:
     # 2. Frozen-g measurement pass: load the converged checkpoint (g frozen,
     #    coordinator off, exchanges on), attach the observer, and sample.
     meas = WangLandauParallelTempering.measure_from_checkpoint(
-        converged, cluster_expansion=ce
+        converged, cluster_expansion=ce,
+        ensemble_kwargs=common["ensemble_kwargs"],
     )
     meas.record_observable(AuFractionObserver(interval=10))
     meas.run(n_cycles=2000)

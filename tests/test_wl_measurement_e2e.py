@@ -28,7 +28,7 @@ import pytest
 from mchammer.observers.base_observer import BaseObserver
 
 from mchammer_pt.wl import WangLandauParallelTempering
-from tests._wl_fixtures import make_wl_atoms, make_wl_ce
+from tests._wl_fixtures import make_wl_atoms, make_wl_ce, make_wl_ensemble
 
 # ---------------------------------------------------------------------------
 # Picklable test observers (module-level for ProcessPool compatibility)
@@ -519,3 +519,65 @@ class TestMultipleRecorders:
             f"re-attached 'fast' total count {fast_total_m1} not > "
             f"m0 total {fast_total_m0}; continued accumulation expected"
         )
+
+
+def test_measure_from_converged_checkpoint_records_samples(tmp_path: Path) -> None:
+    """A measurement from a GENUINELY converged checkpoint must sample.
+
+    Regression: a converged DOS checkpoint restores ensembles with
+    ``converged=True``, which short-circuits icet's
+    ``WangLandauEnsemble.run()`` (and the orchestrator's per-cycle converged
+    gate). The frozen-measurement restore must clear that flag, or the pass
+    records nothing. Uses ``fill_factor_limit=0.5`` so the DOS converges
+    after a single halve (the recorded g need not be accurate here).
+    """
+    ce = make_wl_ce()
+    e0 = _initial_energy()
+    kwargs = {
+        "fill_factor_limit": 0.5,
+        "flatness_limit": 0.5,
+        "trial_move": "flip",
+    }
+    pt = WangLandauParallelTempering(
+        cluster_expansion=ce,
+        atoms=[make_wl_atoms(), make_wl_atoms()],
+        windows=[(None, e0 + 20.0), (e0 - 20.0, None)],
+        energy_spacing=2.0,
+        block_size=len(make_wl_atoms()) * 100,
+        random_seed=0,
+        ensemble_kwargs=kwargs,
+    )
+    pt.run(n_cycles=8000)
+    assert pt.pool.converged_flags().all(), (
+        "the DOS run did not converge; tune the test's WL settings"
+    )
+
+    converged = tmp_path / "converged.h5"
+    pt.save_checkpoint(converged)
+
+    meas = WangLandauParallelTempering.measure_from_checkpoint(
+        converged, cluster_expansion=ce, ensemble_kwargs=kwargs,
+    )
+    meas.record_observable(_ConstantObs(value=1.0, interval=1, tag="probe"))
+    meas.run(n_cycles=20)
+
+    total = sum(sum(m.get("count", [])) for m in _collect_moments(meas, "probe"))
+    assert total > 0, (
+        "measurement from a converged checkpoint recorded no samples; the "
+        "restored converged flag was not cleared"
+    )
+
+
+def test_recorder_rejects_none_interval() -> None:
+    """An observer with interval=None is rejected at attach, not deep in run()."""
+
+    class _NoIntervalObserver(BaseObserver):
+        def __init__(self) -> None:
+            super().__init__(interval=None, return_type=float, tag="ni")
+
+        def get_observable(self, structure: Any) -> float:
+            return 1.0
+
+    ens = make_wl_ensemble()
+    with pytest.raises(ValueError, match="interval"):
+        ens.attach_observable_recorder(_NoIntervalObserver())
