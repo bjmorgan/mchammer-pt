@@ -4,7 +4,7 @@ Covers:
 1. Round-trip: refresh/restore preserves recorder state; re-attach resumes.
 2. Absent key (legacy checkpoint): restore does not raise; empty pending/recorders.
 3. Accumulate-on-resume: post-restore advance adds to restored baseline.
-4. Signature mismatch: restoring a 1-scalar store then attaching a different observer raises.
+4. Signature mismatch: restoring a store then attaching a mismatched observer raises.
 5. New tag starts fresh: a new tag starts empty alongside a restorable old tag.
 6. Unbound preservation: unbound restored stores are preserved across refresh.
 7. Two-cycle unbound preservation: unbound stores survive two restore/refresh cycles.
@@ -20,7 +20,6 @@ from mchammer.observers.base_observer import BaseObserver
 
 from mchammer_pt.wl_replica import WangLandauReplica
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
-
 
 # ---------------------------------------------------------------------------
 # Minimal test observers
@@ -59,7 +58,6 @@ def _make_frozen_replica(seed: int = 7) -> WangLandauReplica:
     """Build a frozen_g replica with a warmed-up DOS planted in."""
     from mchammer.calculators import ClusterExpansionCalculator
 
-    from mchammer_pt.wl_ensemble import CoordinatedWangLandauEnsemble
 
     ce = make_wl_ce()
     atoms = make_wl_atoms()
@@ -221,8 +219,10 @@ def test_observable_accumulates_after_resume():
 
     # Also verify that the saved bins' counts are present in the resumed
     # recorder at or above their saved values (restored baseline was not reset).
-    saved_counts = dict(zip(saved["bins"], saved["count"]))
-    resumed_counts = dict(zip(resumed_state["bins"], resumed_state["count"]))
+    saved_counts = dict(zip(saved["bins"], saved["count"], strict=True))
+    resumed_counts = dict(
+        zip(resumed_state["bins"], resumed_state["count"], strict=True)
+    )
     for b, cnt in saved_counts.items():
         assert b in resumed_counts, f"saved bin {b} missing from resumed state"
         assert resumed_counts[b] >= cnt, (
