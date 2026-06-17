@@ -583,6 +583,40 @@ def test_validate_kwargs_hash_warns_on_sentinel():
         )
 
 
+def test_validate_kwargs_hash_allow_mismatch_warns_instead_of_raising():
+    """With `allow_mismatch=True`, a real hash mismatch (both sides hash
+    cleanly and differ) is downgraded from `ValueError` to a `UserWarning`;
+    the default (`allow_mismatch=False`) still raises. Pins the opt-in
+    override that backs `allow_kwargs_mismatch` on the resume/measure
+    entry points."""
+    from mchammer_pt.checkpoint import (
+        _compute_ensemble_kwargs_hash,
+        _validate_kwargs_hash,
+    )
+
+    saved = _compute_ensemble_kwargs_hash({"user_tag": "first"})
+    meta = {"ensemble_kwargs_hash": saved}
+
+    # Default: a real mismatch raises (behaviour preserved).
+    with pytest.raises(ValueError, match="ensemble_kwargs hash mismatch"):
+        _validate_kwargs_hash(
+            "ckpt.h5",
+            meta,
+            ensemble_kwargs={"user_tag": "second"},
+            caller="resume",
+        )
+
+    # allow_mismatch=True: the same mismatch warns and does not raise.
+    with pytest.warns(UserWarning, match="allow_kwargs_mismatch"):
+        _validate_kwargs_hash(
+            "ckpt.h5",
+            meta,
+            ensemble_kwargs={"user_tag": "second"},
+            caller="resume",
+            allow_mismatch=True,
+        )
+
+
 def test_resume_rejects_mismatched_ensemble_kwargs_hash(toy_ce, toy_atoms, tmp_path):
     """Resuming with materially different `ensemble_kwargs` raises with a clear
     message when both sides hash cleanly."""
