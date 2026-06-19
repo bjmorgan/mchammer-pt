@@ -70,11 +70,13 @@ def _validate_schedule(value: object) -> Schedule:
     ``schedule`` parameter, so ``CoordinatedWangLandauEnsemble`` owns the
     schedule attribute on both stock and the patched fork.
     """
-    if value not in ("halving", "1_over_t"):
-        raise ValueError(
-            f"schedule must be 'halving' or '1_over_t'; got {value!r}"
-        )
-    return value
+    if value == "halving":
+        return "halving"
+    if value == "1_over_t":
+        return "1_over_t"
+    raise ValueError(
+        f"schedule must be 'halving' or '1_over_t'; got {value!r}"
+    )
 
 
 class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
