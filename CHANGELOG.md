@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Depend on stock PyPI ``icet>=3.2`` instead of the patched bjmorgan icet
+  fork. ``CoordinatedWangLandauEnsemble`` owns the Wang-Landau ``_schedule`` /
+  ``_phase`` / ``_window_entry_step`` state itself, and
+  ``WangLandauReplica.restore_state`` restores the 1/t phase state and
+  recomputes convergence on resume, so the orchestrators run on unmodified
+  upstream icet. The patched fork remains supported.
+
 ## [0.25.0] - 2026-06-17
 
 ### Added
