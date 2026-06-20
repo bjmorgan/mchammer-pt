@@ -370,8 +370,9 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     # Advance enough to enter the window (so _window_entry_step is set).
     replica.advance(100)
     # Switch into the 1/t phase (the coordinator's real seam) so the
-    # checkpoint records phase == "1_over_t". Without Edit 2, stock icet's
-    # _restart_ensemble leaves _phase at its "halving" default on resume.
+    # checkpoint records phase == "1_over_t". Without restore_state's phase
+    # restore, stock icet's _restart_ensemble leaves _phase at its "halving"
+    # default on resume.
     replica.switch_to_phase("1_over_t")
     assert replica.ensemble._phase == "1_over_t"
     assert replica.ensemble._window_entry_step is not None
