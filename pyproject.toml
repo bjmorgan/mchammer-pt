@@ -61,7 +61,11 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+# No `python_version` pin: each CI matrix job (3.11-3.14) runs mypy under its
+# own interpreter, so every supported version is type-checked natively (the
+# 3.11 job enforces the floor). Pinning to the floor would also force mypy to
+# parse third-party stubs as that version, which breaks on stubs using newer
+# syntax (e.g. scipy-stubs >= 1.18 uses the 3.12+ PEP 695 `type` alias).
 packages = ["mchammer_pt"]
 strict = true
 warn_return_any = false
