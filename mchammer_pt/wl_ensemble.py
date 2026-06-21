@@ -10,6 +10,7 @@ import numpy as np
 from mchammer.ensembles import WangLandauEnsemble
 from mchammer.observers.base_observer import BaseObserver
 
+from mchammer_pt.wl_coordinator import Phase, Schedule
 from mchammer_pt.wl_observable_recorder import EnergyBinnedObservableRecorder
 
 
@@ -61,6 +62,23 @@ def _validate_dos_snapshot_ratio(value: object) -> float | None:
     return float(value)
 
 
+def _validate_schedule(value: object) -> Schedule:
+    """Return ``value`` if it is a valid WL fill-factor schedule, else raise.
+
+    Accepts only ``"halving"`` or ``"1_over_t"``. Validated here rather
+    than forwarded to the base ``WangLandauEnsemble``: stock icet has no
+    ``schedule`` parameter, so ``CoordinatedWangLandauEnsemble`` owns the
+    schedule attribute on both stock and the patched fork.
+    """
+    if value == "halving":
+        return "halving"
+    if value == "1_over_t":
+        return "1_over_t"
+    raise ValueError(
+        f"schedule must be 'halving' or '1_over_t'; got {value!r}"
+    )
+
+
 class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
     """`WangLandauEnsemble` with internal halving suppressed.
 
@@ -101,6 +119,12 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
             flat-in-energy without further DOS accumulation. Intended
             for observable-measurement passes after WL convergence.
             Defaults to ``False``.
+        schedule: WL fill-factor update schedule. ``"halving"``
+            (default) is the standard Wang-Landau halving scheme;
+            ``"1_over_t"`` is the Belardinelli-Pereyra 1/t schedule. The
+            run always starts in the halving phase; under ``"1_over_t"``
+            the coordinator later flips to the 1/t phase via
+            ``WangLandauReplica.switch_to_phase``.
     """
 
     def __init__(
@@ -109,11 +133,20 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
         recency_visits_per_bin: int = 1000,
         dos_snapshot_ratio: float | None = 2.0,
         frozen_g: bool = False,
+        schedule: Schedule = "halving",
         **kwargs: Any,
     ) -> None:
         recency = _validate_recency_visits_per_bin(recency_visits_per_bin)
         ratio = _validate_dos_snapshot_ratio(dos_snapshot_ratio)
+        validated_schedule = _validate_schedule(schedule)
         super().__init__(*args, **kwargs)
+        # Schedule state. Stock icet's WangLandauEnsemble has no `schedule`
+        # parameter and never sets these three attributes; the patched fork
+        # does. Own them here so both behave identically -- the coordinator
+        # drives every phase transition via WangLandauReplica.switch_to_phase.
+        self._schedule: Schedule = validated_schedule
+        self._phase: Phase = "halving"
+        self._window_entry_step: int | None = None
         # When True, ``_update_entropy`` skips all DOS-mutating writes so
         # ``_entropy``, ``_histogram``, and ``_fill_factor`` are held
         # fixed for the duration of the run.  The acceptance criterion
@@ -254,10 +287,7 @@ class CoordinatedWangLandauEnsemble(WangLandauEnsemble):  # type: ignore[misc]
                         rec.record(structure, bin_cur)
 
     def _update_entropy(self, bin_cur: int) -> None:
-        # ``_window_entry_step`` is inherited from upstream's
-        # ``WangLandauEnsemble`` (typed Any to mypy because mchammer
-        # has no stubs); narrow it explicitly.
-        entry: int | None = self._window_entry_step  # type: ignore[has-type]
+        entry: int | None = self._window_entry_step
         if (
             self._schedule == "1_over_t"
             and self._reached_energy_window

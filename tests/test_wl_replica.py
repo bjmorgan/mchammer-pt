@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import copy
-import inspect
 
 import numpy as np
 import pytest
 from mchammer.calculators import ClusterExpansionCalculator
-from mchammer.ensembles import WangLandauEnsemble
 
 from mchammer_pt.wl_replica import WangLandauReplica
 from tests._wl_fixtures import make_wl_atoms, make_wl_ce
@@ -33,8 +31,6 @@ def _make_wl_replica(
 
     Args:
         schedule: optional schedule override (e.g. ``"1_over_t"``).
-            Silently skipped when the installed icet does not support
-            the ``schedule`` parameter.
         recency_visits_per_bin: EWMA recency window forwarded to the
             ensemble.
         dos_snapshot_ratio: ratio of the 1/t-regime DOS snapshot
@@ -47,8 +43,6 @@ def _make_wl_replica(
     e0 = _e0()
     ensemble_kwargs: dict | None = None
     if schedule is not None:
-        if "schedule" not in inspect.signature(WangLandauEnsemble.__init__).parameters:
-            pytest.skip("requires icet with WangLandauEnsemble schedule parameter")
         ensemble_kwargs = {"schedule": schedule}
     return WangLandauReplica(
         cluster_expansion=ce,
@@ -350,18 +344,7 @@ def test_wl_replica_snapshot_and_restore_round_trip(tmp_path):
 
 
 def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
-    """1/t-schedule fields round-trip through snapshot/restore.
-
-    Requires icet with ``schedule`` parameter on
-    ``WangLandauEnsemble``. Skips cleanly on mainline icet.
-    """
-    import inspect
-
-    from mchammer.ensembles import WangLandauEnsemble
-
-    if "schedule" not in inspect.signature(WangLandauEnsemble.__init__).parameters:
-        pytest.skip("requires icet with WangLandauEnsemble schedule parameter")
-
+    """1/t-schedule fields round-trip through snapshot/restore."""
     from mchammer.calculators import (
         ClusterExpansionCalculator,
     )
@@ -386,6 +369,13 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
     )
     # Advance enough to enter the window (so _window_entry_step is set).
     replica.advance(100)
+    # Switch into the 1/t phase (the coordinator's real seam) so the
+    # checkpoint records phase == "1_over_t". Without restore_state's phase
+    # restore, stock icet's _restart_ensemble leaves _phase at its "halving"
+    # default on resume.
+    replica.switch_to_phase("1_over_t")
+    assert replica.ensemble._phase == "1_over_t"
+    assert replica.ensemble._window_entry_step is not None
     extras = replica.snapshot_for_checkpoint()
     assert "sites_by_species" in extras
 
@@ -408,11 +398,67 @@ def test_wl_replica_one_over_t_snapshot_round_trips(tmp_path):
         ensemble_kwargs={"schedule": "1_over_t"},
         sites_by_species=extras["sites_by_species"],
     )
-    assert restored.ensemble._phase == replica.ensemble._phase
+    assert restored.ensemble._phase == "1_over_t"
     assert (
         restored.ensemble._window_entry_step
         == replica.ensemble._window_entry_step
     )
+
+
+def test_wl_replica_restore_converged_one_over_t_reports_converged(tmp_path):
+    """Resuming a converged 1/t-phase checkpoint reports converged.
+
+    In the 1/t phase convergence is fill-factor only; the histogram need
+    not be flat. Stock icet's _restart_ensemble applies the halving
+    flatness formula regardless of phase, so without restore_state
+    recomputing _converged a converged 1/t resume would report
+    not-converged on stock. Pins parity with the fork.
+    """
+    from mchammer.data_containers.wang_landau_data_container import (
+        WangLandauDataContainer,
+    )
+
+    ce, atoms = make_wl_ce(), make_wl_atoms()
+    e0 = _e0()
+    replica = WangLandauReplica(
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=7,
+        ensemble_kwargs={"schedule": "1_over_t"},
+    )
+    replica.advance(100)
+    replica.switch_to_phase("1_over_t")
+    e = replica.ensemble
+    # Simulate a converged 1/t state: fill factor below the limit.
+    e._fill_factor = e._fill_factor_limit / 10.0
+    # Precondition: a non-flat histogram, so the halving flatness formula
+    # would report not-converged and only the phase-aware recompute yields
+    # converged. (Deterministic for this seed; assert it so the test fails
+    # loudly rather than passing vacuously if the walk ever flattens.)
+    hist = np.array(list(e._histogram.values()), dtype=float)
+    assert not np.all(hist >= 0.8 * hist.mean()), "test needs a non-flat histogram"
+
+    extras = replica.snapshot_for_checkpoint()
+    dc_path = tmp_path / "wl_converged_1overt.dc"
+    replica.data_container().write(str(dc_path))
+    container = WangLandauDataContainer.read(str(dc_path))
+
+    restored = WangLandauReplica.restart_from(
+        container,
+        cluster_expansion=ce,
+        atoms=atoms,
+        energy_spacing=0.1,
+        energy_limit_left=e0 - 100.0,
+        energy_limit_right=e0 + 100.0,
+        random_seed=7,
+        ensemble_kwargs={"schedule": "1_over_t"},
+        sites_by_species=extras["sites_by_species"],
+    )
+    assert restored.ensemble._phase == "1_over_t"
+    assert restored.converged is True
 
 
 def test_wl_replica_restore_state_does_not_mutate_caller_container(tmp_path):

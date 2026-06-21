@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.25.0"
+version = "0.26.0"
 description = "Replica-exchange orchestrators for mchammer: canonical parallel tempering and multi-walker replica-exchange Wang-Landau"
 readme = "README.md"
 authors = [
@@ -18,12 +18,7 @@ dependencies = [
     "pandas",
     "scipy",
     "ase",
-    # The patched icet fork adds the WL `schedule` parameter, `_phase`,
-    # and `_window_entry_step` that mchammer-pt's coordinator reads
-    # unconditionally. Mainline icet does not (yet) ship these, so a
-    # plain `icet` from PyPI breaks at the first MC step. Track the
-    # upstream MR; relax the pin once it lands.
-    "icet @ git+https://gitlab.com/bjmorgan/icet.git@master",
+    "icet>=3.2",
     "h5py",
 ]
 classifiers = [
@@ -66,7 +61,11 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+# No `python_version` pin: each CI matrix job (3.11-3.14) runs mypy under its
+# own interpreter, so every supported version is type-checked natively (the
+# 3.11 job enforces the floor). Pinning to the floor would also force mypy to
+# parse third-party stubs as that version, which breaks on stubs using newer
+# syntax (e.g. scipy-stubs >= 1.18 uses the 3.12+ PEP 695 `type` alias).
 packages = ["mchammer_pt"]
 strict = true
 warn_return_any = false

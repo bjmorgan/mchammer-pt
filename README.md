@@ -103,13 +103,8 @@ that drives Wang-Landau's per-window convergence cost.
 
     pip install -e .
 
-Requires Python 3.11+. `pyproject.toml` pins `icet` to a patched
-fork (`git+https://gitlab.com/bjmorgan/icet.git@master`) that adds
-the WL `schedule` parameter and the `_phase` /
-`_window_entry_step` attributes the REWL coordinator reads. Plain
-PyPI `icet` will break at the first MC step — let the install pull
-the fork automatically rather than installing `icet` separately.
-The pin will be relaxed once the upstream MR lands.
+Requires Python 3.11+ and `icet>=3.2` (installed automatically from
+PyPI).
 
 Optional dev tooling: `pip install -e '.[dev]'` adds `pytest`,
 `mypy`, `ruff`.

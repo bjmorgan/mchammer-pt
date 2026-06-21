@@ -176,6 +176,25 @@ def test_validate_dos_snapshot_ratio_rejects_le_one_and_non_finite():
             _validate_dos_snapshot_ratio(bad)
 
 
+def test_validate_schedule_accepts_halving_and_one_over_t():
+    """The two valid fill-factor schedules pass through unchanged."""
+    from mchammer_pt.wl_ensemble import _validate_schedule
+
+    assert _validate_schedule("halving") == "halving"
+    assert _validate_schedule("1_over_t") == "1_over_t"
+
+
+def test_validate_schedule_rejects_unknown_schedule():
+    """An unknown schedule is rejected at construction. ``ensemble_kwargs``
+    carries ``schedule`` as an untyped mapping value, so the ``Schedule`` hint
+    does not guard against a typo -- the runtime check must."""
+    from mchammer_pt.wl_ensemble import _validate_schedule
+
+    for bad in ("1overt", "1/t", "HALVING", "", None, 1):
+        with pytest.raises(ValueError, match="must be 'halving' or '1_over_t'"):
+            _validate_schedule(bad)
+
+
 def test_ensemble_initialises_empty_snapshot_store():
     """A fresh ensemble has empty snapshot dicts and no recorded rung."""
     e = _make_ensemble(dos_snapshot_ratio=2.0)

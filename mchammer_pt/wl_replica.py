@@ -922,6 +922,21 @@ class WangLandauReplica:
         e = self._ensemble
         e._potential = proposed_potential
         e._reached_energy_window = True
+        # Restore the 1/t schedule phase state. Stock icet's
+        # _restart_ensemble leaves _phase/_window_entry_step untouched (they
+        # do not exist on stock); the patched fork restores them from
+        # _last_state. Set them here so resume behaves identically on both.
+        # The keys are written unconditionally by refresh_last_state; the
+        # defaults cover checkpoints predating them.
+        e._phase = last_state.get("phase", "halving")
+        e._window_entry_step = last_state.get("window_entry_step")
+        if e._phase == "1_over_t":
+            # In the 1/t phase convergence is fill-factor only (no flatness
+            # gate). Stock's _restart_ensemble applies the halving flatness
+            # formula regardless of phase; recompute to match the fork and
+            # our own force_halve criterion. Overwritten by the frozen_g null
+            # below for measurement passes.
+            e._converged = e._fill_factor <= e._fill_factor_limit
         # A frozen-g measurement pass has no DOS-convergence target. Clear the
         # restored converged flag so the run actually samples: icet's
         # WangLandauEnsemble.run() returns immediately when ``self.converged``,
