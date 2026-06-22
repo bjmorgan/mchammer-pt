@@ -93,5 +93,14 @@ def __getattr__(name: str) -> object:
     if name in _SEEDING_EXPORTS:
         import importlib
 
-        return getattr(importlib.import_module("mchammer_pt.seeding"), name)
+        try:
+            module = importlib.import_module("mchammer_pt.seeding")
+        except ModuleNotFoundError as exc:
+            if exc.name is not None and exc.name.split(".")[0] == "mchammer_moves":
+                raise ModuleNotFoundError(
+                    f"mchammer_pt.{name} requires the optional 'mchammer-moves' "
+                    "package; install it with: pip install 'mchammer-pt[custom-moves]'"
+                ) from exc
+            raise
+        return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

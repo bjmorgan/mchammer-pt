@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mchammer-pt"
-version = "0.26.0"
+version = "0.27.0"
 description = "Replica-exchange orchestrators for mchammer: canonical parallel tempering and multi-walker replica-exchange Wang-Landau"
 readme = "README.md"
 authors = [
@@ -32,13 +32,14 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+custom-moves = ["mchammer-moves>=0.6.0"]
 dev = [
     "pytest",
     "mypy",
     "ruff",
     "pandas-stubs",
     "scipy-stubs",
-    "mchammer-moves @ git+https://github.com/bjmorgan/mchammer-moves.git@main",
+    "mchammer-pt[custom-moves]",
 ]
 plot = ["matplotlib"]
 

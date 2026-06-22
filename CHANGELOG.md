@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-06-22
+
+### Added
+
+- ``custom-moves`` extra (``pip install mchammer-pt[custom-moves]``) that
+  installs ``mchammer-moves>=0.6.0``. The ``seeding`` and ``contrib`` features
+  need ``mchammer-moves`` at runtime; the extra declares it where it is used,
+  and a missing install now raises a message pointing at the extra instead of a
+  bare ``ModuleNotFoundError``.
+
+### Changed
+
+- The ``dev`` extra now pulls ``mchammer-moves`` from PyPI (>=0.6.0) rather than
+  a git URL, removing the last direct-URL reference from the package metadata so
+  the package can be published to PyPI.
+
 ## [0.26.0] - 2026-06-21
 
 ### Changed
