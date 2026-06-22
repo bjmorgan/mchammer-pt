@@ -418,14 +418,20 @@ def test_process_pool_propagates_per_move_acceptance(toy_ce, toy_atoms):
         pt.run(n_cycles=3)
         containers = pt.pool.data_containers()
 
+    move_cols = ("pair_swap_acceptance_rate", "cyclic_shift_acceptance_rate")
     assert len(containers) == 2
     for dc in containers:
-        cols = dc.data.columns
-        assert "pair_swap_acceptance_rate" in cols
-        assert "cyclic_shift_acceptance_rate" in cols
-        for col in ("pair_swap_acceptance_rate", "cyclic_shift_acceptance_rate"):
-            final = float(dc.data[col].iloc[-1])
-            assert 0.0 <= final <= 1.0
+        # More than the construction-time snapshot row must come back, or
+        # the recorded trajectory did not survive the worker-to-parent trip.
+        assert len(dc.data) > 1
+        for col in move_cols:
+            assert col in dc.data.columns
+            # Every recorded interval is a valid rate (also rejects NaN).
+            assert dc.data[col].between(0.0, 1.0).all()
+    # At least one move was accepted and counted somewhere: a regression that
+    # carried the column schema but not the recorded values would leave every
+    # rate at 0.0 and still satisfy the checks above.
+    assert any((dc.data[col] > 0.0).any() for dc in containers for col in move_cols)
 
 
 def test_per_temperature_atoms_constructs_distinct_replicas(toy_ce, toy_atoms):
