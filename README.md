@@ -101,13 +101,20 @@ that drives Wang-Landau's per-window convergence cost.
 
 ## Install
 
-    pip install -e .
+    pip install mchammer-pt
 
 Requires Python 3.11+ and `icet>=3.2` (installed automatically from
 PyPI).
 
-Optional dev tooling: `pip install -e '.[dev]'` adds `pytest`,
-`mypy`, `ruff`.
+The `seeding` and `contrib` features additionally require
+`mchammer-moves`; pull it in with the `custom-moves` extra:
+
+    pip install 'mchammer-pt[custom-moves]'
+
+For development, clone the repository and install editable with the dev
+tooling (`pytest`, `mypy`, `ruff`):
+
+    pip install -e '.[dev]'
 
 ## Quickstart
 
