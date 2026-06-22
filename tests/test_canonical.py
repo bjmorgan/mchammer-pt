@@ -381,6 +381,59 @@ def test_process_pool_factory_forwards_ensemble_cls(toy_ce, toy_atoms):
     assert history.energies_per_cycle.shape == (3, 2)
 
 
+def test_process_pool_propagates_per_move_acceptance(toy_ce, toy_atoms):
+    """Per-move acceptance columns survive the process_pool spawn boundary.
+
+    A custom-moves ``CustomCanonicalEnsemble`` records per-move
+    acceptance statistics in its ``_get_ensemble_data()`` output. Run
+    inside ``CanonicalParallelTempering.process_pool``, those statistics
+    are produced in each worker process and must be carried back to the
+    parent in that replica's data container.
+
+    Regresses if pt's spawn and data-container plumbing drops, renames,
+    or fails to populate a custom ensemble's per-move acceptance columns
+    on the worker-to-parent round trip: ``data_containers()`` would then
+    return containers missing ``pair_swap_acceptance_rate`` and
+    ``cyclic_shift_acceptance_rate`` despite the workers recording them.
+    """
+    pytest.importorskip("mchammer_moves")
+    from mchammer_moves import CustomCanonicalEnsemble, CyclicShift, PairSwap
+
+    chain = list(range(len(toy_atoms)))
+    with CanonicalParallelTempering.process_pool(
+        cluster_expansion=toy_ce,
+        atoms=toy_atoms,
+        temperatures=[300.0, 600.0],
+        block_size=20,
+        random_seed=0,
+        ensemble_cls=CustomCanonicalEnsemble,
+        ensemble_kwargs={
+            "moves": [
+                (PairSwap(sublattice_index=0), 1.0),
+                (CyclicShift(cycles=[chain]), 1.0),
+            ],
+            "ensemble_data_write_interval": 10,
+        },
+    ) as pt:
+        pt.run(n_cycles=3)
+        containers = pt.pool.data_containers()
+
+    move_cols = ("pair_swap_acceptance_rate", "cyclic_shift_acceptance_rate")
+    assert len(containers) == 2
+    for dc in containers:
+        # More than the construction-time snapshot row must come back, or
+        # the recorded trajectory did not survive the worker-to-parent trip.
+        assert len(dc.data) > 1
+        for col in move_cols:
+            assert col in dc.data.columns
+            # Every recorded interval is a valid rate (also rejects NaN).
+            assert dc.data[col].between(0.0, 1.0).all()
+    # At least one move was accepted and counted somewhere: a regression that
+    # carried the column schema but not the recorded values would leave every
+    # rate at 0.0 and still satisfy the checks above.
+    assert any((dc.data[col] > 0.0).any() for dc in containers for col in move_cols)
+
+
 def test_per_temperature_atoms_constructs_distinct_replicas(toy_ce, toy_atoms):
     """A sequence of Atoms seeds each replica with its specific config."""
     # Create a second config by shuffling the species.
