@@ -11,6 +11,7 @@ from mchammer_pt.analysis.dos import (
     reweight_canonical_from_dos,
     stitch_entropy,
 )
+from mchammer_pt.analysis.field import field_map
 from mchammer_pt.analysis.observables import (
     reweight_observables,
     stitch_observable_moments,
@@ -22,6 +23,7 @@ __all__ = [
     "NotBimodalError",
     "PhaseSplit",
     "equal_area_temperature",
+    "field_map",
     "find_phase_split",
     "reweight_canonical_from_dos",
     "reweight_observables",
