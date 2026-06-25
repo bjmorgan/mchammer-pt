@@ -121,6 +121,11 @@ class EnergyBinnedObservableRecorder:
         non-finite observations (incrementing the skipped tally instead),
         and accumulates count/sum/sum2/sum4 into ``bin_index``.
 
+        The non-finite drop is all-or-nothing across the S-vector: a single
+        non-finite element drops the whole observation. ``count`` is shared
+        across all S scalars in a bin, so recording a partial vector would
+        desync ``sum``/``count`` per scalar and corrupt the per-scalar mean.
+
         Args:
             structure: The current atomic structure, forwarded to the
                 observer's ``get_observable`` method.
@@ -160,7 +165,8 @@ class EnergyBinnedObservableRecorder:
                     f"with names {resolved_names!r}"
                 )
 
-        # Drop non-finite observations.
+        # Drop non-finite observations all-or-nothing (see docstring): count
+        # is shared across the S-vector, so a partial record would desync it.
         if not np.all(np.isfinite(vals)):
             self._skipped[bin_index] = self._skipped.get(bin_index, 0) + 1
             return

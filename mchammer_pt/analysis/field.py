@@ -30,6 +30,11 @@ def field_map(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Fold reweighted per-pixel means back into a canonical field map.
 
+    Intended for multi-pixel fields (``S = math.prod(shape) >= 2``). A
+    one-element observer is recorded under the scalar name ``{tag}`` rather
+    than ``{tag}_0``, so this helper does not apply to it; read its
+    ``{tag}_mean`` column directly.
+
     Args:
         canonical: Output of
             :func:`mchammer_pt.analysis.observables.reweight_observables`,

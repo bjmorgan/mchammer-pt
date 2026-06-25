@@ -178,3 +178,29 @@ The modules:
   in-band seed.
 - `mchammer_pt/seeding/search.py` -- `seed_window_configs` spawn-pool
   orchestration.
+
+## Field observables
+
+A fixed-size `np.ndarray` observer (S pixels) rides the *scalar* observable
+pipeline unchanged. `_coerce_scalars` (`wl_observable_recorder.py`) flattens
+the array C-order via `np.ndarray.ravel`, so the recorder accumulates the
+field as S pixels labelled `{tag}_0 .. {tag}_{S-1}`, with
+`count`/`sum`/`sum2`/`sum4` per energy bin. The field is stored **packed as a
+vector per bin** in recording and in the checkpoint (`to_state`); it is
+exploded into `{tag}_{i}` columns only at the stitch/CSV boundary
+(`analysis/observables.py`), because the analysis interchange is CSV (one
+scalar per cell). `analysis.field.field_map` re-folds the reweighted
+`{tag}_{i}_mean` columns into an `(n_T, *shape)` map, reading pixels in the
+same C-order.
+
+The pixel axis is orthogonal to what stitch (energy merge) and reweight
+(energy -> temperature) do, so a field needs no pipeline changes. For a field,
+`sum2`/`sum4` and the per-pixel Binder cumulant are recorded but unused
+(`field_map` reads only `_mean`); they exist because the recorder was built
+for scalar order parameters, where they give the susceptibility and the Binder
+crossing used to locate `T_c`.
+
+The recorder's non-finite rule -- drop the whole observation if any element is
+non-finite -- is a correctness requirement of the shared-count representation:
+`count` is shared across all S pixels in a bin, so a partial record would
+desync `sum`/`count` per pixel and corrupt the per-pixel mean.

@@ -1,8 +1,8 @@
 """Tests for mchammer_pt.analysis.field.field_map.
 
 Unit tests build a reweight_observables-shaped frame directly; the
-end-to-end tests (added later) drive the real recorder -> stitch ->
-reweight -> field_map path.
+end-to-end tests drive the real recorder -> stitch -> reweight ->
+field_map path.
 """
 from __future__ import annotations
 
