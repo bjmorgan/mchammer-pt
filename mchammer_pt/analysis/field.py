@@ -18,16 +18,30 @@ from __future__ import annotations
 
 import math
 import re
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
+
+
+class CanonicalFieldMap(NamedTuple):
+    """A reweighted field map: temperatures paired with field values.
+
+    Attributes:
+        temperatures: ``(n_T,)`` array of temperatures (K), from the ``T_K``
+            column of the reweighted frame.
+        values: ``(n_T, *shape)`` array of the canonical field mean.
+    """
+
+    temperatures: np.ndarray
+    values: np.ndarray
 
 
 def field_map(
     canonical: pd.DataFrame,
     tag: str,
     shape: tuple[int, ...],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> CanonicalFieldMap:
     """Fold reweighted per-pixel means back into a canonical field map.
 
     Intended for multi-pixel fields (``S = math.prod(shape) >= 2``). A
@@ -47,18 +61,21 @@ def field_map(
             equal the number of recorded pixels ``S``.
 
     Returns:
-        ``(temperatures, values)``. ``temperatures`` is the ``(n_T,)`` array
-        from the ``T_K`` column; ``values`` is an ``(n_T, *shape)`` array of
-        the canonical field mean -- the ``{tag}_{i}_mean`` columns read in C
-        (ravel) order and reshaped to ``shape``.
+        A :class:`CanonicalFieldMap` ``(temperatures, values)``.
+        ``temperatures`` is the ``(n_T,)`` array from the ``T_K`` column;
+        ``values`` is an ``(n_T, *shape)`` array of the canonical field mean --
+        the ``{tag}_{i}_mean`` columns read in C (ravel) order and reshaped to
+        ``shape``.
 
     Raises:
-        ValueError: if ``canonical`` lacks a ``T_K`` column; if ``shape`` has
-            no pixels; or if the pixel-mean columns are not exactly
-            ``{tag}_0_mean .. {tag}_{S-1}_mean`` for ``S = math.prod(shape)``
-            (a wrong ``tag``, a ``shape`` that mis-sizes the field, or a
-            partial column set all trip this).
+        ValueError: if ``canonical`` has no rows; if it lacks a ``T_K``
+            column; if ``shape`` has no pixels; or if the pixel-mean columns
+            are not exactly ``{tag}_0_mean .. {tag}_{S-1}_mean`` for
+            ``S = math.prod(shape)`` (a wrong ``tag``, a ``shape`` that
+            mis-sizes the field, or a partial column set all trip this).
     """
+    if canonical.empty:
+        raise ValueError("canonical frame has no rows")
     if "T_K" not in canonical.columns:
         raise ValueError("canonical frame has no 'T_K' column")
 
@@ -85,4 +102,4 @@ def field_map(
         [canonical[f"{tag}_{i}_mean"].to_numpy(dtype=float) for i in range(size)]
     )  # (n_T, S)
     values = flat.reshape((n_T, *shape))
-    return temperatures, values
+    return CanonicalFieldMap(temperatures, values)

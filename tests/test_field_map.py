@@ -114,6 +114,50 @@ def test_field_map_unknown_tag_raises() -> None:
         field_map(canonical, "other", (2, 2))
 
 
+def test_field_map_zero_pixel_shape_raises() -> None:
+    """A shape enclosing no pixels is rejected before column matching.
+
+    ``math.prod`` is 0 for a collapsed dimension and negative for a numpy
+    ``-1`` infer-sentinel; the ``size <= 0`` guard rejects both with the
+    dedicated message rather than the misleading contiguity error.
+    """
+    field = np.tile(np.arange(4.0), (2, 1))
+    canonical = _canonical("f", 2, field)
+
+    with pytest.raises(ValueError, match="encloses no pixels"):
+        field_map(canonical, "f", (2, 0))
+    with pytest.raises(ValueError, match="encloses no pixels"):
+        field_map(canonical, "f", (-1, 2))
+
+
+def test_field_map_empty_frame_raises() -> None:
+    """A frame with the right columns but no rows is rejected, not folded.
+
+    A coverage filter (``canonical[canonical.coverage >= 0.99]``) can yield an
+    all-False mask; without this guard the empty frame would fold to a silent
+    empty map far from the cause.
+    """
+    field = np.tile(np.arange(4.0), (2, 1))
+    empty = _canonical("f", 2, field).iloc[0:0]
+
+    with pytest.raises(ValueError, match="no rows"):
+        field_map(empty, "f", (2, 2))
+
+
+def test_field_map_returns_named_fields() -> None:
+    """The result exposes ``.temperatures``/``.values`` and still unpacks."""
+    field = np.tile(np.arange(4.0), (2, 1))
+    canonical = _canonical("f", 2, field)
+
+    result = field_map(canonical, "f", (2, 2))
+
+    np.testing.assert_allclose(result.temperatures, canonical["T_K"].to_numpy())
+    assert result.values.shape == (2, 2, 2)
+    temps, values = result  # positional unpacking still works
+    np.testing.assert_allclose(temps, result.temperatures)
+    np.testing.assert_allclose(values, result.values)
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: a generic ndarray field through the real pipeline.
 #
