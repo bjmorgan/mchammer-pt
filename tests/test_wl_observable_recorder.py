@@ -81,6 +81,25 @@ class _InfObserver(BaseObserver):
         return float("inf")
 
 
+class _PartialNanVectorObserver(BaseObserver):
+    """Returns a finite 2-vector first, then a ``[finite, nan]`` vector.
+
+    Exercises the all-or-nothing non-finite drop for a vector observable: the
+    partially non-finite second observation must be dropped whole, so its
+    finite first element is never accumulated.
+    """
+
+    def __init__(self, interval: int = 1, tag: str = "pvecobs") -> None:
+        super().__init__(interval=interval, return_type=list, tag=tag)
+        self._calls = 0
+
+    def get_observable(self, structure: Any) -> list[float]:
+        self._calls += 1
+        if self._calls == 1:
+            return [2.0, 3.0]
+        return [5.0, float("nan")]
+
+
 class _ThreeValueObserver(BaseObserver):
     """Returns a three-element sequence — different size from _SumObserver."""
 
@@ -254,6 +273,28 @@ def test_inf_observation_increments_skipped(atoms: Atoms) -> None:
         "bin must not be created if all observations are non-finite"
     )
     assert state["skipped"].get(2, 0) == 2
+
+
+def test_partial_nonfinite_vector_dropped_whole(atoms: Atoms) -> None:
+    """A vector with one non-finite element is dropped whole, not element-wise.
+
+    ``count`` is shared across the S-vector, so a partial record would desync
+    ``sum``/``count`` per scalar. The first (finite) observation establishes
+    the bin; the second (``[5.0, nan]``) must leave count and sum untouched and
+    increment skipped -- the finite 5.0 in pixel 0 must NOT be accumulated.
+    """
+    rec = EnergyBinnedObservableRecorder(_PartialNanVectorObserver())
+
+    rec.record(atoms, bin_index=4)  # [2.0, 3.0] -> accumulated
+    rec.record(atoms, bin_index=4)  # [5.0, nan] -> dropped whole
+
+    state = rec.to_state()
+    idx = state["bins"].index(4)
+    assert state["count"][idx] == 1, "partial-non-finite vector must not count"
+    assert state["sum"][idx] == pytest.approx([2.0, 3.0]), (
+        "the finite element of a dropped vector must not be accumulated"
+    )
+    assert state["skipped"].get(4, 0) == 1
 
 
 # ---------------------------------------------------------------------------
